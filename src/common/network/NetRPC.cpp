@@ -25,7 +25,7 @@ using namespace network::frame;
 #include <cmath>
 
 // ---------------------------------------------------------------------------
-//  Public Class Members
+//  Constants
 // ---------------------------------------------------------------------------
 
 #define REPLY_WAIT 200 // 200ms
