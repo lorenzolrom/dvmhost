@@ -138,6 +138,8 @@ FNENetwork::FNENetwork(HostFNE* host, const std::string& address, uint16_t port,
     m_disablePacketData(false),
     m_dumpPacketData(false),
     m_verbosePacketData(false),
+    m_sndcpStartAddr(__IP_FROM_STR("10.10.1.10")),
+    m_sndcpEndAddr(__IP_FROM_STR("10.10.1.254")),
     m_logDenials(false),
     m_logUpstreamCallStartEnd(true),
     m_reportPeerPing(reportPeerPing),
@@ -258,6 +260,27 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
     m_disablePacketData = conf["disablePacketData"].as<bool>(false);
     m_dumpPacketData = conf["dumpPacketData"].as<bool>(false);
     m_verbosePacketData = conf["verbosePacketData"].as<bool>(false);
+
+    // SNDCP IP allocation configuration
+    m_sndcpStartAddr = __IP_FROM_STR("10.10.1.10");
+    m_sndcpEndAddr = __IP_FROM_STR("10.10.1.254");
+    yaml::Node& vtun = conf["vtun"];
+    if (vtun.size() > 0U) {
+        yaml::Node& sndcp = vtun["sndcp"];
+        if (sndcp.size() > 0U) {
+            std::string startAddrStr = sndcp["startAddress"].as<std::string>("10.10.1.10");
+            std::string endAddrStr = sndcp["endAddress"].as<std::string>("10.10.1.254");
+            m_sndcpStartAddr = __IP_FROM_STR(startAddrStr);
+            m_sndcpEndAddr = __IP_FROM_STR(endAddrStr);
+
+            if (m_sndcpStartAddr > m_sndcpEndAddr) {
+                LogWarning(LOG_MASTER, "SNDCP start address (%s) is greater than end address (%s), using defaults", 
+                    startAddrStr.c_str(), endAddrStr.c_str());
+                m_sndcpStartAddr = __IP_FROM_STR("10.10.1.10");
+                m_sndcpEndAddr = __IP_FROM_STR("10.10.1.254");
+            }
+        }
+    }
 
     m_logDenials = conf["logDenials"].as<bool>(false);
     m_logUpstreamCallStartEnd = conf["logUpstreamCallStartEnd"].as<bool>(true);

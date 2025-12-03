@@ -624,21 +624,13 @@ void Data::clock(uint32_t ms)
                 {
                     // has the LLID reached ready state expiration?
                     if (std::find(sndcpReadyExpired.begin(), sndcpReadyExpired.end(), llId) != sndcpReadyExpired.end()) {
-                        m_sndcpStateTable[llId] = SNDCPState::IDLE;
-
+                        // transition to STANDBY per TIA-102 (preserves context)
+                        m_sndcpStateTable[llId] = SNDCPState::STANDBY;
+                        m_sndcpReadyTimers[llId].stop();
+                        m_sndcpStandbyTimers[llId].start();
+                        
                         if (m_verbose) {
-                            LogInfoEx(LOG_RF, P25_TDULC_STR ", CALL_TERM (Call Termination), llId = %u", llId);
-                        }
-
-                        std::unique_ptr<lc::TDULC> lc = std::make_unique<lc::tdulc::LC_CALL_TERM>();
-                        lc->setDstId(llId);
-                        m_p25->m_control->writeRF_TDULC(lc.get(), true);
-                        for (uint8_t i = 0U; i < 8U; i++) {
-                            m_p25->writeRF_TDU(true);
-                        }
-
-                        if (m_p25->m_notifyCC) {
-                            m_p25->notifyCC_ReleaseGrant(llId);
+                            LogInfoEx(LOG_RF, P25_PDU_STR ", SNDCP state transition, llId = %u, READY_S -> STANDBY", llId);
                         }
                     }
                 }
@@ -861,9 +853,6 @@ bool Data::processSNDCPControl(const uint8_t* pduUserData)
         return false;
     }
 
-    uint8_t txPduUserData[P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES];
-    ::memset(txPduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES);
-
     std::unique_ptr<sndcp::SNDCPPacket> packet = SNDCPFactory::create(pduUserData);
     if (packet == nullptr) {
         LogWarning(LOG_RF, P25_PDU_STR ", undecodable SNDCP packet");
@@ -880,98 +869,10 @@ bool Data::processSNDCPControl(const uint8_t* pduUserData)
                 LogInfoEx(LOG_RF, P25_PDU_STR ", SNDCP context activation request, llId = %u, nsapi = %u, ipAddr = %s, nat = $%02X, dsut = $%02X, mdpco = $%02X", llId,
                     isp->getNSAPI(), __IP_FROM_UINT(isp->getIPAddress()).c_str(), isp->getNAT(), isp->getDSUT(), isp->getMDPCO());
             }
-
-            m_p25->writeRF_Preamble();
-
-            DataHeader rspHeader = DataHeader();
-            rspHeader.setFormat(PDUFormatType::CONFIRMED);
-            rspHeader.setMFId(MFG_STANDARD);
-            rspHeader.setAckNeeded(true);
-            rspHeader.setOutbound(true);
-            rspHeader.setSAP(PDUSAP::SNDCP_CTRL_DATA);
-            rspHeader.setNs(m_rfAssembler->dataHeader.getNs());
-            rspHeader.setLLId(llId);
-            rspHeader.setBlocksToFollow(1U);
-
+            
+            // initialize SNDCP state if not already done
             if (!isSNDCPInitialized(llId)) {
-                std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
-                osp->setNSAPI(DEFAULT_NSAPI);
-                osp->setRejectCode(SNDCPRejectReason::SU_NOT_PROVISIONED);
-
-                osp->encode(txPduUserData);
-
-                rspHeader.calculateLength(2U);
-                writeRF_PDU_User(rspHeader, false, false, txPduUserData);
-                return true;
-            }
-
-            // which network address type is this?
-            switch (isp->getNAT()) {
-                case SNDCPNAT::IPV4_STATIC_ADDR:
-                {
-                    std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
-                    osp->setNSAPI(DEFAULT_NSAPI);
-                    osp->setRejectCode(SNDCPRejectReason::STATIC_IP_ALLOCATION_UNSUPPORTED);
-
-                    osp->encode(txPduUserData);
-
-                    rspHeader.calculateLength(2U);
-                    writeRF_PDU_User(rspHeader, false, false, txPduUserData);
-
-                    sndcpReset(llId, true);
-                }
-                break;
-
-                case SNDCPNAT::IPV4_DYN_ADDR:
-                {
-                    std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
-                    osp->setNSAPI(DEFAULT_NSAPI);
-                    osp->setRejectCode(SNDCPRejectReason::DYN_IP_ALLOCATION_UNSUPPORTED);
-
-                    osp->encode(txPduUserData);
-
-                    rspHeader.calculateLength(2U);
-                    writeRF_PDU_User(rspHeader, false, false, txPduUserData);
-
-                    sndcpReset(llId, true);
-
-                    // TODO TODO TODO
-/*
-                    std::unique_ptr<SNDCPCtxActAccept> osp = std::make_unique<SNDCPCtxActAccept>();
-                    osp->setNSAPI(DEFAULT_NSAPI);
-                    osp->setReadyTimer(SNDCPReadyTimer::TEN_SECONDS);
-                    osp->setStandbyTimer(SNDCPStandbyTimer::ONE_MINUTE);
-                    osp->setNAT(SNDCPNAT::IPV4_DYN_ADDR);
-                    osp->setIPAddress(__IP_FROM_STR(std::string("10.10.1.10")));
-                    osp->setMTU(SNDCP_MTU_510);
-                    osp->setMDPCO(isp->getMDPCO());
-
-                    osp->encode(txPduUserData);
-
-                    rspHeader.calculateLength(13U);
-                    writeRF_PDU_User(rspHeader, rspHeader, false, txPduUserData);
-
-                    m_sndcpStateTable[llId] = SNDCPState::STANDBY;
-                    m_sndcpReadyTimers[llId].stop();
-                    m_sndcpStandbyTimers[llId].start();
-*/
-                }
-                break;
-
-                default:
-                {
-                    std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
-                    osp->setNSAPI(DEFAULT_NSAPI);
-                    osp->setRejectCode(SNDCPRejectReason::ANY_REASON);
-
-                    osp->encode(txPduUserData);
-
-                    rspHeader.calculateLength(2U);
-                    writeRF_PDU_User(rspHeader, false, false, txPduUserData);
-
-                    sndcpReset(llId, true);
-                }
-                break;
+                sndcpInitialize(llId);
             }
         }
         break;
@@ -983,20 +884,21 @@ bool Data::processSNDCPControl(const uint8_t* pduUserData)
                 LogInfoEx(LOG_RF, P25_PDU_STR ", SNDCP context deactivation request, llId = %u, deactType = %02X", llId,
                     isp->getDeactType());
             }
-
-            writeRF_PDU_Ack_Response(PDUAckClass::ACK, PDUAckType::ACK, m_rfAssembler->dataHeader.getNs(), llId, false);
-            sndcpReset(llId, true);
+            
+            // reset local SNDCP state (FNE will handle response)
+            sndcpReset(llId, false); // don't send CALL_TERM here
         }
         break;
 
         default:
         {
             LogError(LOG_RF, P25_PDU_STR ", unhandled SNDCP PDU Type, pduType = $%02X", packet->getPDUType());
-            sndcpReset(llId, true);
         }
         break;
     } // switch (packet->getPDUType())
 
+    // always forward SNDCP control to FNE for processing
+    // FNE will generate the accept/reject response
     return true;
 }
 

@@ -399,6 +399,9 @@ namespace network
         bool m_dumpPacketData;
         bool m_verbosePacketData;
 
+        uint32_t m_sndcpStartAddr;
+        uint32_t m_sndcpEndAddr;
+
         bool m_logDenials;
         bool m_logUpstreamCallStartEnd;
         bool m_reportPeerPing;

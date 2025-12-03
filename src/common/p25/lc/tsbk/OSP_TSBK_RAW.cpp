@@ -66,7 +66,7 @@ void OSP_TSBK_RAW::encode(uint8_t* data, bool rawTSBK, bool noTrellis)
 
     /* stub */
 
-    TSBK::encode(data, m_tsbk, rawTSBK, noTrellis);
+    TSBK::encode(data, m_tsbk + 2U, rawTSBK, noTrellis);
 }
 
 /* Sets the TSBK to encode. */

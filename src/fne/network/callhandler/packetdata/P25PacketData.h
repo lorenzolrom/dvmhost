@@ -295,6 +295,12 @@ namespace network
                  * @returns uint32_t Logical Link Address.
                  */
                 uint32_t getLLIdAddress(uint32_t addr);
+                /**
+                 * @brief Helper to allocate a dynamic IP address for SNDCP.
+                 * @param llId Logical Link Address.
+                 * @returns uint32_t Allocated IP address.
+                 */
+                uint32_t allocateIPAddress(uint32_t llId);
             };
         } // namespace packetdata
     } // namespace callhandler

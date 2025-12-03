@@ -32,6 +32,7 @@ using namespace p25::sndcp;
 
 #include <cassert>
 #include <chrono>
+#include <unordered_set>
 
 #if !defined(_WIN32)
 #include <netinet/ip.h>
@@ -900,7 +901,198 @@ bool P25PacketData::processSNDCPControl(RxStatus* status)
             LogInfoEx(LOG_P25, P25_PDU_STR ", SNDCP context activation request, llId = %u, nsapi = %u, ipAddr = %s, nat = $%02X, dsut = $%02X, mdpco = $%02X", llId,
                 isp->getNSAPI(), __IP_FROM_UINT(isp->getIPAddress()).c_str(), isp->getNAT(), isp->getDSUT(), isp->getMDPCO());
 
-            m_arpTable[llId] = isp->getIPAddress();
+            // check if subscriber is provisioned (from RID table)
+            lookups::RadioId rid = m_network->m_ridLookup->find(llId);
+            if (rid.radioDefault() || !rid.radioEnabled()) {
+                uint8_t txPduUserData[P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES];
+                ::memset(txPduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+
+                std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
+                osp->setNSAPI(isp->getNSAPI());
+                osp->setRejectCode(SNDCPRejectReason::SU_NOT_PROVISIONED);
+                osp->encode(txPduUserData);
+
+                // Build response header
+                data::DataHeader rspHeader;
+                rspHeader.setFormat(PDUFormatType::CONFIRMED);
+                rspHeader.setMFId(MFG_STANDARD);
+                rspHeader.setAckNeeded(true);
+                rspHeader.setOutbound(true);
+                rspHeader.setSAP(PDUSAP::SNDCP_CTRL_DATA);
+                rspHeader.setLLId(llId);
+                rspHeader.setBlocksToFollow(1U);
+                rspHeader.calculateLength(2U);
+
+                dispatchUserFrameToFNE(rspHeader, false, false, txPduUserData);
+
+                LogWarning(LOG_P25, P25_PDU_STR ", SNDCP context activation reject, llId = %u, reason = SU_NOT_PROVISIONED", llId);
+                return true;
+            }
+
+            // handle different network address types
+            switch (isp->getNAT()) {
+                case SNDCPNAT::IPV4_STATIC_ADDR:
+                {
+                    // get static IP from RID table
+                    uint32_t staticIP = 0U;
+                    if (!rid.radioDefault()) {
+                        std::string addr = rid.radioIPAddress();
+                        staticIP = __IP_FROM_STR(addr);
+                    }
+
+                    if (staticIP == 0U) {
+                        // no static IP configured - reject
+                        uint8_t txPduUserData[P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES];
+                        ::memset(txPduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+
+                        std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
+                        osp->setNSAPI(isp->getNSAPI());
+                        osp->setRejectCode(SNDCPRejectReason::STATIC_IP_ALLOCATION_UNSUPPORTED);
+                        osp->encode(txPduUserData);
+
+                        data::DataHeader rspHeader;
+                        rspHeader.setFormat(PDUFormatType::CONFIRMED);
+                        rspHeader.setMFId(MFG_STANDARD);
+                        rspHeader.setAckNeeded(true);
+                        rspHeader.setOutbound(true);
+                        rspHeader.setSAP(PDUSAP::SNDCP_CTRL_DATA);
+                        rspHeader.setLLId(llId);
+                        rspHeader.setBlocksToFollow(1U);
+                        rspHeader.calculateLength(2U);
+
+                        dispatchUserFrameToFNE(rspHeader, false, false, txPduUserData);
+
+                        LogWarning(LOG_P25, P25_PDU_STR ", SNDCP context activation reject, llId = %u, reason = STATIC_IP_ALLOCATION_UNSUPPORTED", llId);
+                        return true;
+                    }
+
+                    // Accept with static IP
+                    uint8_t txPduUserData[P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES];
+                    ::memset(txPduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+
+                    std::unique_ptr<SNDCPCtxActAccept> osp = std::make_unique<SNDCPCtxActAccept>();
+                    osp->setNSAPI(isp->getNSAPI());
+                    osp->setPriority(4U);
+                    osp->setReadyTimer(SNDCPReadyTimer::TEN_SECONDS);
+                    osp->setStandbyTimer(SNDCPStandbyTimer::ONE_MINUTE);
+                    osp->setNAT(SNDCPNAT::IPV4_STATIC_ADDR);
+                    osp->setIPAddress(staticIP);
+                    osp->setMTU(SNDCP_MTU_510);
+                    osp->setMDPCO(isp->getMDPCO());
+                    osp->encode(txPduUserData);
+
+                    data::DataHeader rspHeader;
+                    rspHeader.setFormat(PDUFormatType::CONFIRMED);
+                    rspHeader.setMFId(MFG_STANDARD);
+                    rspHeader.setAckNeeded(true);
+                    rspHeader.setOutbound(true);
+                    rspHeader.setSAP(PDUSAP::SNDCP_CTRL_DATA);
+                    rspHeader.setLLId(llId);
+                    rspHeader.setBlocksToFollow(1U);
+                    rspHeader.calculateLength(13U);
+
+                    m_arpTable[llId] = staticIP;
+                    m_readyForNextPkt[llId] = true;
+
+                    dispatchUserFrameToFNE(rspHeader, false, false, txPduUserData);
+
+                    LogInfoEx(LOG_P25, P25_PDU_STR ", SNDCP context activation accept, llId = %u, ipAddr = %s (static)", 
+                        llId, __IP_FROM_UINT(staticIP).c_str());
+                }
+                break;
+
+                case SNDCPNAT::IPV4_DYN_ADDR:
+                {
+                    // allocate dynamic IP
+                    uint32_t dynamicIP = allocateIPAddress(llId);
+                    if (dynamicIP == 0U) {
+                        // IP pool exhausted - reject
+                        uint8_t txPduUserData[P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES];
+                        ::memset(txPduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+
+                        std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
+                        osp->setNSAPI(isp->getNSAPI());
+                        osp->setRejectCode(SNDCPRejectReason::DYN_IP_POOL_EMPTY);
+                        osp->encode(txPduUserData);
+
+                        data::DataHeader rspHeader;
+                        rspHeader.setFormat(PDUFormatType::CONFIRMED);
+                        rspHeader.setMFId(MFG_STANDARD);
+                        rspHeader.setAckNeeded(true);
+                        rspHeader.setOutbound(true);
+                        rspHeader.setSAP(PDUSAP::SNDCP_CTRL_DATA);
+                        rspHeader.setLLId(llId);
+                        rspHeader.setBlocksToFollow(1U);
+                        rspHeader.calculateLength(2U);
+
+                        dispatchUserFrameToFNE(rspHeader, false, false, txPduUserData);
+
+                        LogWarning(LOG_P25, P25_PDU_STR ", SNDCP context activation reject, llId = %u, reason = DYN_IP_POOL_EMPTY", llId);
+                        return true;
+                    }
+
+                    // accept with dynamic IP
+                    uint8_t txPduUserData[P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES];
+                    ::memset(txPduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+
+                    std::unique_ptr<SNDCPCtxActAccept> osp = std::make_unique<SNDCPCtxActAccept>();
+                    osp->setNSAPI(isp->getNSAPI());
+                    osp->setPriority(4U);
+                    osp->setReadyTimer(SNDCPReadyTimer::TEN_SECONDS);
+                    osp->setStandbyTimer(SNDCPStandbyTimer::ONE_MINUTE);
+                    osp->setNAT(SNDCPNAT::IPV4_DYN_ADDR);
+                    osp->setIPAddress(dynamicIP);
+                    osp->setMTU(SNDCP_MTU_510);
+                    osp->setMDPCO(isp->getMDPCO());
+                    osp->encode(txPduUserData);
+
+                    data::DataHeader rspHeader;
+                    rspHeader.setFormat(PDUFormatType::CONFIRMED);
+                    rspHeader.setMFId(MFG_STANDARD);
+                    rspHeader.setAckNeeded(true);
+                    rspHeader.setOutbound(true);
+                    rspHeader.setSAP(PDUSAP::SNDCP_CTRL_DATA);
+                    rspHeader.setLLId(llId);
+                    rspHeader.setBlocksToFollow(1U);
+                    rspHeader.calculateLength(13U);
+
+                    m_arpTable[llId] = dynamicIP;
+                    m_readyForNextPkt[llId] = true;
+
+                    dispatchUserFrameToFNE(rspHeader, false, false, txPduUserData);
+
+                    LogInfoEx(LOG_P25, P25_PDU_STR ", SNDCP context activation accept, llId = %u, ipAddr = %s (dynamic)", 
+                        llId, __IP_FROM_UINT(dynamicIP).c_str());
+                }
+                break;
+
+                default:
+                {
+                    // unsupported NAT type - reject
+                    uint8_t txPduUserData[P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES];
+                    ::memset(txPduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+                    
+                    std::unique_ptr<SNDCPCtxActReject> osp = std::make_unique<SNDCPCtxActReject>();
+                    osp->setNSAPI(isp->getNSAPI());
+                    osp->setRejectCode(SNDCPRejectReason::ANY_REASON);
+                    osp->encode(txPduUserData);
+
+                    data::DataHeader rspHeader;
+                    rspHeader.setFormat(PDUFormatType::CONFIRMED);
+                    rspHeader.setMFId(MFG_STANDARD);
+                    rspHeader.setAckNeeded(true);
+                    rspHeader.setOutbound(true);
+                    rspHeader.setSAP(PDUSAP::SNDCP_CTRL_DATA);
+                    rspHeader.setLLId(llId);
+                    rspHeader.setBlocksToFollow(1U);
+                    rspHeader.calculateLength(2U);
+
+                    dispatchUserFrameToFNE(rspHeader, false, false, txPduUserData);
+
+                    LogWarning(LOG_P25, P25_PDU_STR ", SNDCP context activation reject, llId = %u, reason = UNSUPPORTED_NAT", llId);
+                }
+                break;
+            }
         }
         break;
 
@@ -911,6 +1103,11 @@ bool P25PacketData::processSNDCPControl(RxStatus* status)
                 isp->getDeactType());
 
             m_arpTable.erase(llId);
+            m_readyForNextPkt.erase(llId);
+
+            // send ACK response
+            write_PDU_Ack_Response(PDUAckClass::ACK, PDUAckType::ACK, 
+                status->assembler.dataHeader.getNs(), llId, false);
         }
         break;
 
@@ -1148,4 +1345,65 @@ uint32_t P25PacketData::getLLIdAddress(uint32_t addr)
     }
 
     return 0U;
+}
+
+/* Helper to allocate a dynamic IP address for SNDCP. */
+
+uint32_t P25PacketData::allocateIPAddress(uint32_t llId)
+{
+    uint32_t existingIP = getIPAddress(llId);
+    if (existingIP != 0U) {
+        return existingIP;
+    }
+
+    // sequential allocation from configurable pool with uniqueness check
+    static uint32_t nextIP = 0U;
+
+    // initialize nextIP on first call
+    if (nextIP == 0U) {
+        nextIP = m_network->m_sndcpStartAddr;
+    }
+
+    // build set of already-allocated IPs to ensure uniqueness
+    std::unordered_set<uint32_t> allocatedIPs;
+    for (const auto& entry : m_arpTable) {
+        allocatedIPs.insert(entry.second);
+    }
+
+    // find next available IP not already in use
+    uint32_t candidateIP = nextIP;
+    const uint32_t poolSize = m_network->m_sndcpEndAddr - m_network->m_sndcpStartAddr + 1U;
+    uint32_t attempts = 0U;
+
+    while (allocatedIPs.find(candidateIP) != allocatedIPs.end() && attempts < poolSize) {
+        candidateIP++;
+
+        // wrap around if we exceed the end address
+        if (candidateIP > m_network->m_sndcpEndAddr) {
+            candidateIP = m_network->m_sndcpStartAddr;
+        }
+
+        attempts++;
+    }
+
+    if (attempts >= poolSize) {
+        LogError(LOG_P25, P25_PDU_STR ", SNDCP dynamic IP pool exhausted for llId = %u (pool: %s - %s)", 
+            llId, __IP_FROM_UINT(m_network->m_sndcpStartAddr).c_str(), __IP_FROM_UINT(m_network->m_sndcpEndAddr).c_str());
+        return 0U; // Pool exhausted
+    }
+
+    // allocate the unique IP
+    uint32_t allocatedIP = candidateIP;
+    nextIP = candidateIP + 1U;
+
+    // wrap around for next allocation if needed
+    if (nextIP > m_network->m_sndcpEndAddr) {
+        nextIP = m_network->m_sndcpStartAddr;
+    }
+
+    m_arpTable[llId] = allocatedIP;
+    LogInfoEx(LOG_P25, P25_PDU_STR ", SNDCP allocated dynamic IP %s to llId = %u (pool: %s - %s)", 
+        __IP_FROM_UINT(allocatedIP).c_str(), llId, __IP_FROM_UINT(m_network->m_sndcpStartAddr).c_str(), __IP_FROM_UINT(m_network->m_sndcpEndAddr).c_str());
+
+    return allocatedIP;
 }

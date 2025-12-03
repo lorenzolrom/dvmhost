@@ -326,3 +326,12 @@ vtun:
     netmask: 255.255.255.0
     # Broadcast address of the tunnel network interface
     broadcast: 192.168.1.255
+
+    #
+    # P25 SNDCP Dynamic IP Allocation
+    #
+    sndcp:
+        # Starting IP address for dynamic IP allocation pool
+        startAddress: 192.168.1.10
+        # Ending IP address for dynamic IP allocation pool
+        endAddress: 192.168.1.200
