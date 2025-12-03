@@ -22,7 +22,7 @@ using namespace lookups;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex IdenTableLookup::m_mutex;
+std::mutex IdenTableLookup::s_mutex;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -39,7 +39,7 @@ IdenTableLookup::IdenTableLookup(const std::string& filename, uint32_t reloadTim
 
 void IdenTableLookup::clear()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     m_table.clear();
 }
 
@@ -49,7 +49,7 @@ IdenTable IdenTableLookup::find(uint32_t id)
 {
     IdenTable entry;
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     try {
         entry = m_table.at(id);
     } catch (...) {
@@ -103,7 +103,7 @@ bool IdenTableLookup::load()
     // clear table
     clear();
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
 
     // read lines from file
     std::string line;
@@ -143,7 +143,7 @@ bool IdenTableLookup::load()
 
             IdenTable entry = IdenTable(channelId, baseFrequency, chSpaceKhz, txOffsetMhz, chBandwidthKhz);
 
-            LogMessage(LOG_HOST, "Channel Id %u: BaseFrequency = %uHz, TXOffsetMhz = %fMHz, BandwidthKhz = %fKHz, SpaceKhz = %fKHz",
+            LogInfoEx(LOG_HOST, "Channel Id %u: BaseFrequency = %uHz, TXOffsetMhz = %fMHz, BandwidthKhz = %fKHz, SpaceKhz = %fKHz",
                 entry.channelId(), entry.baseFrequency(), entry.txOffsetMhz(), entry.chBandwidthKhz(), entry.chSpaceKhz());
 
             m_table[channelId] = entry;
@@ -163,7 +163,7 @@ bool IdenTableLookup::load()
 
 /* Saves the table to the passed lookup table file. */
 
-bool IdenTableLookup::save()
+bool IdenTableLookup::save(bool quiet)
 {
     return false;
 }

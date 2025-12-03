@@ -5,7 +5,7 @@
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  *  Copyright (C) 2006-2016,2020 Jonathan Naylor, G4KLX
- *  Copyright (C) 2017-2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2017-2025 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -25,7 +25,7 @@
 #include "common/AESCrypto.h"
 
 #include <string>
-#include <vector>
+#include <queue>
 
 #if defined(_WIN32)
 #pragma comment(lib, "Ws2_32.lib")
@@ -51,8 +51,8 @@
  * @ingroup udp_socket
  */
 enum IPMATCHTYPE {
-    IMT_ADDRESS_AND_PORT,       //! Address and Port
-    IMT_ADDRESS_ONLY            //! Address Only
+    IMT_ADDRESS_AND_PORT,       //!< Address and Port
+    IMT_ADDRESS_ONLY            //!< Address Only
 };
 
 #if defined(_WIN32)
@@ -160,15 +160,15 @@ namespace network
          * @ingroup udp_socket
          */
         struct UDPDatagram {
-            uint8_t* buffer;            //! Message Buffer
-            size_t length;              //! Length of Message Buffer
+            uint8_t* buffer;            //!< Message Buffer
+            size_t length;              //!< Length of Message Buffer
 
-            sockaddr_storage address;   //! Address and Port
-            uint32_t addrLen;           //! Length of address structure
+            sockaddr_storage address;   //!< Address and Port
+            uint32_t addrLen;           //!< Length of address structure
         };
 
-        /** @brief Vector of buffers that contain a full frames */
-        typedef std::vector<UDPDatagram*> BufferVector;
+        /** @brief Queue of buffers that contain a UDP datagram. */
+        typedef std::queue<UDPDatagram*> BufferQueue;
 
         // ---------------------------------------------------------------------------
         //  Class Declaration
@@ -223,6 +223,19 @@ namespace network
             bool open(const uint32_t af, const std::string& address, const uint16_t port) noexcept;
 
             /**
+             * @brief Sets the socket receive buffer size.
+             * @param bufSize Buffer size to set.
+             * @returns bool True, if buffer size set, otherwise false.
+             */
+            bool recvBufSize(ssize_t bufSize);
+            /**
+             * @brief Sets the socket send buffer size.
+             * @param bufSize Buffer size to set.
+             * @returns bool True, if buffer size set, otherwise false.
+             */
+            bool sendBufSize(ssize_t bufSize);
+
+            /**
              * @brief Closes the UDP socket connection.
              */
             void close();
@@ -248,11 +261,11 @@ namespace network
             virtual bool write(const uint8_t* buffer, uint32_t length, const sockaddr_storage& address, uint32_t addrLen, ssize_t* lenWritten = nullptr) noexcept;
             /**
              * @brief Write data to the UDP socket.
-             * @param[in] buffers Vector of buffers to write to socket.
+             * @param[in] buffers Queue of buffers to write to socket.
              * @param[out] lenWritten Total number of bytes written.
              * @returns bool True, if messages were sent otherwise, false.
              */
-            virtual bool write(BufferVector& buffers, ssize_t* lenWritten = nullptr) noexcept;
+            virtual bool write(BufferQueue* buffers, ssize_t* lenWritten = nullptr) noexcept;
 
             /**
              * @brief Sets the preshared encryption key.

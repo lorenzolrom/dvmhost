@@ -5,7 +5,7 @@
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  *  Copyright (C) 2015,2016,2017 Jonathan Naylor, G4KLX
- *  Copyright (C) 2021,2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2021,2024,2025 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -38,6 +38,11 @@ namespace dmr
          */
         class HOST_SW_API DataHeader {
         public:
+            /**
+             * @brief Initializes a copy instance of the DataHeader class.
+             * @param data Instance of DataHeader class to copy from.
+             */
+            DataHeader(const DataHeader& data);
             /**
              * @brief Initializes a new instance of the DataHeader class.
              */
@@ -72,14 +77,16 @@ namespace dmr
 
             /**
              * @brief Gets the total length in bytes of enclosed packet data.
+             * @param dataType DMR Data Type.
              * @returns uint32_t Total length of packet in bytes.
              */
-            uint32_t getPacketLength() const;
+            uint32_t getPacketLength(defines::DataType::E dataType) const;
             /**
              * @brief Gets the total length in bytes of entire PDU.
+             * @param dataType DMR Data Type.
              * @returns uint32_t Total length of PDU in bytes.
              */
-            uint32_t getPDULength() const;
+            uint32_t getPDULength(defines::DataType::E dataType) const;
 
             /**
              * @brief Gets the raw header data.
@@ -90,17 +97,19 @@ namespace dmr
 
             /**
              * @brief Helper to calculate the number of blocks to follow and padding length for a PDU.
+             * @param dataType DMR Data Type.
              * @param packetLength Length of PDU.
              */
-            void calculateLength(uint32_t packetLength);
+            void calculateLength(defines::DataType::E dataType, uint32_t packetLength);
 
             /**
              * @brief Helper to determine the pad length for a given packet length.
              * @param dpf PDU format type.
+             * @param dataType DMR Data Type.
              * @param packetLength Length of PDU.
              * @returns uint32_t Number of pad bytes.
              */
-            static uint32_t calculatePadLength(defines::DPF::E dpf, uint32_t packetLength);
+            static uint32_t calculatePadLength(defines::DPF::E dpf, defines::DataType::E dataType, uint32_t packetLength);
 
         public:
             /**
@@ -190,6 +199,11 @@ namespace dmr
             bool m_SF;
             bool m_PF;
             uint8_t m_UDTO;
+
+            /**
+             * @brief Internal helper to copy the class.
+             */
+            void copy(const DataHeader& data);
         };
     } // namespace data
 } // namespace dmr

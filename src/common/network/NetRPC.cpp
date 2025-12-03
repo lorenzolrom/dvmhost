@@ -10,8 +10,8 @@
 #include "Defines.h"
 #include "common/edac/CRC.h"
 #include "common/edac/SHA256.h"
+#include "common/json/json.h"
 #include "common/network/RPCHeader.h"
-#include "common/network/json/json.h"
 #include "common/Log.h"
 #include "common/Thread.h"
 #include "common/Utils.h"
@@ -286,7 +286,7 @@ void NetRPC::defaultResponse(json::object& reply, std::string message, StatusTyp
 bool NetRPC::open()
 {
     if (m_debug)
-        LogMessage(LOG_NET, "Opening RPC network");
+        LogInfoEx(LOG_NET, "Opening RPC network");
 
     // generate AES256 key
     size_t size = m_password.size();
@@ -313,15 +313,55 @@ bool NetRPC::open()
 void NetRPC::close()
 {
     if (m_debug)
-        LogMessage(LOG_NET, "Closing RPC network");
+        LogInfoEx(LOG_NET, "Closing RPC network");
 
     m_socket->close();
+}
+
+/* Helper to register an RPC handler. */
+
+bool NetRPC::registerHandler(uint16_t func, RPCType handler)
+{
+    // 32767 is the maximum possible function
+    if (func > RPC_MAX_FUNC)
+        return false;
+
+    auto it = std::find_if(m_handlers.begin(), m_handlers.end(), [&](RPCHandlerMapPair x) { return x.first == func; });
+    if (it != m_handlers.end()) {
+        LogError(LOG_HOST, "NetRPC::registerHandler() can't register RPC $%04X already registered. BUGBUG.", func);
+        return false; // handler is already registered
+    }
+
+    if (m_debug)
+        LogDebugEx(LOG_HOST, "NetRPC::registerHandler()", "registering RPC $%04X", func);
+
+    m_handlers[func] = handler;
+    return true;
+}
+
+/* Helper to unregister an RPC handler. */
+
+bool NetRPC::unregisterHandler(uint16_t func)
+{
+    // 32767 is the maximum possible function
+    if (func > RPC_MAX_FUNC)
+        return false;
+
+    auto it = std::find_if(m_handlers.begin(), m_handlers.end(), [&](RPCHandlerMapPair x) { return x.first == func; });
+    if (it != m_handlers.end()) {
+        if (m_debug)
+            LogDebugEx(LOG_HOST, "NetRPC::registerHandler()", "unregistering RPC $%04X", func);
+
+        m_handlers.erase(func);
+        return true;
+    }
+
+    return false;
 }
 
 // ---------------------------------------------------------------------------
 //  Private Class Members
 // ---------------------------------------------------------------------------
-
 
 /* Writes an RPC reply to the network. */
 

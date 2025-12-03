@@ -64,10 +64,10 @@ namespace network
              * @param ssrc RTP Synchronization Source ID.
              * @param pktSeq RTP packet sequence.
              * @param streamId Stream ID.
-             * @param external Flag indicating traffic is from an external peer.
+             * @param fromUpstream Flag indicating traffic is from a upstream master.
              * @returns bool True, if frame is processed, otherwise false.
              */
-            bool processFrame(const uint8_t* data, uint32_t len, uint32_t peerId, uint32_t ssrc, uint16_t pktSeq, uint32_t streamId, bool external = false);
+            bool processFrame(const uint8_t* data, uint32_t len, uint32_t peerId, uint32_t ssrc, uint16_t pktSeq, uint32_t streamId, bool fromUpstream = false);
             /**
              * @brief Process a grant request frame from the network.
              * @param srcId Source Radio ID.
@@ -81,6 +81,11 @@ namespace network
             bool processGrantReq(uint32_t srcId, uint32_t dstId, bool unitToUnit, uint32_t peerId, uint16_t pktSeq, uint32_t streamId);
 
             /**
+             * @brief Helper to trigger a call takeover from a In-Call control event.
+             */
+            void triggerCallTakeover(uint32_t dstId);
+
+            /**
              * @brief Helper to playback a parrot frame to the network.
              */
             void playbackParrot();
@@ -89,6 +94,38 @@ namespace network
              * @returns True, if there are queued parrot frames to playback, otherwise false.
              */
             bool hasParrotFrames() const { return m_parrotFramesReady && !m_parrotFrames.empty(); }
+
+            /**
+             * @brief Helper to determine if the parrot is playing back frames.
+             * @returns True, if parrot playback was started, otherwise false.
+             */
+            bool isParrotPlayback() const { return m_parrotPlayback; }
+            /**
+             * @brief Helper to clear the parrot playback flag.
+             */
+            void clearParrotPlayback()
+            {
+                m_parrotPlayback = false;
+                m_lastParrotPeerId = 0U;
+                m_lastParrotSrcId = 0U;
+                m_lastParrotDstId = 0U;
+            }
+
+            /**
+             * @brief Returns the last processed peer ID for a parrot frame.
+             * @return uint32_t Peer ID.
+             */
+            uint32_t lastParrotPeerId() const { return m_lastParrotPeerId; }
+            /**
+             * @brief Returns the last processed source ID for a parrot frame.
+             * @return uint32_t Source ID.
+             */
+            uint32_t lastParrotSrcId() const { return m_lastParrotSrcId; }
+            /**
+             * @brief Returns the last processed destination ID for a parrot frame.
+             * @return uint32_t Destination ID.
+             */
+            uint32_t lastParrotDstId() const { return m_lastParrotDstId; }
 
             /**
              * @brief Helper to write a call alert packet.
@@ -168,6 +205,10 @@ namespace network
             concurrent::deque<ParrotFrame> m_parrotFrames;
             bool m_parrotFramesReady;
             bool m_parrotFirstFrame;
+            bool m_parrotPlayback;
+            uint32_t m_lastParrotPeerId;
+            uint32_t m_lastParrotSrcId;
+            uint32_t m_lastParrotDstId;
 
             /**
              * @brief Represents the receive status of a call.
@@ -193,6 +234,10 @@ namespace network
                  */
                 uint32_t peerId;
                 /**
+                 * @brief Synchronization Source.
+                 */
+                uint32_t ssrc;
+                /**
                  * @brief Destination Peer ID.
                  */
                 uint32_t dstPeerId;
@@ -200,6 +245,10 @@ namespace network
                  * @brief Flag indicating this call is active with traffic currently in progress.
                  */
                 bool activeCall;
+                /**
+                 * @brief Flag indicating the metadata for the call on the next frame will be overwritten.
+                 */
+                bool callTakeover;
 
                 /**
                  * @brief Helper to reset call status.
@@ -210,7 +259,9 @@ namespace network
                     dstId = 0U;
                     streamId = 0U;
                     peerId = 0U;
+                    ssrc = 0U;
                     activeCall = false;
+                    callTakeover = false;
                 }
             };
             typedef std::pair<const uint32_t, RxStatus> StatusMapPair;
@@ -257,14 +308,14 @@ namespace network
              */
             bool processTSDUTo(uint8_t* buffer, uint32_t peerId, uint8_t duid);
             /**
-             * @brief Helper to process TSDUs being passed to an external peer.
+             * @brief Helper to process TSDUs being passed to a neighbor FNE peer.
              * @param buffer Frame buffer.
              * @param srcPeerId Source Peer ID.
              * @param dstPeerID Destination Peer ID.
              * @param duid DUID.
              * @returns bool True, if allowed to pass, otherwise false.
              */
-            bool processTSDUToExternal(uint8_t* buffer, uint32_t srcPeerId, uint32_t dstPeerId, uint8_t duid);
+            bool processTSDUToNeighbor(uint8_t* buffer, uint32_t srcPeerId, uint32_t dstPeerId, uint8_t duid);
 
             /**
              * @brief Helper to determine if the peer is permitted for traffic.
@@ -272,10 +323,10 @@ namespace network
              * @param control Instance of p25::lc::LC.
              * @param duid DUID.
              * @param streamId Stream ID.
-             * @param external Flag indicating this traffic came from an external peer.
+             * @param fromUpstream Flag indicating traffic is from a upstream master.
              * @returns bool True, if permitted, otherwise false.
              */
-            bool isPeerPermitted(uint32_t peerId, p25::lc::LC& control, P25DEF::DUID::E duid, uint32_t streamId, bool external = false);
+            bool isPeerPermitted(uint32_t peerId, p25::lc::LC& control, P25DEF::DUID::E duid, uint32_t streamId, bool fromUpstream = false);
             /**
              * @brief Helper to validate the P25 call stream.
              * @param peerId Peer ID.

@@ -13,7 +13,7 @@ This project suite generates a few executables:
 ### Core Applications
 
 - `dvmhost` host software that connects to the DVM modems (both air interface for repeater and hotspot or P25 DFSI for commerical P25 hardware) and is the primary data processing application for digital modes. [See configuration](#dvmhost-configuration) to configure and calibrate.
-- `dvmfne` a network "core", this provides a central server for `dvmhost` instances to connect to and be networked with, allowing relay of traffic and other data between `dvmhost` instances and other `dvmfne` instances. [See configuration](#dvmfne-configuration) to configure.
+- `dvmfne` a network core, this provides a central server for `dvmhost` instances (and other instances like consoles or `dvmbridge`s) to connect to and be networked with other instances, allowing switching of traffic and other data between `dvmhost` instances, as well as other peered `dvmfne` instances. [See configuration](#dvmfne-configuration) to configure.
 - `dvmbridge` a analog/PCM audio bridge, this provides the capability for analog or PCM audio resources to be connected to a `dvmfne` instance, allowing realtime vocoding of traffic. [See configuration](#dvmbridge-configuration) to configure.
 - `dvmpatch` a talkgroup patching utility, this provides the capability to manually patch talkgroups of the same digital mode together. [See configuration](#dvmpatch-configuration) to configure.
 - `dvmcmd` a simple command-line utility to send remote control commands to a `dvmhost` or `dvmfne` instance with REST API configured.
@@ -43,11 +43,14 @@ The DVM Host software requires the library dependancies below. Generally, the so
 
 Alternatively, if you download the ASIO library from the ASIO website and extract it to a location, you can specify the path to the ASIO library using: `-DWITH_ASIO=/path/to/asio`. This method is required when cross-compiling for old Raspberry Pi ARM 32 bit.
 
+If you want detailed stacktrace output on a crash, for compilation ensure `libdw-dev` is also installed. (`apt-get install libdw-dev`). For runtime you will need the `elfutils` package to be installed. (`apt-get install elfutils`).
+
 If cross-compiling ensure you install the appropriate libraries, for example for AARCH64/ARM64:
 ```
 sudo dpkg --add-architecture arm64
 sudo apt-get update
 sudo apt-get install libasio-dev:arm64 libncurses-dev:arm64 libssl-dev:arm64
+sudo apt-get install libdw-dev:arm64
 ```
 
 ### Build Instructions
@@ -89,9 +92,8 @@ sudo apt-get install libasio-dev:arm64 libncurses-dev:arm64 libssl-dev:arm64
 
 If cross-compiling is required (for either ARM 32bit, 64bit or old Raspberry Pi ARM 32bit), the CMake build system has some options:
 
-- `-DCROSS_COMPILE_ARM=1` - This will cross-compile dvmhost for generic ARM 32bit. (RPi4 running 32-bit distro's can fall into this category [on Debian/Rasbpian anything bullseye or newer])
-- `-DCROSS_COMPILE_AARCH64=1` - This will cross-compile dvmhost for generic ARM 64bit. (RPi4 running 64-bit distro's can fall into this category [on Debian/Rasbpian anything bullseye or newer])
-- `-DCROSS_COMPILE_RPI_ARM=1` - This will cross-compile for old Raspberry Pi ARM 32 bit. (typically this will be the RPi1, 2 and 3 platforms; see build notes, linked below)
+- `-DCROSS_COMPILE_ARM=1` - This will cross-compile dvmhost for generic ARM 32bit. (RPi4+ running 32-bit distro's can fall into this category [on Debian/Rasbpian anything bullseye or newer])
+- `-DCROSS_COMPILE_AARCH64=1` - This will cross-compile dvmhost for generic ARM 64bit. (RPi4+ running 64-bit distro's can fall into this category [on Debian/Rasbpian anything bullseye or newer])
 
 Please note cross-compliation requires you to have the appropriate development packages installed for your system. For ARM 32-bit, on Debian/Ubuntu OS install the "arm-linux-gnueabihf-gcc" and "arm-linux-gnueabihf-g++" packages. For ARM 64-bit, on Debian/Ubuntu OS install the "aarch64-linux-gnu-gcc" and "aarch64-linux-gnu-g++" packages.
 
@@ -99,7 +101,7 @@ Please note cross-compliation requires you to have the appropriate development p
 
 ### Setup TUI (Text-based User Interface)
 
-Since, DVM Host 3.5, the old calibration and setup modes have been deprecated in favor of a ncurses-based TUI. This TUI is optional, and DVM Host can still be compiled without it for systems or devices that cannot utilize it.
+The DVM TUI applications are optional, and dvmhost can still be compiled without it for systems or devices that cannot utilize it.
 
 - `-DENABLE_SETUP_TUI=0` - This will disable the setup/calibration TUI interface.
 - `-DENABLE_TUI_SUPPORT=0` - This will disable TUI support project wide. Any projects that require TUI support will not compile, or will have any TUI components disabled.
@@ -203,6 +205,19 @@ for step 4 to observe frequency error.)
 
 This source repository contains configuration example files within the configs folder, please review `fne-config.example.yml` for the `dvmfne` for details on various configurable options. When first setting up a FNE instance, it is important to properly configure a `talkgroup_rules.example.yml` file, this file defines all the various rules for valid talkgroups and other settings.
 
+The other configurables on a `dvmfne` instance are within the `fne-config.example.yml`. Some of these are Radio ID (RID) access control listings, Peer ID (PID) access control listings, adjacent site maps for systems with trunked `dvmhost` instances connected, annd many other parameters.
+
+Here is a listing of files in the configs folder in this repo that pertain to FNE configuration:
+- `adj_site_map.example.yml` - This is an example configuration file configuring adjacent site mappings for trunked `dvmhost` instances.
+- `fne-config.example.yml` - This is the main/primary example configuration file for an FNE instance.
+- `peer_list.example.dat` - This is a simple CSV-style file containing access control permissions for peers allowed to connect to the FNE (this includes both downstream peers (like `dvmhost` or `dvmbridge`) and other `dvmfne` instances connecting *to* the FNE instance).
+- `rid_acl.example.dat` - This is a simple CSV-style file containing the access control permissions for radio ID (RID)s allowed to use a configured system/network.
+- `talkgroup_rules.example.yml` - This is the second most important configuration file for an FNE, this file describes all the talkgroups and their related access control and configuration parameters.
+
+There is another file that is attributed to the FNE that an example is not provided for and that is the `key-container.ekc` file. This file provides cryptographic material needed for providing keyloading functionality across a configured system/network.
+
+Most parameters within the `fne-config.example.yml` should be set to reasonable defaults for simply just starting up a FNE, the only parameters in the configuration that *must* be reviewed before starting up an instance are proper file paths for the ACL and other files used by the FNE.
+
 There is no other real configuration for a `dvmfne` instance other then setting the appropriate parameters within the configuration files.
 
 ## dvmbridge Configuration
@@ -254,11 +269,13 @@ usage: ./dvmhost [-vhdf] [--syslog] [--setup] [--cal][--boot] [-c <configuration
 ### dvmfne Command Line Parameters
 
 ```
-usage: ./dvmfne [-vhf][--syslog][-c <configuration file>]
+usage: ./dvmfne [-vhf][-p][--syslog][-c <configuration file>]
 
   -v        show version information
   -h        show this screen
   -f        foreground mode
+
+  -p        promiscuous hub mode
 
   --syslog  force logging to syslog
 
@@ -343,8 +360,8 @@ to run on hardware below the minimal requirements, its is unlikely to provide a 
 `dvmfne`'s requirements can change radically depending on network size. Larger, busier networks will require far more resources then smaller, less busy networks. (`dvmfne` has been tested with daily unique call
 counts of up to 100,000+ calls on a x86_64 Server with 8GB RAM and 8-core processor, and in this environment it runs comfortably.)
 
-- Minimal Requirements (known "working"): x86_64 Server, 2MB RAM, Dual Core Processor.
-- Requirements: x86_64 Server, 2GB RAM or better, Dual/Quad or better Core Processor.
+- Minimal Requirements (known "working"): x86_64 Server, 2GB RAM, Quad Core Processor.
+- Requirements: x86_64 Server, 4GB RAM or better, Quad or better Core Processor.
 
 ## Project Notes
 
@@ -355,11 +372,12 @@ counts of up to 100,000+ calls on a x86_64 Server with 8GB RAM and 8-core proces
 
 - For maximize size reduction before performing a `make install`, `make old_install` or `make tarball` it is recommended to run `make strip` to strip any debug symbols or other unneeded information from the resultant binaries.
 
-- By default when cross-compiling for old RPi 1 using the Debian/Ubuntu OS, the toolchain will attempt to fetch and clone the tools automatically. If you already have a copy of these tools, you can specify the location for them with the `-DWITH_RPI_ARM_TOOLS=/path/to/tools`
-- For old RPi 1, 2 or 3 using Debian/Ubuntu OS install the standard ARM embedded toolchain (typically "arm-none-eabi-gcc" and "arm-none-eabi-g++"). The CMake build system will automatically attempt to clone down the compilation tools, if you already have the RPI_ARM compilation tools installed use the instructions the above bullet to point to them (this will prevent CMake from attempting to clone the compilation tools).
-- The old RPi 1, 2 or 3 builds do not support the TUI when cross compiling. If you require the TUI on these platforms, you have to build the project directly on the target platform vs cross compiling.
-
 - If you have old configuration files, missing comments or new parameters, there is a tool provided in the "tools" directory of the project called `config_annotator.py` this is a Python CLI tool designed to compare an existing configuration file against the example configuration file and recomment and add missing parameters (along with removing illegal/invalid parameters). It is recommended to backup your existing configuration file before running this tool on it. *This tool is only designed for the `dvmhost` configuration file, and no other configuration file!*
+
+- By default Linux may restrict the maximum size of the receive and send buffers used by the kernel for network traffic. Please check the limits with `sudo sysctl net.core.rmem_max` and `sudo sysctl net.core.wmem_max`, these should be at least 512K (524288), while DVM will operate in lower
+limits, you will see startup errors similar to: "Could not resize socket recv buffer, XXXXXX != 524288", or "Could not resize socket send buffer, XXXXXX != 524288". See the documentation for your specific distribution of Linux to adjust these parameters.
+
+- Offically support for cross-compiling for RPi 1/2/3 was removed in DVM R05A02. There is no support for cross-compiling on these platforms. It is recommended *not* to run DVM on these platforms and to use more modern RPi4+.
 
 ## Security Warnings
 

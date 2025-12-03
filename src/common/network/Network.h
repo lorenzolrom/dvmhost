@@ -40,34 +40,85 @@ namespace network
      */
     struct PeerMetadata {
         /** @name Identity and Frequency */
-        std::string identity;                   //! Peer Identity
-        uint32_t rxFrequency;                   //! Peer Rx Frequency
-        uint32_t txFrequency;                   //! Peer Tx Frequency
+        std::string identity;                   //!< Peer Identity
+        uint32_t rxFrequency;                   //!< Peer Rx Frequency
+        uint32_t txFrequency;                   //!< Peer Tx Frequency
         /** @} */
 
         /** @name System Info */
-        uint32_t power;                         //! Peer Tx Power (W)
-        float latitude;                         //! Location Latitude (decmial notation)
-        float longitude;                        //! Location Longitude (decmial notation)
-        int height;                             //! Height (M)
-        std::string location;                   //! Textual Location
+        uint32_t power;                         //!< Peer Tx Power (W)
+        float latitude;                         //!< Location Latitude (decmial notation)
+        float longitude;                        //!< Location Longitude (decmial notation)
+        int height;                             //!< Height (M)
+        std::string location;                   //!< Textual Location
         /** @} */
 
         /** @name Channel Data */
-        float txOffsetMhz;                      //! Tx Offset (MHz)
-        float chBandwidthKhz;                   //! Channel Bandwidth (kHz)
-        uint8_t channelId;                      //! Channel ID
-        uint32_t channelNo;                     //! Channel Number
+        float txOffsetMhz;                      //!< Tx Offset (MHz)
+        float chBandwidthKhz;                   //!< Channel Bandwidth (kHz)
+        uint8_t channelId;                      //!< Channel ID
+        uint32_t channelNo;                     //!< Channel Number
         /** @} */
 
         /** @name RCON */
-        std::string restApiPassword;            //! REST API Password
-        uint16_t restApiPort;                   //! REST API Port
+        std::string restApiPassword;            //!< REST API Password
+        uint16_t restApiPort;                   //!< REST API Port
         /** @} */
 
         /** @name Flags */
-        bool isConventional;                    //! Flag indicating peer is a conventional peer.
+        bool isConventional;                    //!< Flag indicating peer is a conventional peer.
         /** @} */
+    };
+
+    // ---------------------------------------------------------------------------
+    //  Structure Declaration
+    // ---------------------------------------------------------------------------
+
+    /**
+     * @brief Represents high availiability IP address data.
+     * @ingroup network_core
+     */
+    struct PeerHAIPEntry {
+    public:
+        /**
+         * @brief Initializes a new instance of the PeerHAIPEntry class
+         */
+        PeerHAIPEntry() :
+            masterAddress(),
+            masterPort(TRAFFIC_DEFAULT_PORT)
+        {
+            /* stub **/
+        }
+
+        /**
+         * @brief Initializes a new instance of the PeerHAIPEntry class
+         * @param address Master IP Address.
+         * @param port Master Port.
+         */
+        PeerHAIPEntry(std::string address, uint16_t port) :
+            masterAddress(address),
+            masterPort(port)
+        {
+            /* stub */
+        }
+
+        /**
+         * @brief Equals operator. Copies this PeerHAIPEntry to another PeerHAIPEntry.
+         * @param data Instance of PeerHAIPEntry to copy.
+         */
+        PeerHAIPEntry& operator=(const PeerHAIPEntry& data)
+        {
+            if (this != &data) {
+                masterAddress = data.masterAddress;
+                masterPort = data.masterPort;
+            }
+
+            return *this;
+        }
+
+    public:
+        std::string masterAddress;  //!< Master IP Address.
+        uint16_t masterPort;        //!< Master Port.
     };
 
     // ---------------------------------------------------------------------------
@@ -194,6 +245,11 @@ namespace network
         void enable(bool enabled);
 
         /**
+         * @brief Helper to clear the duplicate connection flag.
+         */
+        void clearDuplicateConnFlag() { m_flaggedDuplicateConn = false; }
+
+        /**
          * @brief Helper to set the peer connected callback.
          * @param callback 
          */
@@ -208,22 +264,22 @@ namespace network
          * @brief Helper to set the DMR In-Call Control callback.
          * @param callback 
          */
-        void setDMRICCCallback(std::function<void(NET_ICC::ENUM, uint32_t, uint8_t)>&& callback) { m_dmrInCallCallback = callback; }
+        void setDMRICCCallback(std::function<void(NET_ICC::ENUM, uint32_t, uint8_t, uint32_t, uint32_t, uint32_t)>&& callback) { m_dmrInCallCallback = callback; }
         /**
          * @brief Helper to set the P25 In-Call Control callback.
          * @param callback 
          */
-        void setP25ICCCallback(std::function<void(NET_ICC::ENUM, uint32_t)>&& callback) { m_p25InCallCallback = callback; }
+        void setP25ICCCallback(std::function<void(NET_ICC::ENUM, uint32_t, uint32_t, uint32_t, uint32_t)>&& callback) { m_p25InCallCallback = callback; }
         /**
          * @brief Helper to set the NXDN In-Call Control callback.
          * @param callback 
          */
-        void setNXDNICCCallback(std::function<void(NET_ICC::ENUM, uint32_t)>&& callback) { m_nxdnInCallCallback = callback; }
+        void setNXDNICCCallback(std::function<void(NET_ICC::ENUM, uint32_t, uint32_t, uint32_t, uint32_t)>&& callback) { m_nxdnInCallCallback = callback; }
         /**
          * @brief Helper to set the analog In-Call Control callback.
          * @param callback 
          */
-        void setAnalogICCCallback(std::function<void(NET_ICC::ENUM, uint32_t)>&& callback) { m_analogInCallCallback = callback; }
+        void setAnalogICCCallback(std::function<void(NET_ICC::ENUM, uint32_t, uint32_t, uint32_t, uint32_t)>&& callback) { m_analogInCallCallback = callback; }
 
         /**
          * @brief Helper to set the enc. key response callback.
@@ -240,6 +296,12 @@ namespace network
     protected:
         std::string m_address;
         uint16_t m_port;
+
+        std::string m_configuredAddress;
+        uint16_t m_configuredPort;
+
+        std::vector<PeerHAIPEntry> m_haIPs;
+        uint8_t m_currentHAIP;
 
         std::string m_password;
 
@@ -260,7 +322,11 @@ namespace network
 
         Timer m_retryTimer;
         uint8_t m_retryCount;
+        uint8_t m_maxRetryCount;
+        bool m_flaggedDuplicateConn;
         Timer m_timeoutTimer;
+
+        uint32_t m_pingsReceived;
 
         uint32_t* m_rxDMRStreamId;
         uint32_t m_rxP25StreamId;
@@ -271,6 +337,7 @@ namespace network
         uint32_t m_loginStreamId;
 
         PeerMetadata* m_metadata;
+        RTPStreamMultiplex* m_mux;
 
         uint32_t m_remotePeerId;
 
@@ -303,28 +370,39 @@ namespace network
          * @brief DMR In-Call Control Function Callback.
          *  (This is called when the master sends a In-Call Control request.)
          */
-        std::function<void(NET_ICC::ENUM command, uint32_t dstId, uint8_t slotNo)> m_dmrInCallCallback;
+        std::function<void(NET_ICC::ENUM command, uint32_t dstId, uint8_t slotNo, 
+            uint32_t peerId, uint32_t ssrc, uint32_t streamId)> m_dmrInCallCallback;
         /**
          * @brief P25 In-Call Control Function Callback.
          *  (This is called once the master sends a In-Call Control request.)
          */
-        std::function<void(NET_ICC::ENUM command, uint32_t dstId)> m_p25InCallCallback;
+        std::function<void(NET_ICC::ENUM command, uint32_t dstId, 
+            uint32_t peerId, uint32_t ssrc, uint32_t streamId)> m_p25InCallCallback;
         /**
          * @brief NXDN In-Call Control Function Callback.
          *  (This is called once the master sends a In-Call Control request.)
          */
-        std::function<void(NET_ICC::ENUM command, uint32_t dstId)> m_nxdnInCallCallback;
+        std::function<void(NET_ICC::ENUM command, uint32_t dstId, 
+            uint32_t peerId, uint32_t ssrc, uint32_t streamId)> m_nxdnInCallCallback;
         /**
          * @brief Analog In-Call Control Function Callback.
          *  (This is called once the master sends a In-Call Control request.)
          */
-        std::function<void(NET_ICC::ENUM command, uint32_t dstId)> m_analogInCallCallback;
+        std::function<void(NET_ICC::ENUM command, uint32_t dstId, 
+            uint32_t peerId, uint32_t ssrc, uint32_t streamId)> m_analogInCallCallback;
 
         /**
          * @brief Encryption Key Response Function Callback.
          *  (This is called once the master responds to a key request.)
          */
         std::function<void(p25::kmm::KeyItem ki, uint8_t algId, uint8_t keyLength)> m_keyRespCallback;
+
+        /**
+         * @brief Helper to verify the given RTP sequence for the given RTP stream.
+         * @param[out] lastRxSeq Last Received Sequence.
+         * @return MULTIPLEX_RET_CODE Return code.
+         */
+        MULTIPLEX_RET_CODE verifyStream(uint16_t* lastRxSeq);
 
         /**
          * @brief User overrideable handler that allows user code to process network packets not handled by this class.
@@ -341,21 +419,104 @@ namespace network
 
         /**
          * @brief Writes login request to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is 8 bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Protocol Tag (RPTL)                                           |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Peer ID                                                       |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @returns bool True, if login request was sent, otherwise false.
          */
         bool writeLogin();
         /**
          * @brief Writes network authentication challenge.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is 40 bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Protocol Tag (RPTK)                                           |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Peer ID                                                       |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | 30 bytes of SHA-256 ......................................... |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @returns bool True, if authorization response was sent, otherwise false.
          */
         bool writeAuthorisation();
         /**
          * @brief Writes modem configuration to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is 40 bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Protocol Tag (RPTC)                                           |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Variable Length JSON Payload ................................ |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * 
+         * The JSON payload is variable length and looks like this:
+         *  {
+         *      "identity": "<Peer Identity String>",
+         *      "rxFrequency": <Peer Rx Frequency in Hz>,
+         *      "txFrequency": <Peer Tx Frequency in Hz>,
+         *      "info":
+         *      {
+         *          "latitude": <Peer Geographical Latitude>,
+         *          "longitude": <Peer Geographical Longitude>,
+         *          "height": <Peer Height (in meters)>,
+         *          "location": "<Textual String Describing Peer Location>"
+         *      },
+         *      "channel":
+         *      {
+         *          "txPower": <Peer Transmit Power (in W)>,
+         *          "txOffsetMhz": <Peer Transmit Offset (in MHz)>,
+         *          "chBandwidthKhz": <Peer Channel Bandwidth (in KHz>,
+         *          "channelId": <Channel ID from the IDEN channel bandplan>,
+         *          "channelNo": <Channel Number from the IDEN channel bandplan>,
+         *      },
+         *      "software": "<Textual hardcoded string containing software watermark>",
+         *  }
+         * 
+         * These are extra parameters used in the root of the above JSON.
+         *  {
+         *      "externalPeer": <Boolean flag indicating whether or not this peer is a linked CFNE peer>,
+         *      "masterPeerId": <Linked CFNE peer's FNE master peer ID>,
+         * 
+         *      "conventionalPeer": <Boolean flag indicating whether or not this is a conventional peer>,
+         * 
+         *      "sysView": <Boolean flag indicating whether or not this peer is a SysView peer>,
+         *  }
+         * \endcode
          * @returns bool True, if configuration response was sent, otherwise false.
          */
         virtual bool writeConfig();
         /**
          * @brief Writes a network stay-alive ping.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is 1 bytes in length.
+         * 
+         *  Byte 0
+         *  Bit  7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+
+         *      | Reserved      |
+         *      +-+-+-+-+-+-+-+-+
+         * \endcode
          * @returns bool True, if stay-alive ping was sent, otherwise false.
          */
         bool writePing();

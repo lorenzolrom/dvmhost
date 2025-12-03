@@ -4,10 +4,6 @@
 * GPLv2 Open Source. Use is subject to license terms.
 * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 *
-* @package DVM / Common Library
-* @derivedfrom MMDVMHost (https://github.com/g4klx/MMDVMHost)
-* @license GPLv2 License (https://opensource.org/licenses/GPL-2.0)
-*
 *  Copyright (C) 2015,2016 Jonathan Naylor, G4KLX
 *  Copyright (C) 2019-2024 Bryan Biedenkapp, N2PLL
 *
@@ -92,24 +88,24 @@ namespace dmr
              * @brief Gets the flag indicating verbose log output.
              * @returns bool True, if the CSBK is verbose logging, otherwise false.
              */
-            static bool getVerbose() { return m_verbose; }
+            static bool getVerbose() { return s_verbose; }
             /**
              * @brief Sets the flag indicating verbose log output.
              * @param verbose Flag indicating verbose log output.
              */
-            static void setVerbose(bool verbose) { m_verbose = verbose; }
+            static void setVerbose(bool verbose) { s_verbose = verbose; }
 
             /** @name Local Site data */
             /**
              * @brief Gets the local site data.
              * @returns SiteData Currently set site data for the CSBK class.
              */
-            static SiteData getSiteData() { return m_siteData; }
+            static SiteData getSiteData() { return s_siteData; }
             /**
              * @brief Sets the local site data.
              * @param siteData Site data to set for the CSBK class.
              */
-            static void setSiteData(SiteData siteData) { m_siteData = siteData; }
+            static void setSiteData(SiteData siteData) { s_siteData = siteData; }
             /** @} */
 
         public:
@@ -230,10 +226,10 @@ namespace dmr
             /** @} */
 
         protected:
-            static bool m_verbose;
+            static bool s_verbose;
 
             // Local Site data
-            static SiteData m_siteData;
+            static SiteData s_siteData;
 
             /**
              * @brief Internal helper to convert payload bytes to a 64-bit long value.

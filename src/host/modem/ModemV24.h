@@ -18,6 +18,8 @@
 
 #include "Defines.h"
 #include "common/edac/RS634717.h"
+#include "common/p25/data/DataHeader.h"
+#include "common/p25/data/DataBlock.h"
 #include "common/p25/lc/LC.h"
 #include "common/p25/Audio.h"
 #include "common/p25/NID.h"
@@ -39,10 +41,10 @@ namespace modem
      * @ingroup modem
      */
     enum SERIAL_TX_TYPE {
-        STT_NO_DATA,                        //! No Data
-        STT_NON_IMBE,                       //! Non-IMBE Data/Signalling Frame
-        STT_NON_IMBE_NO_JITTER,             //! Non-IMBE Data/Signalling Frame with Jitter Disabled
-        STT_IMBE                            //! IMBE Voice Frame
+        STT_NO_DATA,                        //!< No Data
+        STT_NON_IMBE,                       //!< Non-IMBE Data/Signalling Frame
+        STT_NON_IMBE_NO_JITTER,             //!< Non-IMBE Data/Signalling Frame with Jitter Disabled
+        STT_IMBE                            //!< IMBE Voice Frame
     };
 
     /** @} */
@@ -79,6 +81,11 @@ namespace modem
             VHDR2(nullptr),
             netLDU1(nullptr),
             netLDU2(nullptr),
+            pduUserData(nullptr),
+            dataHeader(),
+            dataCall(false),
+            pduUserDataOffset(0U),
+            pduTotalBlocks(0U),
             errors(0U)
         {
             MI = new uint8_t[P25DEF::MI_LENGTH_BYTES];
@@ -91,6 +98,9 @@ namespace modem
 
             ::memset(netLDU1, 0x00U, 9U * 25U);
             ::memset(netLDU2, 0x00U, 9U * 25U);
+
+            pduUserData = new uint8_t[P25DEF::P25_MAX_PDU_BLOCKS * P25DEF::P25_PDU_CONFIRMED_LENGTH_BYTES + 2U];
+            ::memset(pduUserData, 0x00U, P25DEF::P25_MAX_PDU_BLOCKS * P25DEF::P25_PDU_CONFIRMED_LENGTH_BYTES + 2U);
 
             resetCallData();
         }
@@ -111,6 +121,8 @@ namespace modem
                 delete[] netLDU1;
             if (netLDU2 != nullptr)
                 delete[] netLDU2;
+            if (pduUserData != nullptr)
+                delete[] pduUserData;
         }
 
         /**
@@ -148,6 +160,14 @@ namespace modem
 
             n = 0U;
             seqNo = 0U;
+
+            if (pduUserData != nullptr)
+                ::memset(pduUserData, 0x00U, P25DEF::P25_MAX_PDU_BLOCKS * P25DEF::P25_PDU_CONFIRMED_LENGTH_BYTES + 2U);
+            dataHeader.reset();
+
+            dataCall = false;
+            pduUserDataOffset = 0U;
+            pduTotalBlocks = 0U;
 
             errors = 0U;
         }
@@ -229,6 +249,28 @@ namespace modem
          * @brief LDU2 Buffer.
          */
         uint8_t* netLDU2;
+
+        /**
+         * @brief User data associated with this call.
+         */
+        uint8_t* pduUserData;
+        /**
+         * @brief Data call header.
+         */
+        p25::data::DataHeader dataHeader;
+
+        /**
+         * @brief Flag indicating the current call is a data call.
+         */
+        bool dataCall;
+        /**
+         * @brief Offset index when populating the user data buffer.
+         */
+        uint32_t pduUserDataOffset;
+        /**
+         * @brief Total count of PDU blocks.
+         */
+        uint32_t pduTotalBlocks;
 
         /**
          * @brief Total errors for a given call sequence.
@@ -462,7 +504,7 @@ namespace modem
          * @param debug Flag indicating whether air interface modem debug is enabled.
          */
         ModemV24(port::IModemPort* port, bool duplex, uint32_t p25QueueSize, uint32_t p25TxQueueSize,
-            bool rtrt, bool diu, uint16_t jitter, bool dumpModemStatus, bool trace, bool debug);
+            bool rtrt, uint16_t jitter, bool dumpModemStatus, bool trace, bool debug);
         /**
          * @brief Finalizes a instance of the ModemV24 class.
          */
@@ -518,7 +560,6 @@ namespace modem
 
     private:
         bool m_rtrt;
-        bool m_diu;
 
         uint8_t m_superFrameCnt;
 
@@ -556,6 +597,12 @@ namespace modem
          * @param length Length of buffer.
          */
         void storeConvertedRx(const uint8_t* buffer, uint32_t length);
+        /**
+         * @brief Internal helper to store converted PDU Rx frames.
+         * @param dataHeader Instance of a PDU data header.
+         * @param pduUserData Buffer containing user data to transmit.
+         */
+        void storeConvertedRxPDU(p25::data::DataHeader& dataHeader, uint8_t* pduUserData);
         /**
          * @brief Helper to generate a P25 TDU packet.
          * @param buffer Buffer to create TDU.

@@ -78,7 +78,7 @@ HostFNE::HostFNE(const std::string& confFile) :
     m_pingTime(5U),
     m_maxMissedPings(5U),
     m_updateLookupTime(10U),
-    m_peerLinkSavesACL(false),
+    m_peerReplicaSavesACL(false),
     m_useAlternatePortForDiagnostics(false),
     m_allowActivityTransfer(false),
     m_allowDiagnosticTransfer(false),
@@ -339,7 +339,7 @@ bool HostFNE::readParams()
     m_maxMissedPings = systemConf["maxMissedPings"].as<uint32_t>(5U);
     m_updateLookupTime = systemConf["aclRuleUpdateTime"].as<uint32_t>(10U);
     bool sendTalkgroups = systemConf["sendTalkgroups"].as<bool>(true);
-    m_peerLinkSavesACL = systemConf["peerLinkSaveACL"].as<bool>(false);
+    m_peerReplicaSavesACL = systemConf["peerReplicaSaveACL"].as<bool>(false);
 
     if (m_pingTime == 0U) {
         m_pingTime = 5U;
@@ -372,13 +372,20 @@ bool HostFNE::readParams()
         LogWarning(LOG_HOST, "It is *not* recommended to disable the \"allowActivityTransfer\" option.");
     }
 
+    if (g_promiscuousHub) {
+        LogWarning(LOG_HOST, "This FNE was started as a promiscuous hub! In this mode, the FNE will not apply any TG or RID ACL rules and will transparently pass *all* traffic.");
+        LogWarning(LOG_HOST, "Promiscuous Hub is intended as a loop breaking measure *only*!");
+    }
+
     LogInfo("General Parameters");
+    if (g_promiscuousHub)
+        LogInfo(" !! Promiscuous Hub: yes");
     LogInfo("    Peer Ping Time: %us", m_pingTime);
     LogInfo("    Maximum Missed Pings: %u", m_maxMissedPings);
     LogInfo("    ACL Rule Update Time: %u mins", m_updateLookupTime);
 
     LogInfo("    Send Talkgroups: %s", sendTalkgroups ? "yes" : "no");
-    LogInfo("    Peer Link ACL is retained: %s", m_peerLinkSavesACL ? "yes" : "no");
+    LogInfo("    Peer Replication ACL is retained: %s", m_peerReplicaSavesACL ? "yes" : "no");
 
     if (m_useAlternatePortForDiagnostics)
         LogInfo("    Use Alternate Port for Diagnostics: yes");
@@ -533,6 +540,9 @@ bool HostFNE::initializeRESTAPI()
 
 bool HostFNE::createMasterNetwork()
 {
+    yaml::Node systemConf = m_conf["system"];
+    std::string identity = systemConf["identity"].as<std::string>("CHANGEME");
+
     yaml::Node masterConf = m_conf["master"];
     std::string address = masterConf["address"].as<std::string>();
     uint16_t port = (uint16_t)masterConf["port"].as<uint32_t>(TRAFFIC_DEFAULT_PORT);
@@ -540,6 +550,7 @@ bool HostFNE::createMasterNetwork()
     std::string password = masterConf["password"].as<std::string>();
     bool verbose = masterConf["verbose"].as<bool>(false);
     bool debug = masterConf["debug"].as<bool>(false);
+    bool kmfDebug = masterConf["kmfDebug"].as<bool>(false);
     uint16_t workerCnt = (uint16_t)masterConf["workers"].as<uint32_t>(16U);
 
     // clamp worker thread count properly
@@ -579,7 +590,7 @@ bool HostFNE::createMasterNetwork()
             }
         }
         else {
-            LogWarning(LOG_HOST, "Invalid master  network preshared encryption key length, key should be 32 hex pairs, or 64 characters. Encryption disabled.");
+            LogWarning(LOG_HOST, "Invalid master network preshared encryption key length, key should be 32 hex pairs, or 64 characters. Encryption disabled.");
             encrypted = false;
         }
     }
@@ -602,6 +613,7 @@ bool HostFNE::createMasterNetwork()
     bool parrotGrantDemand = masterConf["parrotGrantDemand"].as<bool>(true);
 
     LogInfo("Network Parameters");
+    LogInfo("    Identity: %s", identity.c_str());
     LogInfo("    Peer ID: %u", id);
     LogInfo("    Address: %s", address.c_str());
     LogInfo("    Port: %u", port);
@@ -626,9 +638,15 @@ bool HostFNE::createMasterNetwork()
         LogInfo("    Debug: yes");
     }
 
+    if (kmfDebug) {
+        LogInfo("    P25 OTAR KMF Services Debug: yes");
+    }
+
     // initialize networking
-    m_network = new FNENetwork(this, address, port, id, password, debug, verbose, reportPeerPing, m_dmrEnabled, m_p25Enabled, m_nxdnEnabled, m_analogEnabled,
-        parrotDelay, parrotGrantDemand, m_allowActivityTransfer, m_allowDiagnosticTransfer, m_pingTime, m_updateLookupTime, workerCnt);
+    m_network = new FNENetwork(this, address, port, id, password, identity, debug, kmfDebug, verbose, reportPeerPing,
+        m_dmrEnabled, m_p25Enabled, m_nxdnEnabled, m_analogEnabled,
+        parrotDelay, parrotGrantDemand, m_allowActivityTransfer, m_allowDiagnosticTransfer,
+        m_pingTime, m_updateLookupTime, workerCnt);
     m_network->setOptions(masterConf, true);
 
     m_network->setLookups(m_ridLookup, m_tidLookup, m_peerListLookup, m_cryptoLookup, m_adjSiteMapLookup);
@@ -694,7 +712,7 @@ void* HostFNE::threadMasterNetwork(void* arg)
             return nullptr;
         }
 
-        LogMessage(LOG_HOST, "[ OK ] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[ OK ] %s", threadName.c_str());
 #ifdef _GNU_SOURCE
         ::pthread_setname_np(th->thread, threadName.c_str());
 #endif // _GNU_SOURCE
@@ -714,7 +732,7 @@ void* HostFNE::threadMasterNetwork(void* arg)
             }
         }
 
-        LogMessage(LOG_HOST, "[STOP] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[STOP] %s", threadName.c_str());
         delete th;
     }
 
@@ -750,7 +768,7 @@ void* HostFNE::threadDiagNetwork(void* arg)
             return nullptr;
         }
 
-        LogMessage(LOG_HOST, "[ OK ] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[ OK ] %s", threadName.c_str());
 #ifdef _GNU_SOURCE
         ::pthread_setname_np(th->thread, threadName.c_str());
 #endif // _GNU_SOURCE
@@ -770,7 +788,7 @@ void* HostFNE::threadDiagNetwork(void* arg)
             }
         }
 
-        LogMessage(LOG_HOST, "[STOP] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[STOP] %s", threadName.c_str());
         delete th;
     }
 
@@ -781,6 +799,12 @@ void* HostFNE::threadDiagNetwork(void* arg)
 
 bool HostFNE::createPeerNetworks()
 {
+    yaml::Node systemConf = m_conf["system"];
+    std::string identity = systemConf["identity"].as<std::string>("CHANGEME");
+
+    yaml::Node masterConf = m_conf["master"];
+    uint32_t masterPeerId = masterConf["peerId"].as<uint32_t>(1001U);
+
     yaml::Node& peerList = m_conf["peers"];
     if (peerList.size() > 0U) {
         if (peerList.size() > MAX_RECOMMENDED_PEER_NETWORKS) {
@@ -829,14 +853,17 @@ bool HostFNE::createPeerNetworks()
                 }
             }
 
-            std::string identity = peerConf["identity"].as<std::string>();
-            uint32_t rxFrequency = peerConf["rxFrequency"].as<uint32_t>(0U);
-            uint32_t txFrequency = peerConf["txFrequency"].as<uint32_t>(0U);
             float latitude = peerConf["latitude"].as<float>(0.0F);
             float longitude = peerConf["longitude"].as<float>(0.0F);
             std::string location = peerConf["location"].as<std::string>();
 
-            ::LogInfoEx(LOG_HOST, "Peer ID %u Master Address %s Master Port %u Identity %s Enabled %u Encrypted %u", id, masterAddress.c_str(), masterPort, identity.c_str(), enabled, encrypted);
+            ::LogInfoEx(LOG_HOST, "Peer ID %u Master Address %s Master Port %u Enabled %u Encrypted %u", id, masterAddress.c_str(), masterPort, enabled, encrypted);
+
+            std::string identOverride = peerConf["identity"].as<std::string>();
+            if (identOverride != "") {
+                identity = identOverride;
+                ::LogInfoEx(LOG_HOST, "Peer ID %u overrides global identity, Identity %s", id, identity.c_str());
+            }
 
             if (id > 999999999U) {
                 ::LogError(LOG_HOST, "Network Peer ID cannot be greater then 999999999.");
@@ -846,33 +873,30 @@ bool HostFNE::createPeerNetworks()
             // initialize networking
             network::PeerNetwork* network = new PeerNetwork(masterAddress, masterPort, 0U, id, password, true, debug, m_dmrEnabled, m_p25Enabled, m_nxdnEnabled, m_analogEnabled, true, true, 
                 m_allowActivityTransfer, m_allowDiagnosticTransfer, false, false);
-            network->setMetadata(identity, rxFrequency, txFrequency, 0.0F, 0.0F, 0, 0, 0, latitude, longitude, 0, location);
+            network->setMetadata(identity, 0U, 0U, 0.0F, 0.0F, 0, 0, 0, latitude, longitude, 0, location);
             network->setLookups(m_ridLookup, m_tidLookup);
+            network->setMasterPeerId(masterPeerId);
             network->setPeerLookups(m_peerListLookup);
-            network->setPeerLinkSaveACL(m_peerLinkSavesACL);
+            network->setPeerReplicationSaveACL(m_peerReplicaSavesACL);
             if (encrypted) {
                 network->setPresharedKey(presharedKey);
             }
 
             network->setDMRCallback(std::bind(&HostFNE::processPeerDMR, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
+            network->setDMRICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId, uint8_t slot,
+                uint32_t peerId, uint32_t ssrc, uint32_t streamId) { processPeerDMRInCallCtrl(command, dstId, slot, peerId, ssrc, streamId); });
             network->setP25Callback(std::bind(&HostFNE::processPeerP25, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
+            network->setP25ICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId,
+                uint32_t peerId, uint32_t ssrc, uint32_t streamId) { processPeerP25InCallCtrl(command, dstId, peerId, ssrc, streamId); });
             network->setNXDNCallback(std::bind(&HostFNE::processPeerNXDN, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
+            network->setNXDNICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId,
+                uint32_t peerId, uint32_t ssrc, uint32_t streamId) { processPeerNXDNInCallCtrl(command, dstId, peerId, ssrc, streamId); });
             network->setAnalogCallback(std::bind(&HostFNE::processPeerAnalog, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
+            network->setAnalogICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId,
+                uint32_t peerId, uint32_t ssrc, uint32_t streamId) { processPeerAnalogInCallCtrl(command, dstId, peerId, ssrc, streamId); });
 
-            /*
-            ** Block Traffic To Peers
-            */
-
-            yaml::Node& blockTrafficTo = peerConf["blockTrafficTo"];
-            if (blockTrafficTo.size() > 0U) {
-                for (size_t i = 0; i < blockTrafficTo.size(); i++) {
-                    uint32_t peerId = (uint32_t)::strtoul(blockTrafficTo[i].as<std::string>("0").c_str(), NULL, 10);
-                    if (peerId != 0U) {
-                        ::LogInfoEx(LOG_HOST, "Peer ID %u Blocks Traffic To PEER %u", id, peerId);
-                        network->addBlockedTrafficPeer(peerId);
-                    }
-                }
-            }
+            network->setNetTreeDiscCallback(std::bind(&HostFNE::processNetworkTreeDisconnect, this, std::placeholders::_1, std::placeholders::_2));
+            network->setNotifyPeerReplicaCallback(std::bind(&HostFNE::processPeerReplicaNotify, this, std::placeholders::_1));
 
             network->enable(enabled);
             if (enabled) {
@@ -961,7 +985,7 @@ void* HostFNE::threadVirtualNetworking(void* arg)
             return nullptr;
         }
 
-        LogMessage(LOG_HOST, "[ OK ] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[ OK ] %s", threadName.c_str());
 #ifdef _GNU_SOURCE
         ::pthread_setname_np(th->thread, threadName.c_str());
 #endif // _GNU_SOURCE
@@ -995,7 +1019,7 @@ void* HostFNE::threadVirtualNetworking(void* arg)
             }
         }
 
-        LogMessage(LOG_HOST, "[STOP] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[STOP] %s", threadName.c_str());
         delete th;
     }
 
@@ -1025,6 +1049,21 @@ void HostFNE::processPeerDMR(network::PeerNetwork* peerNetwork, const uint8_t* d
     }
 }
 
+/* Helper to process an DMR In-Call Control message. */
+
+void HostFNE::processPeerDMRInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, uint8_t slot, 
+    uint32_t peerId, uint32_t ssrc, uint32_t streamId)
+{
+    switch (command) {
+    case network::NET_ICC::REJECT_TRAFFIC:
+        m_network->processDownstreamInCallCtrl(command, NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR, dstId, slot, peerId, ssrc, streamId);
+        break;
+
+    default:
+        break;
+    }
+}
+
 /* Processes P25 peer network traffic. */
 
 void HostFNE::processPeerP25(network::PeerNetwork* peerNetwork, const uint8_t* data, uint32_t length, uint32_t streamId, 
@@ -1044,6 +1083,21 @@ void HostFNE::processPeerP25(network::PeerNetwork* peerNetwork, const uint8_t* d
     if (length > 0U) {
         uint32_t peerId = peerNetwork->getPeerId();
         m_network->p25TrafficHandler()->processFrame(data, length, peerId, rtpHeader.getSSRC(), rtpHeader.getSequence(), streamId, true);
+    }
+}
+
+/* Helper to process an P25 In-Call Control message. */
+
+void HostFNE::processPeerP25InCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId,
+    uint32_t peerId, uint32_t ssrc, uint32_t streamId)
+{
+    switch (command) {
+    case network::NET_ICC::REJECT_TRAFFIC:
+        m_network->processDownstreamInCallCtrl(command, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25, dstId, 0U, peerId, ssrc, streamId);
+        break;
+
+    default:
+        break;
     }
 }
 
@@ -1069,6 +1123,21 @@ void HostFNE::processPeerNXDN(network::PeerNetwork* peerNetwork, const uint8_t* 
     }
 }
 
+/* Helper to process an NXDN In-Call Control message. */
+
+void HostFNE::processPeerNXDNInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, 
+    uint32_t peerId, uint32_t ssrc, uint32_t streamId)
+{
+    switch (command) {
+    case network::NET_ICC::REJECT_TRAFFIC:
+        m_network->processDownstreamInCallCtrl(command, NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN, dstId, 0U, peerId, ssrc, streamId);
+        break;
+
+    default:
+        break;
+    }
+}
+
 /* Processes analog peer network traffic. */
 
 void HostFNE::processPeerAnalog(network::PeerNetwork* peerNetwork, const uint8_t* data, uint32_t length, uint32_t streamId, 
@@ -1088,5 +1157,38 @@ void HostFNE::processPeerAnalog(network::PeerNetwork* peerNetwork, const uint8_t
     if (length > 0U) {
         uint32_t peerId = peerNetwork->getPeerId();
         m_network->analogTrafficHandler()->processFrame(data, length, peerId, rtpHeader.getSSRC(), rtpHeader.getSequence(), streamId, true);
+    }
+}
+
+/* Helper to process an analog In-Call Control message. */
+
+void HostFNE::processPeerAnalogInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, 
+    uint32_t peerId, uint32_t ssrc, uint32_t streamId)
+{
+    switch (command) {
+    case network::NET_ICC::REJECT_TRAFFIC:
+        m_network->processDownstreamInCallCtrl(command, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, dstId, 0U, peerId, ssrc, streamId);
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* Processes network tree disconnect notification. */
+
+void HostFNE::processNetworkTreeDisconnect(network::PeerNetwork* peerNetwork, const uint32_t offendingPeerId)
+{
+    if (m_network != nullptr) {
+        m_network->processNetworkTreeDisconnect(peerNetwork->getPeerId(), offendingPeerId);
+    }
+}
+
+/* Processes network tree disconnect notification. */
+
+void HostFNE::processPeerReplicaNotify(network::PeerNetwork* peerNetwork)
+{
+    if (m_network != nullptr) {
+        m_network->setPeerReplica(true);
     }
 }

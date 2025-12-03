@@ -27,7 +27,7 @@
 #include "network/FNENetwork.h"
 #include "network/DiagNetwork.h"
 #include "network/PeerNetwork.h"
-#include "network/RESTAPI.h"
+#include "restapi/RESTAPI.h"
 #include "CryptoContainer.h"
 
 #include <string>
@@ -59,8 +59,8 @@ public:
      * @brief Virtual Network Packet Data Digital Mode
      */
     enum PacketDataMode {
-        DMR,            //! Digital Mobile Radio
-        PROJECT25       //! Project 25
+        DMR,            //!< Digital Mobile Radio
+        PROJECT25       //!< Project 25
     };
 
     /**
@@ -118,7 +118,7 @@ private:
     uint32_t m_maxMissedPings;
     uint32_t m_updateLookupTime;
 
-    bool m_peerLinkSavesACL;
+    bool m_peerReplicaSavesACL;
 
     bool m_useAlternatePortForDiagnostics;
 
@@ -185,6 +185,17 @@ private:
     void processPeerDMR(network::PeerNetwork* peerNetwork, const uint8_t* data, uint32_t length, uint32_t streamId, 
         const network::frame::RTPFNEHeader& fneHeader, const network::frame::RTPHeader& rtpHeader);
     /**
+     * @brief Helper to process an DMR In-Call Control message.
+     * @param command In-Call Control Command.
+     * @param dstId Destination ID.
+     * @param slot Slot Number.
+     * @param peerId Peer ID.
+     * @param ssrc Synchronization Source.
+     * @param streamId Stream ID.
+     */
+    void processPeerDMRInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, uint8_t slot, 
+        uint32_t peerId, uint32_t ssrc, uint32_t streamId);
+    /**
      * @brief Processes P25 peer network traffic.
      * @param data Buffer containing P25 data.
      * @param length Length of the buffer.
@@ -194,6 +205,16 @@ private:
      */
     void processPeerP25(network::PeerNetwork* peerNetwork, const uint8_t* data, uint32_t length, uint32_t streamId, 
         const network::frame::RTPFNEHeader& fneHeader, const network::frame::RTPHeader& rtpHeader);
+    /**
+     * @brief Helper to process an P25 In-Call Control message.
+     * @param command In-Call Control Command.
+     * @param dstId Destination ID.
+     * @param peerId Peer ID.
+     * @param ssrc Synchronization Source.
+     * @param streamId Stream ID.
+     */
+    void processPeerP25InCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, 
+        uint32_t peerId, uint32_t ssrc, uint32_t streamId);
     /**
      * @brief Processes NXDN peer network traffic.
      * @param data Buffer containing NXDN data.
@@ -205,6 +226,16 @@ private:
     void processPeerNXDN(network::PeerNetwork* peerNetwork, const uint8_t* data, uint32_t length, uint32_t streamId, 
         const network::frame::RTPFNEHeader& fneHeader, const network::frame::RTPHeader& rtpHeader);
     /**
+     * @brief Helper to process an NXDN In-Call Control message.
+     * @param command In-Call Control Command.
+     * @param dstId Destination ID.
+     * @param peerId Peer ID.
+     * @param ssrc Synchronization Source.
+     * @param streamId Stream ID.
+     */
+    void processPeerNXDNInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, 
+        uint32_t peerId, uint32_t ssrc, uint32_t streamId);
+    /**
      * @brief Processes analog peer network traffic.
      * @param data Buffer containing analog data.
      * @param length Length of the buffer.
@@ -214,6 +245,28 @@ private:
      */
     void processPeerAnalog(network::PeerNetwork* peerNetwork, const uint8_t* data, uint32_t length, uint32_t streamId, 
         const network::frame::RTPFNEHeader& fneHeader, const network::frame::RTPHeader& rtpHeader);
+    /**
+     * @brief Helper to process an analog In-Call Control message.
+     * @param command In-Call Control Command.
+     * @param dstId Destination ID.
+     * @param peerId Peer ID.
+     * @param ssrc Synchronization Source.
+     * @param streamId Stream ID.
+     */
+    void processPeerAnalogInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, 
+        uint32_t peerId, uint32_t ssrc, uint32_t streamId);
+
+    /**
+     * @brief Processes network tree disconnect notification.
+     * @param peerNetwork Peer network instance.
+     * @param offendingPeerId Offending peer ID.
+     */
+    void processNetworkTreeDisconnect(network::PeerNetwork* peerNetwork, const uint32_t offendingPeerId);
+    /**
+     * @brief Processes peer replica notification.
+     * @param peerNetwork Peer network instance.
+     */
+    void processPeerReplicaNotify(network::PeerNetwork* peerNetwork);
 };
 
 #endif // __HOST_FNE_H__

@@ -8,7 +8,7 @@
  *
  */
 #include "fne/Defines.h"
-#include "common/network/json/json.h"
+#include "common/json/json.h"
 #include "common/zlib/Compression.h"
 #include "common/Log.h"
 #include "common/Utils.h"
@@ -41,18 +41,21 @@ PeerNetwork::PeerNetwork(const std::string& address, uint16_t port, uint16_t loc
     bool duplex, bool debug, bool dmr, bool p25, bool nxdn, bool analog, bool slot1, bool slot2, bool allowActivityTransfer, bool allowDiagnosticTransfer, bool updateLookup, bool saveLookup) :
     Network(address, port, localPort, peerId, password, duplex, debug, dmr, p25, nxdn, analog, slot1, slot2, allowActivityTransfer, allowDiagnosticTransfer, updateLookup, saveLookup),
     m_attachedKeyRSPHandler(false),
-    m_blockTrafficToTable(),
     m_dmrCallback(nullptr),
     m_p25Callback(nullptr),
     m_nxdnCallback(nullptr),
     m_analogCallback(nullptr),
+    m_netTreeDiscCallback(nullptr),
+    m_peerReplicaCallback(nullptr),
+    m_masterPeerId(0U),
     m_pidLookup(nullptr),
-    m_peerLink(false),
-    m_peerLinkSavesACL(false),
-    m_tgidPkt(true, "Peer-Link, TGID List"),
-    m_ridPkt(true, "Peer-Link, RID List"),
-    m_pidPkt(true, "Peer-Link, PID List"),
-    m_threadPool(WORKER_CNT, "peer")
+    m_peerReplica(false),
+    m_peerReplicaSavesACL(false),
+    m_tgidPkt(true, "Peer Replication, TGID List"),
+    m_ridPkt(true, "Peer Replication, RID List"),
+    m_pidPkt(true, "Peer Replication, PID List"),
+    m_threadPool(WORKER_CNT, "peer"),
+    m_prevSpanningTreeChildren(0U)
 {
     assert(!address.empty());
     assert(port > 0U);
@@ -104,29 +107,6 @@ void PeerNetwork::close()
     Network::close();
 }
 
-/* Checks if the passed peer ID is blocked from sending to this peer. */
-
-bool PeerNetwork::checkBlockedPeer(uint32_t peerId)
-{
-    if (!m_enabled)
-        return false;
-
-    if (m_blockTrafficToTable.empty())
-        return false;
-
-    if (std::find(m_blockTrafficToTable.begin(), m_blockTrafficToTable.end(), peerId) != m_blockTrafficToTable.end()) {
-        if (m_debug) {
-            ::LogDebugEx(LOG_HOST, "PeerNetwork::checkBlockedPeer()", "PEER %u peerId = %u, blocking traffic", m_peerId, peerId);
-        }
-        return true;
-    }
-
-    if (m_debug) {
-        ::LogDebugEx(LOG_HOST, "PeerNetwork::checkBlockedPeer()", "PEER %u peerId = %u, passing traffic", m_peerId, peerId);
-    }
-    return false;
-}
-
 /* Writes a complete update of this CFNE's active peer list to the network. */
 
 bool PeerNetwork::writePeerLinkPeers(json::array* peerList)
@@ -136,30 +116,111 @@ bool PeerNetwork::writePeerLinkPeers(json::array* peerList)
     if (peerList->size() == 0)
         return false;
 
-    if (peerList->size() > 0 && m_peerLink) {
+    if (peerList->size() > 0 && m_peerReplica) {
         json::value v = json::value(*peerList);
         std::string json = std::string(v.serialize());
 
         size_t len = json.length() + 9U;
         DECLARE_CHAR_ARRAY(buffer, len);
 
-        ::memcpy(buffer + 0U, TAG_PEER_LINK, 4U);
+        ::memcpy(buffer + 0U, TAG_PEER_REPLICA, 4U);
         ::snprintf(buffer + 8U, json.length() + 1U, "%s", json.c_str());
 
-        PacketBuffer pkt(true, "Peer-Link, Active Peer List");
+        PacketBuffer pkt(true, "Peer Replication, Active Peer List");
         pkt.encode((uint8_t*)buffer, len);
 
         uint32_t streamId = createStreamId();
-        LogInfoEx(LOG_NET, "PEER %u Peer-Link, Active Peer List, blocks %u, streamId = %u", m_peerId, pkt.fragments.size(), streamId);
+        LogInfoEx(LOG_REPL, "PEER %u Peer Replication, Active Peer List, blocks %u, streamId = %u", m_peerId, pkt.fragments.size(), streamId);
         if (pkt.fragments.size() > 0U) {
             for (auto frag : pkt.fragments) {
-                writeMaster({ NET_FUNC::PEER_LINK, NET_SUBFUNC::PL_ACT_PEER_LIST }, 
-                    frag.second->data, FRAG_SIZE, RTP_END_OF_CALL_SEQ, streamId, false, true);
+                writeMaster({ NET_FUNC::REPL, NET_SUBFUNC::REPL_ACT_PEER_LIST }, 
+                    frag.second->data, FRAG_SIZE, RTP_END_OF_CALL_SEQ, streamId, true);
                 Thread::sleep(60U); // pace block transmission
             }
         }
 
         pkt.clear();
+        return true;
+    }
+
+    return false;
+}
+
+/* Writes a complete update of this CFNE's known spanning tree upstream to the network. */
+
+bool PeerNetwork::writeSpanningTree(SpanningTree* treeRoot)
+{
+    if (treeRoot == nullptr)
+        return false;
+    if (treeRoot->m_children.size() == 0 && m_prevSpanningTreeChildren == 0U)
+        return false;
+
+    if ((treeRoot->m_children.size() > 0) || (m_prevSpanningTreeChildren > 0U)) {
+        json::array jsonArray;
+        SpanningTree::serializeTree(treeRoot, jsonArray);
+
+        json::value v = json::value(jsonArray);
+        std::string json = std::string(v.serialize());
+
+        size_t len = json.length() + 9U;
+        DECLARE_CHAR_ARRAY(buffer, len);
+
+        ::memcpy(buffer + 0U, TAG_PEER_REPLICA, 4U);
+        ::snprintf(buffer + 8U, json.length() + 1U, "%s", json.c_str());
+
+        PacketBuffer pkt(true, "Network Tree, Tree List");
+        pkt.encode((uint8_t*)buffer, len);
+
+        uint32_t streamId = createStreamId();
+        LogInfoEx(LOG_STP, "PEER %u Network Tree, Tree List, blocks %u, streamId = %u", m_peerId, pkt.fragments.size(), streamId);
+        if (pkt.fragments.size() > 0U) {
+            for (auto frag : pkt.fragments) {
+                writeMaster({ NET_FUNC::NET_TREE, NET_SUBFUNC::NET_TREE_LIST }, 
+                    frag.second->data, FRAG_SIZE, RTP_END_OF_CALL_SEQ, streamId, true);
+                Thread::sleep(60U); // pace block transmission
+            }
+        }
+
+        pkt.clear();
+
+        m_prevSpanningTreeChildren = treeRoot->m_children.size();
+        return true;
+    }
+
+    m_prevSpanningTreeChildren = treeRoot->m_children.size();
+    return false;
+}
+
+/* Writes a complete update of this CFNE's HA parameters to the network. */
+
+bool PeerNetwork::writeHAParams(std::vector<HAParameters>& haParams)
+{
+    if (haParams.size() == 0)
+        return false;
+
+    if (haParams.size() > 0 && m_peerReplica) {
+        uint32_t len = 4U + (haParams.size() * HA_PARAMS_ENTRY_LEN);
+        DECLARE_UINT8_ARRAY(buffer, len);
+
+        SET_UINT32((len - 4U), buffer, 0U);
+
+        uint32_t offs = 4U;
+        for (uint8_t i = 0U; i < haParams.size(); i++) {
+            uint32_t peerId = haParams[i].peerId;
+            uint32_t ipAddr = haParams[i].masterIP;
+            uint16_t port = haParams[i].masterPort;
+
+            SET_UINT32(peerId, buffer, offs);
+            SET_UINT32(ipAddr, buffer, offs + 4U);
+            SET_UINT16(port, buffer, offs + 8U);
+
+            offs += HA_PARAMS_ENTRY_LEN;
+        }
+
+        // bryanb: this should probably be packet buffered
+        writeMaster({ NET_FUNC::REPL, NET_SUBFUNC::REPL_HA_PARAMS }, 
+            buffer, len, RTP_END_OF_CALL_SEQ, createStreamId(), true);
+
         return true;
     }
 
@@ -196,7 +257,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
 
             // enqueue the task
             if (!m_threadPool.enqueue(new_pooltask(taskNetworkRx, req))) {
-                LogError(LOG_NET, "Failed to task enqueue network packet request, peerId = %u", peerId);
+                LogError(LOG_PEER, "Failed to task enqueue network packet request, peerId = %u", peerId);
                 if (req != nullptr) {
                     if (req->buffer != nullptr)
                         delete[] req->buffer;
@@ -206,17 +267,17 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
         }
         break;
 
-    case NET_FUNC::PEER_LINK:                                       // Peer Link
+    case NET_FUNC::REPL:                                            // Peer Replication
     {
         switch (opcode.second) {
-        case NET_SUBFUNC::PL_TALKGROUP_LIST:                        // Talkgroup List
+        case NET_SUBFUNC::REPL_TALKGROUP_LIST:                      // Talkgroup List
         {
             uint32_t decompressedLen = 0U;
             uint8_t* decompressed = nullptr;
 
             if (m_tgidPkt.decode(data, &decompressed, &decompressedLen)) {
                 if (m_tidLookup == nullptr) {
-                    LogError(LOG_NET, "Talkgroup ID lookup not available yet.");
+                    LogError(LOG_PEER, "Talkgroup ID lookup not available yet.");
                     m_tgidPkt.clear();
                     delete[] decompressed;
                     break;
@@ -229,7 +290,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
 
                 // randomize filename
                 std::ostringstream s;
-                if (!m_peerLinkSavesACL) {
+                if (!m_peerReplicaSavesACL) {
                     std::random_device rd;
                     std::mt19937 mt(rd());
                     std::uniform_int_distribution<uint32_t> dist(0x00U, 0xFFFFFFFFU);
@@ -241,7 +302,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 std::string filename = s.str();
                 std::ofstream file(filename, std::ofstream::out);
                 if (file.fail()) {
-                    LogError(LOG_NET, "Cannot open the talkgroup ID lookup file - %s", filename.c_str());
+                    LogError(LOG_PEER, "Cannot open the talkgroup ID lookup file - %s", filename.c_str());
                     m_tgidPkt.clear();
                     delete[] decompressed;
                     break;
@@ -255,8 +316,10 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 m_tidLookup->filename(filename);
                 m_tidLookup->reload();
 
-                // flag this peer as Peer-Link enabled
-                m_peerLink = true;
+                // flag this peer as replica enabled
+                m_peerReplica = true;
+                if (m_peerReplicaCallback != nullptr)
+                    m_peerReplicaCallback(this);
 
                 // cleanup temporary file
                 ::remove(filename.c_str());
@@ -266,14 +329,14 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
         }
         break;
 
-        case NET_SUBFUNC::PL_RID_LIST:                              // Radio ID List
+        case NET_SUBFUNC::REPL_RID_LIST:                            // Radio ID List
         {
             uint32_t decompressedLen = 0U;
             uint8_t* decompressed = nullptr;
 
             if (m_ridPkt.decode(data, &decompressed, &decompressedLen)) {
                 if (m_ridLookup == nullptr) {
-                    LogError(LOG_NET, "Radio ID lookup not available yet.");
+                    LogError(LOG_PEER, "Radio ID lookup not available yet.");
                     m_ridPkt.clear();
                     delete[] decompressed;
                     break;
@@ -286,7 +349,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
 
                 // randomize filename
                 std::ostringstream s;
-                if (!m_peerLinkSavesACL) {
+                if (!m_peerReplicaSavesACL) {
                     std::random_device rd;
                     std::mt19937 mt(rd());
                     std::uniform_int_distribution<uint32_t> dist(0x00U, 0xFFFFFFFFU);
@@ -298,7 +361,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 std::string filename = s.str();
                 std::ofstream file(filename, std::ofstream::out);
                 if (file.fail()) {
-                    LogError(LOG_NET, "Cannot open the radio ID lookup file - %s", filename.c_str());
+                    LogError(LOG_PEER, "Cannot open the radio ID lookup file - %s", filename.c_str());
                     m_ridPkt.clear();
                     delete[] decompressed;
                     break;
@@ -312,8 +375,10 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 m_ridLookup->filename(filename);
                 m_ridLookup->reload();
 
-                // flag this peer as Peer-Link enabled
-                m_peerLink = true;
+                // flag this peer as replica enabled
+                m_peerReplica = true;
+                if (m_peerReplicaCallback != nullptr)
+                    m_peerReplicaCallback(this);
 
                 // cleanup temporary file
                 ::remove(filename.c_str());
@@ -323,14 +388,14 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
         }
         break;
 
-        case NET_SUBFUNC::PL_PEER_LIST:                             // Peer List
+        case NET_SUBFUNC::REPL_PEER_LIST:                           // Peer List
         {
             uint32_t decompressedLen = 0U;
             uint8_t* decompressed = nullptr;
 
             if (m_pidPkt.decode(data, &decompressed, &decompressedLen)) {
                 if (m_pidLookup == nullptr) {
-                    LogError(LOG_NET, "Peer ID lookup not available yet.");
+                    LogError(LOG_PEER, "Peer ID lookup not available yet.");
                     m_pidPkt.clear();
                     delete[] decompressed;
                     break;
@@ -343,7 +408,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
 
                 // randomize filename
                 std::ostringstream s;
-                if (!m_peerLinkSavesACL) {
+                if (!m_peerReplicaSavesACL) {
                     std::random_device rd;
                     std::mt19937 mt(rd());
                     std::uniform_int_distribution<uint32_t> dist(0x00U, 0xFFFFFFFFU);
@@ -355,7 +420,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 std::string filename = s.str();
                 std::ofstream file(filename, std::ofstream::out);
                 if (file.fail()) {
-                    LogError(LOG_NET, "Cannot open the peer ID lookup file - %s", filename.c_str());
+                    LogError(LOG_PEER, "Cannot open the peer ID lookup file - %s", filename.c_str());
                     m_pidPkt.clear();
                     delete[] decompressed;
                     break;
@@ -369,13 +434,35 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 m_pidLookup->filename(filename);
                 m_pidLookup->reload();
 
-                // flag this peer as Peer-Link enabled
-                m_peerLink = true;
+                // flag this peer as replica enabled
+                m_peerReplica = true;
+                if (m_peerReplicaCallback != nullptr)
+                    m_peerReplicaCallback(this);
 
                 // cleanup temporary file
                 ::remove(filename.c_str());
                 m_pidPkt.clear();
                 delete[] decompressed;
+            }
+        }
+        break;
+
+        default:
+            break;
+        }
+    }
+    break;
+
+    case NET_FUNC::NET_TREE:                                      // Network Tree
+    {
+        switch (opcode.second) {
+        case NET_SUBFUNC::NET_TREE_DISC:                          // Network Tree Disconnect
+        {
+            uint32_t offendingPeerId = GET_UINT32(data, 6U);
+            LogWarning(LOG_PEER, "PEER %u Network Tree Disconnect, requested from upstream master, possible duplicate connection for PEER %u", m_peerId, offendingPeerId);
+
+            if (m_netTreeDiscCallback != nullptr) {
+                m_netTreeDiscCallback(this, offendingPeerId);
             }
         }
         break;
@@ -435,8 +522,13 @@ bool PeerNetwork::writeConfig()
     config["rcon"].set<json::object>(rcon);
 
     // Flags
+    /*
+    ** bryanb: don't change externalPeer to neighborPeer -- this will break backward
+    **  compat with older FNE versions (we're stuck with this naming :()
+    */
     bool external = true;
-    config["externalPeer"].set<bool>(external);                                     // External Peer Marker
+    config["externalPeer"].set<bool>(external);                                     // External FNE Neighbor Peer Marker
+    config["masterPeerId"].set<uint32_t>(m_masterPeerId);                           // Master Peer ID
 
     config["software"].set<std::string>(std::string(software));                     // Software ID
 
@@ -484,9 +576,25 @@ void PeerNetwork::taskNetworkRx(PeerPacketRequest* req)
             // determine if this packet is late (i.e. are we processing this packet more than 200ms after it was received?)
             uint64_t dt = req->pktRxTime + PACKET_LATE_TIME;
             if (dt < now) {
-                LogWarning(LOG_NET, "PEER %u packet processing latency >200ms, dt = %u, now = %u", req->peerId, dt, now);
+                LogWarning(LOG_PEER, "PEER %u packet processing latency >200ms, dt = %u, now = %u", req->peerId, dt, now);
             }
 
+            uint16_t lastRxSeq = 0U;
+
+            MULTIPLEX_RET_CODE ret = network->m_mux->verifyStream(req->streamId, req->rtpHeader.getSequence(), req->fneHeader.getFunction(), &lastRxSeq);
+            if (ret == MUX_LOST_FRAMES) {
+                LogError(LOG_PEER, "PEER %u stream %u possible lost frames; got %u, expected %u", req->fneHeader.getPeerId(),
+                    req->streamId, req->rtpHeader.getSequence(), lastRxSeq);
+            }
+            else if (ret == MUX_OUT_OF_ORDER) {
+                LogError(LOG_PEER, "PEER %u stream %u out-of-order; got %u, expected >%u", req->fneHeader.getPeerId(),
+                    req->streamId, req->rtpHeader.getSequence(), lastRxSeq);
+            }
+#if DEBUG_RTP_MUX
+            else {
+                LogDebugEx(LOG_PEER, "PeerNetwork::taskNetworkRx()", "PEER %u valid mux, seq = %u, streamId = %u", req->fneHeader.getPeerId(), req->rtpHeader.getSequence(), req->streamId);
+            }
+#endif
             // process incomfing message subfunction opcodes
             switch (req->subFunc) {
             case NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR:                 // Encapsulated DMR data frame

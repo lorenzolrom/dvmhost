@@ -33,6 +33,13 @@ const uint8_t UDTF_NMEA = 0x05U;
 //  Public Class Members
 // ---------------------------------------------------------------------------
 
+/* Initializes a copy instance of the DataHeader class. */
+
+DataHeader::DataHeader(const DataHeader& data) : DataHeader()
+{
+    copy(data);
+}
+
 /* Initializes a new instance of the DataHeader class. */
 
 DataHeader::DataHeader() :
@@ -68,7 +75,10 @@ DataHeader::DataHeader() :
 
 DataHeader::~DataHeader()
 {
-    delete[] m_data;
+    if (m_data != nullptr) {
+        delete[] m_data;
+        m_data = nullptr;
+    }
 }
 
 /* Equals operator. */
@@ -404,33 +414,65 @@ void DataHeader::reset()
 
 /* Gets the total length in bytes of enclosed packet data. */
 
-uint32_t DataHeader::getPacketLength() const
+uint32_t DataHeader::getPacketLength(DataType::E dataType) const
 {
     if (m_DPF == DPF::RESPONSE) {
         return 0U; // responses have no packet length as they are header only
     }
 
     if (m_DPF == DPF::CONFIRMED_DATA) {
-        return DMR_PDU_CONFIRMED_DATA_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        if (dataType == DataType::RATE_34_DATA) {
+            return DMR_PDU_CONFIRMED_TQ_DATA_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            return DMR_PDU_CONFIRMED_HR_DATA_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        }
+        else {
+            return DMR_PDU_CONFIRMED_UNCODED_DATA_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        }
     }
     else {
-        return DMR_PDU_UNCONFIRMED_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        if (dataType == DataType::RATE_34_DATA) {
+            return DMR_PDU_THREEQUARTER_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            return DMR_PDU_HALFRATE_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        }
+        else {
+            return DMR_PDU_UNCODED_LENGTH_BYTES * m_blocksToFollow - 4 - m_padLength;
+        }
     }
 }
 
 /* Gets the total length in bytes of entire PDU. */
 
-uint32_t DataHeader::getPDULength() const
+uint32_t DataHeader::getPDULength(DataType::E dataType) const
 {
     if (m_DPF == DPF::RESPONSE) {
         return 0U; // responses have no packet length as they are header only
     }
 
     if (m_DPF == DPF::CONFIRMED_DATA) {
-        return DMR_PDU_CONFIRMED_DATA_LENGTH_BYTES * m_blocksToFollow;
+        if (dataType == DataType::RATE_34_DATA) {
+            return DMR_PDU_CONFIRMED_TQ_DATA_LENGTH_BYTES * m_blocksToFollow;
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            return DMR_PDU_CONFIRMED_HR_DATA_LENGTH_BYTES * m_blocksToFollow;
+        }
+        else {
+            return DMR_PDU_CONFIRMED_UNCODED_DATA_LENGTH_BYTES * m_blocksToFollow;
+        }
     }
     else {
-        return DMR_PDU_UNCONFIRMED_LENGTH_BYTES * m_blocksToFollow;
+        if (dataType == DataType::RATE_34_DATA) {
+            return DMR_PDU_THREEQUARTER_LENGTH_BYTES * m_blocksToFollow;
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            return DMR_PDU_HALFRATE_LENGTH_BYTES * m_blocksToFollow;
+        }
+        else {
+            return DMR_PDU_UNCODED_LENGTH_BYTES * m_blocksToFollow;
+        }
     }
 }
 
@@ -447,10 +489,32 @@ uint32_t DataHeader::getData(uint8_t* buffer) const
 
 /* Helper to calculate the number of blocks to follow and padding length for a PDU. */
 
-void DataHeader::calculateLength(uint32_t packetLength)
+void DataHeader::calculateLength(DataType::E dataType, uint32_t packetLength)
 {
     uint32_t len = packetLength + 4U; // packet length + CRC32
-    uint32_t blockLen = (m_DPF == DPF::CONFIRMED_DATA) ? DMR_PDU_CONFIRMED_DATA_LENGTH_BYTES : DMR_PDU_UNCONFIRMED_LENGTH_BYTES;
+    uint32_t blockLen = DMR_PDU_UNCODED_LENGTH_BYTES;
+    if (m_DPF == DPF::CONFIRMED_DATA) {
+        if (dataType == DataType::RATE_34_DATA) {
+            blockLen = DMR_PDU_CONFIRMED_TQ_DATA_LENGTH_BYTES;
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            blockLen = DMR_PDU_CONFIRMED_HR_DATA_LENGTH_BYTES;
+        }
+        else {
+            blockLen = DMR_PDU_CONFIRMED_UNCODED_DATA_LENGTH_BYTES;
+        }
+    }
+    else {
+        if (dataType == DataType::RATE_34_DATA) {
+            blockLen = DMR_PDU_THREEQUARTER_LENGTH_BYTES;
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            blockLen = DMR_PDU_HALFRATE_LENGTH_BYTES;
+        }
+        else {
+            blockLen = DMR_PDU_UNCODED_LENGTH_BYTES;
+        }
+    }
 
     if (len > blockLen) {
         m_padLength = blockLen - (len % blockLen);
@@ -463,13 +527,74 @@ void DataHeader::calculateLength(uint32_t packetLength)
 
 /* Helper to determine the pad length for a given packet length. */
 
-uint32_t DataHeader::calculatePadLength(DPF::E dpf, uint32_t packetLength)
+uint32_t DataHeader::calculatePadLength(DPF::E dpf, DataType::E dataType, uint32_t packetLength)
 {
     uint32_t len = packetLength + 4U; // packet length + CRC32
     if (dpf == DPF::CONFIRMED_DATA) {
-        return DMR_PDU_CONFIRMED_DATA_LENGTH_BYTES - (len % DMR_PDU_CONFIRMED_DATA_LENGTH_BYTES);
+        if (dataType == DataType::RATE_34_DATA) {
+            return DMR_PDU_CONFIRMED_TQ_DATA_LENGTH_BYTES - (len % DMR_PDU_CONFIRMED_TQ_DATA_LENGTH_BYTES);
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            return DMR_PDU_CONFIRMED_HR_DATA_LENGTH_BYTES - (len % DMR_PDU_CONFIRMED_HR_DATA_LENGTH_BYTES);
+        }
+        else {
+            return DMR_PDU_CONFIRMED_UNCODED_DATA_LENGTH_BYTES - (len % DMR_PDU_CONFIRMED_UNCODED_DATA_LENGTH_BYTES);
+        }
     }
     else {
-        return DMR_PDU_UNCONFIRMED_LENGTH_BYTES - (len % DMR_PDU_UNCONFIRMED_LENGTH_BYTES);
+        if (dataType == DataType::RATE_34_DATA) {
+            return DMR_PDU_THREEQUARTER_LENGTH_BYTES - (len % DMR_PDU_THREEQUARTER_LENGTH_BYTES);
+        }
+        else if (dataType == DataType::RATE_12_DATA) {
+            return DMR_PDU_HALFRATE_LENGTH_BYTES - (len % DMR_PDU_HALFRATE_LENGTH_BYTES);
+        }
+        else {
+            return DMR_PDU_UNCODED_LENGTH_BYTES - (len % DMR_PDU_UNCODED_LENGTH_BYTES);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Private Class Members
+// ---------------------------------------------------------------------------
+
+/* Internal helper to copy the the class. */
+
+void DataHeader::copy(const DataHeader& data)
+{
+    m_GI = data.m_GI;
+    m_A = data.m_A;
+
+    m_DPF = data.m_DPF;
+
+    m_sap = data.m_sap;
+
+    m_fsn = data.m_fsn;
+    m_Ns = data.m_Ns;
+
+    m_blocksToFollow = data.m_blocksToFollow;
+    m_padLength = data.m_padLength;
+
+    m_F = data.m_F;
+    m_S = data.m_S;
+
+    m_dataFormat = data.m_dataFormat;
+
+    m_srcId = data.m_srcId;
+    m_dstId = data.m_dstId;
+
+    m_rspClass = data.m_rspClass;
+    m_rspType = data.m_rspType;
+    m_rspStatus = data.m_rspStatus;
+
+    m_srcPort = data.m_srcPort;
+    m_dstPort = data.m_dstPort;
+
+    m_SF = data.m_SF;
+    m_PF = data.m_PF;
+    m_UDTO = data.m_UDTO;
+
+    if (m_data != nullptr && data.m_data != nullptr) {
+        ::memcpy(m_data, data.m_data, DMR_LC_HEADER_LENGTH_BYTES);
     }
 }

@@ -21,8 +21,8 @@ using namespace lookups;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex AdjSiteMapLookup::m_mutex;
-bool AdjSiteMapLookup::m_locked = false;
+std::mutex AdjSiteMapLookup::s_mutex;
+bool AdjSiteMapLookup::s_locked = false;
 
 // ---------------------------------------------------------------------------
 //  Macros
@@ -30,16 +30,16 @@ bool AdjSiteMapLookup::m_locked = false;
 
 // Lock the table.
 #define __LOCK_TABLE()                          \
-    std::lock_guard<std::mutex> lock(m_mutex);  \
-    m_locked = true;
+    std::lock_guard<std::mutex> lock(s_mutex);  \
+    s_locked = true;
 
 // Unlock the table.
-#define __UNLOCK_TABLE() m_locked = false;
+#define __UNLOCK_TABLE() s_locked = false;
 
 // Spinlock wait for table to be read unlocked.
 #define __SPINLOCK()                            \
-    if (m_locked) {                             \
-        while (m_locked)                        \
+    if (s_locked) {                             \
+        while (s_locked)                        \
             Thread::sleep(2U);                  \
     }
 
@@ -133,8 +133,7 @@ void AdjSiteMapLookup::addEntry(AdjPeerMapEntry entry)
     __LOCK_TABLE();
 
     auto it = std::find_if(m_adjPeerMap.begin(), m_adjPeerMap.end(),
-        [&](AdjPeerMapEntry x)
-        {
+        [&](AdjPeerMapEntry& x) {
             return x.peerId() == id;
         });
     if (it != m_adjPeerMap.end()) {
@@ -153,7 +152,10 @@ void AdjSiteMapLookup::eraseEntry(uint32_t id)
 {
     __LOCK_TABLE();
 
-    auto it = std::find_if(m_adjPeerMap.begin(), m_adjPeerMap.end(), [&](AdjPeerMapEntry x) { return x.peerId() == id; });
+    auto it = std::find_if(m_adjPeerMap.begin(), m_adjPeerMap.end(),
+        [&](AdjPeerMapEntry& x) {
+            return x.peerId() == id;
+        });
     if (it != m_adjPeerMap.end()) {
         m_adjPeerMap.erase(it);
     }
@@ -169,10 +171,9 @@ AdjPeerMapEntry AdjSiteMapLookup::find(uint32_t id)
 
     __SPINLOCK();
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     auto it = std::find_if(m_adjPeerMap.begin(), m_adjPeerMap.end(),
-        [&](AdjPeerMapEntry x)
-        {
+        [&](AdjPeerMapEntry& x) {
             return x.peerId() == id;
         });
     if (it != m_adjPeerMap.end()) {
@@ -224,7 +225,7 @@ bool AdjSiteMapLookup::load()
 
     if (peerList.size() == 0U) {
         ::LogError(LOG_HOST, "No adj site map peer list defined!");
-        m_locked = false;
+        s_locked = false;
         return false;
     }
 
@@ -254,7 +255,7 @@ bool AdjSiteMapLookup::save()
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     
     // New list for our new group voice rules
     yaml::Node peerList;
@@ -275,7 +276,7 @@ bool AdjSiteMapLookup::save()
     }
 
     try {
-        LogMessage(LOG_HOST, "Saving adjacent site map file to %s", m_rulesFile.c_str());
+        LogInfoEx(LOG_HOST, "Saving adjacent site map file to %s", m_rulesFile.c_str());
         yaml::Serialize(newRules, m_rulesFile.c_str());
         LogDebug(LOG_HOST, "Saved adj. site map file to %s", m_rulesFile.c_str());
     }

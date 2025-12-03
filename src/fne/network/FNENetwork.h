@@ -26,17 +26,21 @@
 
 #include "fne/Defines.h"
 #include "common/concurrent/unordered_map.h"
-#include "common/network/BaseNetwork.h"
-#include "common/network/json/json.h"
+#include "common/concurrent/shared_unordered_map.h"
+#include "common/json/json.h"
 #include "common/lookups/RadioIdLookup.h"
 #include "common/lookups/TalkgroupRulesLookup.h"
 #include "common/lookups/PeerListLookup.h"
 #include "common/lookups/AdjSiteMapLookup.h"
+#include "common/network/BaseNetwork.h"
 #include "common/network/Network.h"
 #include "common/network/PacketBuffer.h"
 #include "common/ThreadPool.h"
 #include "fne/lookups/AffiliationLookup.h"
 #include "fne/network/influxdb/InfluxDB.h"
+#include "fne/network/FNEPeerConnection.h"
+#include "fne/network/SpanningTree.h"
+#include "fne/network/HAParameters.h"
 #include "fne/CryptoContainer.h"
 
 #include <string>
@@ -54,6 +58,7 @@ namespace network { namespace callhandler { class HOST_SW_API TagDMRData; } }
 namespace network { namespace callhandler { namespace packetdata { class HOST_SW_API DMRPacketData; } } }
 namespace network { namespace callhandler { class HOST_SW_API TagP25Data; } }
 namespace network { namespace callhandler { namespace packetdata { class HOST_SW_API P25PacketData; } } }
+namespace network { class HOST_SW_API P25OTARService; }
 namespace network { namespace callhandler { class HOST_SW_API TagNXDNData; } }
 namespace network { namespace callhandler { class HOST_SW_API TagAnalogData; } }
 
@@ -63,17 +68,19 @@ namespace network
     //  Constants
     // ---------------------------------------------------------------------------
 
+    #define MAX_QUEUED_PEER_MSGS 5U
+
     /**
      * @brief DVM states.
      */
     enum DVM_STATE {
-        STATE_IDLE = 0U,        //! Idle
+        STATE_IDLE = 0U,        //!< Idle
         // DMR
-        STATE_DMR = 1U,         //! Digital Mobile Radio
+        STATE_DMR = 1U,         //!< Digital Mobile Radio
         // Project 25
-        STATE_P25 = 2U,         //! Project 25
+        STATE_P25 = 2U,         //!< Project 25
         // NXDN
-        STATE_NXDN = 3U,        //! NXDN
+        STATE_NXDN = 3U,        //!< NXDN
     };
 
     #define INFLUXDB_ERRSTR_DISABLED_SRC_RID "disabled source RID"
@@ -92,292 +99,15 @@ namespace network
     class HOST_SW_API FNENetwork;
 
     // ---------------------------------------------------------------------------
-    //  Class Declaration
-    // ---------------------------------------------------------------------------
-
-    /**
-     * @brief Represents an peer connection to the FNE.
-     * @ingroup fne_network
-     */
-    class HOST_SW_API FNEPeerConnection {
-    public:
-        auto operator=(FNEPeerConnection&) -> FNEPeerConnection& = delete;
-        auto operator=(FNEPeerConnection&&) -> FNEPeerConnection& = delete;
-        FNEPeerConnection(FNEPeerConnection&) = delete;
-
-        /**
-         * @brief Initializes a new instance of the FNEPeerConnection class.
-         */
-        FNEPeerConnection() :
-            m_id(0U),
-            m_ccPeerId(0U),
-            m_socketStorage(),
-            m_sockStorageLen(0U),
-            m_address(),
-            m_port(),
-            m_salt(0U),
-            m_connected(false),
-            m_connectionState(NET_STAT_INVALID),
-            m_pingsReceived(0U),
-            m_lastPing(0U),
-            m_missedACLUpdates(0U),
-            m_isExternalPeer(false),
-            m_isConventionalPeer(false),
-            m_isSysView(false),
-            m_isPeerLink(false),
-            m_config(),
-            m_streamSeqMutex(),
-            m_streamSeqNos()
-        {
-            /* stub */
-        }
-        /**
-         * @brief Initializes a new instance of the FNEPeerConnection class.
-         * @param id Unique ID of this modem on the network.
-         * @param socketStorage 
-         * @param sockStorageLen 
-         */
-        FNEPeerConnection(uint32_t id, sockaddr_storage& socketStorage, uint32_t sockStorageLen) :
-            m_id(id),
-            m_ccPeerId(0U),
-            m_socketStorage(socketStorage),
-            m_sockStorageLen(sockStorageLen),
-            m_address(udp::Socket::address(socketStorage)),
-            m_port(udp::Socket::port(socketStorage)),
-            m_salt(0U),
-            m_connected(false),
-            m_connectionState(NET_STAT_INVALID),
-            m_pingsReceived(0U),
-            m_lastPing(0U),
-            m_missedACLUpdates(0U),
-            m_isExternalPeer(false),
-            m_isConventionalPeer(false),
-            m_isSysView(false),
-            m_isPeerLink(false),
-            m_config(),
-            m_streamSeqMutex(),
-            m_streamSeqNos()
-        {
-            assert(id > 0U);
-            assert(sockStorageLen > 0U);
-            assert(!m_address.empty());
-            assert(m_port > 0U);
-        }
-
-        /**
-         * @brief Helper to return the current count of mapped RTP streams.
-         * @returns size_t 
-         */
-        size_t streamCount()
-        {
-            return m_streamSeqNos.size();
-        }
-
-        /**
-         * @brief Helper to determine if the stream ID has a stored RTP sequence.
-         * @param streamId Stream ID.
-         * @returns bool  
-         */
-        bool hasStreamPktSeq(uint64_t streamId)
-        {
-            bool ret = false;
-            bool locked = m_streamSeqMutex.try_lock_for(std::chrono::milliseconds(60));
-
-            // determine if the stream has a current sequence no and return
-            {
-                auto it = m_streamSeqNos.find(streamId);
-                if (it == m_streamSeqNos.end()) {
-                    ret = false;
-                }
-                else {
-                    ret = true;
-                }
-            }
-
-            if (locked)
-                m_streamSeqMutex.unlock();
-
-            return ret;
-        }
-
-        /**
-         * @brief Helper to get the stored RTP sequence for the given stream ID.
-         * @param streamId Stream ID.
-         * @returns uint16_t 
-         */
-        uint16_t getStreamPktSeq(uint64_t streamId)
-        {
-            bool locked = m_streamSeqMutex.try_lock_for(std::chrono::milliseconds(60));
-
-            // find the current sequence no and return
-            uint32_t pktSeq = 0U;
-            {
-                auto it = m_streamSeqNos.find(streamId);
-                if (it == m_streamSeqNos.end()) {
-                    pktSeq = RTP_END_OF_CALL_SEQ;
-                } else {
-                    pktSeq = m_streamSeqNos[streamId];
-                }
-            }
-
-            if (locked)
-                m_streamSeqMutex.unlock();
-
-            return pktSeq;
-        }
-
-        /**
-         * @brief Helper to increment the stored RTP sequence for the given stream ID.
-         * @param streamId Stream ID.
-         * @param initialSeq Initial sequence number to set.
-         * @returns uint16_t 
-         */
-        uint16_t incStreamPktSeq(uint64_t streamId, uint16_t initialSeq)
-        {
-            bool locked = m_streamSeqMutex.try_lock_for(std::chrono::milliseconds(60));
-
-            // find the current sequence no, increment and return
-            uint32_t pktSeq = 0U;
-            {
-                auto it = m_streamSeqNos.find(streamId);
-                if (it == m_streamSeqNos.end()) {
-                    m_streamSeqNos.insert({streamId, initialSeq});
-                } else {
-                    pktSeq = m_streamSeqNos[streamId];
-
-                    ++pktSeq;
-                    if (pktSeq > RTP_END_OF_CALL_SEQ) {
-                        pktSeq = 0U;
-                    }
-
-                    m_streamSeqNos[streamId] = pktSeq;
-                }
-            }
-
-            if (locked)
-                m_streamSeqMutex.unlock();
-
-            return pktSeq;
-        }
-        /**
-         * @brief Helper to erase the stored RTP sequence for the given stream ID.
-         * @param streamId Stream ID.
-         * @returns uint16_t 
-         */
-        void eraseStreamPktSeq(uint64_t streamId)
-        {
-            bool locked = m_streamSeqMutex.try_lock_for(std::chrono::milliseconds(60));
-
-            // find the sequence no and erase
-            {
-                auto entry = m_streamSeqNos.find(streamId);
-                if (entry != m_streamSeqNos.end()) {
-                    m_streamSeqNos.erase(streamId);
-                }
-            }
-
-            if (locked)
-                m_streamSeqMutex.unlock();
-        }
-
-    public:
-        /**
-         * @brief Peer ID.
-         */
-        DECLARE_PROPERTY_PLAIN(uint32_t, id);
-        /**
-         * @brief Peer Identity.
-         */
-        DECLARE_PROPERTY_PLAIN(std::string, identity);
-
-        /**
-         * @brief Control Channel Peer ID.
-         */
-        DECLARE_PROPERTY_PLAIN(uint32_t, ccPeerId);
-
-        /**
-         * @brief Unix socket storage containing the connected address.
-         */
-        DECLARE_PROPERTY_PLAIN(sockaddr_storage, socketStorage);
-        /**
-         * @brief Length of the sockaddr_storage structure.
-         */
-        DECLARE_PROPERTY_PLAIN(uint32_t, sockStorageLen);
-
-        /**
-         * @brief         */
-        DECLARE_PROPERTY_PLAIN(std::string, address);
-        /**
-         * @brief Port number peer connected with.
-         */
-        DECLARE_PROPERTY_PLAIN(uint16_t, port);
-
-        /**
-         * @brief Salt value used for peer authentication.
-         */
-        DECLARE_PROPERTY_PLAIN(uint32_t, salt);
-
-        /**
-         * @brief Flag indicating whether or not the peer is connected.
-         */
-        DECLARE_PROPERTY_PLAIN(bool, connected);
-        /**
-         * @brief Connection state.
-         */
-        DECLARE_PROPERTY_PLAIN(NET_CONN_STATUS, connectionState);
-
-        /**
-         * @brief Number of pings received.
-         */
-        DECLARE_PROPERTY_PLAIN(uint32_t, pingsReceived);
-        /**
-         * @brief Last ping received.
-         */
-        DECLARE_PROPERTY_PLAIN(uint64_t, lastPing);
-
-        /**
-         * @brief Number of missed ACL updates.
-         */
-        DECLARE_PROPERTY_PLAIN(uint32_t, missedACLUpdates);
-
-        /**
-         * @brief Flag indicating this connection is from an external peer.
-         */
-        DECLARE_PROPERTY_PLAIN(bool, isExternalPeer);
-        /**
-         * @brief Flag indicating this connection is from an conventional peer.
-         */
-        DECLARE_PROPERTY_PLAIN(bool, isConventionalPeer);
-        /**
-         * @brief Flag indicating this connection is from an SysView peer.
-         */
-        DECLARE_PROPERTY_PLAIN(bool, isSysView);
-
-        /**
-         * @brief Flag indicating this connection is from an external peer that is peer link enabled.
-         */
-        DECLARE_PROPERTY_PLAIN(bool, isPeerLink);
-
-        /**
-         * @brief JSON objecting containing peer configuration information.
-         */
-        DECLARE_PROPERTY_PLAIN(json::object, config);
-
-    private:
-        std::timed_mutex m_streamSeqMutex;
-        std::unordered_map<uint64_t, uint16_t> m_streamSeqNos;
-    };
-
-    // ---------------------------------------------------------------------------
     //  Structure Declaration
     // ---------------------------------------------------------------------------
 
     /**
-     * @brief Represents the data required for a peer ACL update request thread.
+     * @brief Represents the data required for a network metadata update request thread.
      * @ingroup fne_network
      */
-    struct ACLUpdateRequest : thread_t {
-        uint32_t peerId;        //! Peer ID for this request.
+    struct MetadataUpdateRequest : thread_t {
+        uint32_t peerId;        //!< Peer ID for this request.
     };
 
     // ---------------------------------------------------------------------------
@@ -389,16 +119,17 @@ namespace network
      * @ingroup fne_network
      */
     struct NetPacketRequest : thread_t {
-        uint32_t peerId;                    //! Peer ID for this request.
+        uint32_t peerId;                    //!< Peer ID for this request.
+        void* diagObj;                      //!< Network diagnostics network object.
 
-        sockaddr_storage address;           //! IP Address and Port. 
-        uint32_t addrLen;                   //!
-        frame::RTPHeader rtpHeader;         //! RTP Header
-        frame::RTPFNEHeader fneHeader;      //! RTP FNE Header
-        int length = 0U;                    //! Length of raw data buffer
-        uint8_t* buffer = nullptr;          //! Raw data buffer
+        sockaddr_storage address;           //!< IP Address and Port. 
+        uint32_t addrLen;                   //!< 
+        frame::RTPHeader rtpHeader;         //!< RTP Header
+        frame::RTPFNEHeader fneHeader;      //!< RTP FNE Header
+        int length = 0U;                    //!< Length of raw data buffer
+        uint8_t* buffer = nullptr;          //!< Raw data buffer
 
-        uint64_t pktRxTime;                 //! Packet receive time
+        uint64_t pktRxTime;                 //!< Packet receive time
     };
 
     // ---------------------------------------------------------------------------
@@ -418,7 +149,9 @@ namespace network
          * @param port Network port number.
          * @param peerId Unique ID on the network.
          * @param password Network authentication password.
+         * @param identity Textual identity of this FNE (this is used when peering with upstream FNEs).
          * @param debug Flag indicating whether network debug is enabled.
+         * @param kmfDebug Flag indicating whether P25 OTAR KMF services debug is enabled.
          * @param verbose Flag indicating whether network verbose logging is enabled.
          * @param reportPeerPing Flag indicating whether peer pinging is reported.
          * @param dmr Flag indicating whether DMR is enabled.
@@ -434,8 +167,10 @@ namespace network
          * @param workerCnt Number of worker threads.
          */
         FNENetwork(HostFNE* host, const std::string& address, uint16_t port, uint32_t peerId, const std::string& password,
-            bool debug, bool verbose, bool reportPeerPing, bool dmr, bool p25, bool nxdn, bool analog, uint32_t parrotDelay, bool parrotGrantDemand,
-            bool allowActivityTransfer, bool allowDiagnosticTransfer, uint32_t pingTime, uint32_t updateLookupTime, uint16_t workerCnt);
+            std::string identity, bool debug, bool kmfDebug, bool verbose, bool reportPeerPing,
+            bool dmr, bool p25, bool nxdn, bool analog,
+            uint32_t parrotDelay, bool parrotGrantDemand, bool allowActivityTransfer, bool allowDiagnosticTransfer, 
+            uint32_t pingTime, uint32_t updateLookupTime, uint16_t workerCnt);
         /**
          * @brief Finalizes a instance of the FNENetwork class.
          */
@@ -497,6 +232,25 @@ namespace network
         void processNetwork();
 
         /**
+         * @brief Process network tree disconnect notification.
+         * @param offendingPeerId Offending Peer ID.
+         */
+        void processNetworkTreeDisconnect(uint32_t peerId, uint32_t offendingPeerId);
+
+        /**
+         * @brief Helper to process an downstream peer In-Call Control message.
+         * @param command In-Call Control Command.
+         * @param subFunc Network Sub-Function.
+         * @param dstId Destination ID.
+         * @param slotNo Slot Number.
+         * @param peerId Peer ID.
+         * @param ssrc RTP synchronization source ID.
+         * @param streamId Stream ID.
+         */
+        void processDownstreamInCallCtrl(network::NET_ICC::ENUM command, network::NET_SUBFUNC::ENUM subFunc, uint32_t dstId, 
+            uint8_t slotNo, uint32_t peerId, uint32_t ssrc, uint32_t streamId);
+
+        /**
          * @brief Updates the timer by the passed number of milliseconds.
          * @param ms Number of milliseconds.
          */
@@ -519,7 +273,7 @@ namespace network
          * @param conn FNE Peer Connection.
          * @return json::object 
          */
-        json::object fneConnObject(uint32_t peerId, FNEPeerConnection *conn);
+        json::object fneConnObject(uint32_t peerId, FNEPeerConnection* conn);
 
         /**
          * @brief Helper to reset a peer connection.
@@ -527,6 +281,12 @@ namespace network
          * @returns bool True, if connection state is reset, otherwise false.
          */
         bool resetPeer(uint32_t peerId);
+
+        /**
+         * @brief Helper to set the master is upstream peer replica flag.
+         * @param replica Flag indicating the master is a peer replica.
+         */
+        void setPeerReplica(bool replica);
 
     private:
         friend class DiagNetwork;
@@ -540,7 +300,10 @@ namespace network
         callhandler::TagNXDNData* m_tagNXDN;
         friend class callhandler::TagAnalogData;
         callhandler::TagAnalogData* m_tagAnalog;
-        
+
+        friend class P25OTARService;
+        P25OTARService* m_p25OTARService;
+
         friend class ::RESTAPI;
         HostFNE* m_host;
 
@@ -548,6 +311,8 @@ namespace network
         uint16_t m_port;
 
         std::string m_password;
+
+        bool m_isReplica;
 
         bool m_dmrEnabled;
         bool m_p25Enabled;
@@ -559,6 +324,8 @@ namespace network
         bool m_parrotGrantDemand;
         bool m_parrotOnlyOriginating;
 
+        bool m_kmfServicesEnabled;
+
         lookups::RadioIdLookup* m_ridLookup;
         lookups::TalkgroupRulesLookup* m_tidLookup;
         lookups::PeerListLookup* m_peerListLookup;
@@ -569,39 +336,33 @@ namespace network
         NET_CONN_STATUS m_status;
 
         typedef std::pair<const uint32_t, network::FNEPeerConnection*> PeerMapPair;
-        concurrent::unordered_map<uint32_t, FNEPeerConnection*> m_peers;
-        concurrent::unordered_map<uint32_t, json::array> m_peerLinkPeers;
+        concurrent::shared_unordered_map<uint32_t, FNEPeerConnection*> m_peers;
+        concurrent::unordered_map<uint32_t, json::array> m_peerReplicaPeers;
         typedef std::pair<const uint32_t, lookups::AffiliationLookup*> PeerAffiliationMapPair;
         concurrent::unordered_map<uint32_t, fne_lookups::AffiliationLookup*> m_peerAffiliations;
         concurrent::unordered_map<uint32_t, std::vector<uint32_t>> m_ccPeerMap;
-        static std::timed_mutex m_keyQueueMutex;
-        std::unordered_map<uint32_t, uint16_t> m_peerLinkKeyQueue;
+        static std::timed_mutex s_keyQueueMutex;
+        std::unordered_map<uint32_t, uint16_t> m_peerReplicaKeyQueue;
 
-        /**
-         * @brief Represents a packet buffer entry in a map.
-         */
-        class PacketBufferEntry {
-        public:
-            /**
-             * @brief Stream ID of the packet.
-             */
-            uint32_t streamId;
+        SpanningTree* m_treeRoot;
+        std::mutex m_treeLock;
 
-            /**
-             * @brief Packet fragment buffer.
-             */
-            PacketBuffer* buffer;
-
-            bool locked;
-        };
-        concurrent::unordered_map<uint32_t, PacketBufferEntry> m_peerLinkActPkt;
+        concurrent::vector<HAParameters> m_peerReplicaHAParams;
+        std::string m_advertisedHAAddress;
+        uint16_t m_advertisedHAPort;
+        bool m_haEnabled;
 
         Timer m_maintainenceTimer;
         Timer m_updateLookupTimer;
+        Timer m_haUpdateTimer;
 
         uint32_t m_softConnLimit;
 
-        bool m_callInProgress;
+        bool m_enableSpanningTree;
+        bool m_logSpanningTreeChanges;
+        bool m_spanningTreeFastReconnect;
+
+        uint32_t m_callCollisionTimeout;
 
         bool m_disallowAdjStsBcast;
         bool m_disallowExtAdjStsBcast;
@@ -609,7 +370,8 @@ namespace network
         bool m_disallowCallTerm;
         bool m_restrictGrantToAffOnly;
         bool m_restrictPVCallToRegOnly;
-        bool m_enableInCallCtrl;
+        bool m_enableRIDInCallCtrl;
+        bool m_disallowInCallCtrl;
         bool m_rejectUnknownRID;
 
         bool m_maskOutboundPeerID;
@@ -638,9 +400,16 @@ namespace network
         bool m_verbosePacketData;
 
         bool m_logDenials;
+        bool m_logUpstreamCallStartEnd;
         bool m_reportPeerPing;
         bool m_verbose;
 
+        /**
+         * @brief Entry point to parrot handler thread.
+         * @param arg Instance of the thread_t structure.
+         * @returns void* (Ignore)
+         */
+        static void* threadParrotHandler(void* arg);
         /**
          * @brief Entry point to process a given network packet.
          * @param req Instance of the NetPacketRequest structure.
@@ -653,6 +422,12 @@ namespace network
          * @returns bool True, if peer is blocked from unit-to-unit traffic, otherwise false.
          */
         bool checkU2UDroppedPeer(uint32_t peerId);
+
+        /**
+         * @brief Helper to dump the current spanning tree configuration to the log.
+         * @param connection Instance of the FNEPeerConnection class.
+         */
+        void logSpanningTree(FNEPeerConnection* connection = nullptr);
 
         /**
          * @brief Erases a stream ID from the given peer ID connection.
@@ -674,12 +449,24 @@ namespace network
          */
         bool erasePeerAffiliations(uint32_t peerId);
         /**
+         * @brief Helper to disconnect a downstream peer.
+         * @param peerId Peer ID.
+         * @param connection Instance of the FNEPeerConnection class.
+         */
+        void disconnectPeer(uint32_t peerId, FNEPeerConnection* connection);
+        /**
          * @brief Helper to erase the peer from the peers list.
          * @note This does not delete or otherwise free the FNEConnection instance!
          * @param peerId Peer ID.
          * @returns bool True, if peer was deleted, otherwise false.
          */
         void erasePeer(uint32_t peerId);
+        /**
+         * @brief Helper to determine if the peer is local to this master.
+         * @param peerId Peer ID.
+         * @returns bool True, if peer is local, otherwise false.
+         */
+        bool isPeerLocal(uint32_t peerId);
 
         /**
          * @brief Helper to find the unit registration for the given source ID.
@@ -704,63 +491,226 @@ namespace network
         void setupRepeaterLogin(uint32_t peerId, uint32_t streamId, FNEPeerConnection* connection);
 
         /**
-         * @brief Helper to send the ACL lists to the specified peer in a separate thread.
+         * @brief Helper to process an In-Call Control message.
+         * @param command In-Call Control Command.
+         * @param subFunc Network Sub-Function.
+         * @param dstId Destination ID.
+         * @param slotNo Slot Number.
+         * @param peerId Peer ID.
+         * @param ssrc RTP synchronization source ID.
+         * @param streamId Stream ID for this message.
+         */
+        void processInCallCtrl(network::NET_ICC::ENUM command, network::NET_SUBFUNC::ENUM subFunc, uint32_t dstId, 
+            uint8_t slotNo, uint32_t peerId, uint32_t ssrc, uint32_t streamId);
+
+        /**
+         * @brief Helper to send the network metadata to the specified peer in a separate thread.
          * @param peerId Peer ID.
          */
-        void peerACLUpdate(uint32_t peerId);
+        void peerMetadataUpdate(uint32_t peerId);
         /**
-         * @brief Entry point to send the ACL lists to the specified peer in a separate thread.
-         * @param req Instance of the ACLUpdateRequest structure.
+         * @brief Entry point to send the network metadata to the specified peer in a separate thread.
+         * @param req Instance of the MetadataUpdateRequest structure.
          */
-        static void taskACLUpdate(ACLUpdateRequest* req);
+        static void taskMetadataUpdate(MetadataUpdateRequest* req);
+
+        /*
+        ** ACL Message Writing
+        */
 
         /**
          * @brief Helper to send the list of whitelisted RIDs to the specified peer.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the active/whitelisted RIDs message.
+         *  The message is variable bytes in length. This layout does not apply for peer replication
+         *  messages, as those messages are a packet buffered message of the entire RID ACL file.
+         * 
+         *  The RID ACL is chunked and sent in blocks of a maximum of 50 RIDs per message.
+         * 
+         *  Each radio ID ACL entry is 4 bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Number of entries                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Radio ID                                 |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param peerId Peer ID.
          * @param streamId Stream ID for this message.
-         * @param sendISSI Flag indicating the RID transfer is to an external peer via ISSI.
+         * @param sendReplica Flag indicating the RID transfer is to an neighbor replica peer.
          */
-        void writeWhitelistRIDs(uint32_t peerId, uint32_t streamId, bool sendISSI);
+        void writeWhitelistRIDs(uint32_t peerId, uint32_t streamId, bool sendReplica);
         /**
          * @brief Helper to send the list of blacklisted RIDs to the specified peer.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the deactivated/blacklisted RIDs message.
+         *  The message is variable bytes in length. 
+         * 
+         *  The RID ACL is chunked and sent in blocks of a maximum of 50 RIDs per message.
+         * 
+         *  Each radio ID ACL entry is 4 bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Number of entries                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Radio ID                                 |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param peerId Peer ID.
          * @param streamId Stream ID for this message.
          */
         void writeBlacklistRIDs(uint32_t peerId, uint32_t streamId);
         /**
          * @brief Helper to send the list of active TGIDs to the specified peer.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the active TGs message.
+         *  The message is variable bytes in length. This layout does not apply for peer replication
+         *  messages, as those messages are a packet buffered message of the entire talkgroup ACL file.
+         * 
+         *  Each talkgroup ACL entry is 5 bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Number of entries                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Talkgroup ID                             |N|A| Slot    |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * 
+         *  N = Non-Preferred Flag
+         *  A = Affiliated Flag
+         * 
+         * \endcode
          * @param peerId Peer ID.
          * @param streamId Stream ID for this message.
-         * @param sendISSI Flag indicating the TGID transfer is to an external peer via ISSI.
+         * @param sendReplica Flag indicating the TGID transfer is to an neighbor replica peer.
          */
-        void writeTGIDs(uint32_t peerId, uint32_t streamId, bool sendISSI);
+        void writeTGIDs(uint32_t peerId, uint32_t streamId, bool sendReplica);
         /**
          * @brief Helper to send the list of deactivated TGIDs to the specified peer.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the deactivated TGs message.
+         *  The message is variable bytes in length.
+         * 
+         *  Each talkgroup ACL entry is 5 bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Number of entries                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Talkgroup ID                             | R | Slot    |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param peerId Peer ID.
          * @param streamId Stream ID for this message.
          */
         void writeDeactiveTGIDs(uint32_t peerId, uint32_t streamId);
         /**
          * @brief Helper to send the list of peers to the specified peer.
+         * @note This doesn't have a data layout document because it is *only* sent as a packet buffered message.
          * @param peerId Peer ID.
          * @param streamId Stream ID for this message.
          */
         void writePeerList(uint32_t peerId, uint32_t streamId);
-        
+        /**
+         * @brief Helper to send the HA parameters to the specified peer.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the HA parameters message.
+         *  The message is variable bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Total length of all included entries                          |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Peer ID                                                |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: IP Address                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Port                   |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
+         * @param peerId Peer ID.
+         * @param streamId Stream ID for this message.
+         * @param sendReplica Flag indicating the HA transfer is to an neighbor replica peer.
+         */
+        void writeHAParameters(uint32_t peerId, uint32_t streamId, bool sendReplica);
+
+        /**
+         * @brief Helper to send a network tree disconnect to the specified peer.
+         *  This will cause the peer to issue a link disconnect to the offending peer to prevent network loops.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the tree disconnect message.
+         *  The message is 4 bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Offending Peer ID                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
+         * @param peerId Peer ID.
+         * @param offendingPeerId Offending Peer ID.
+         */
+        void writeTreeDisconnect(uint32_t peerId, uint32_t offendingPeerId);
+
         /**
          * @brief Helper to send a In-Call Control command to the specified peer.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the In-Call control message.
+         *  The message is 15 bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                               | Peer ID                       |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Peer ID                       | ICC Command   | Destination   |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Destination ID                | Slot          |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param peerId Peer ID.
          * @param streamId Stream ID for this message.
          * @param subFunc Network Sub-Function.
          * @param command In-Call Control Command.
          * @param dstId Destination ID.
          * @param slotNo DMR slot.
+         * @param systemReq Flag indicating the ICC request is a system generated one not a automatic RID rule generated one.
+         * @param toUpstream Flag indicating the ICC request is directed at an upstream peer.
+         * @param ssrc RTP synchronization source ID.
          */
         bool writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUNC::ENUM subFunc = NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR, 
-            NET_ICC::ENUM command = NET_ICC::NOP, uint32_t dstId = 0U, uint8_t slotNo = 0U);
+            NET_ICC::ENUM command = NET_ICC::NOP, uint32_t dstId = 0U, uint8_t slotNo = 0U, bool systemReq = false, bool toUpstream = false,
+            uint32_t ssrc = 0U);
+
+        /*
+        ** Generic Message Writing
+        */
 
         /**
          * @brief Helper to send a data message to the specified peer with a explicit packet sequence.
+         * @param peerId Destination Peer ID.
+         * @param ssrc RTP synchronization source ID.
+         * @param opcode FNE network opcode pair.
+         * @param[in] data Buffer containing message to send to peer.
+         * @param length Length of buffer.
+         * @param pktSeq RTP packet sequence for this message.
+         * @param streamId Stream ID for this message.
+         * @param incPktSeq Flag indicating the message should increment the packet sequence after transmission.
+         */
+        bool writePeer(uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePair opcode, const uint8_t* data, uint32_t length, 
+            uint16_t pktSeq, uint32_t streamId, bool incPktSeq = false) const;
+        /**
+         * @brief Helper to queue a data message to the specified peer with a explicit packet sequence.
+         * @param[in] buffers Buffer to contain queued messages.
          * @param peerId Destination Peer ID.
          * @param ssrc RTP synchronization source ID.
          * @param opcode FNE network opcode pair.
@@ -772,8 +722,8 @@ namespace network
          * @param incPktSeq Flag indicating the message should increment the packet sequence after transmission.
          * @param directWrite Flag indicating this message should be immediately directly written.
          */
-        bool writePeer(uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePair opcode, const uint8_t* data, uint32_t length, 
-            uint16_t pktSeq, uint32_t streamId, bool queueOnly, bool incPktSeq = false, bool directWrite = false) const;
+        bool writePeerQueue(udp::BufferQueue* buffers, uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePair opcode, 
+            const uint8_t* data, uint32_t length, uint16_t pktSeq, uint32_t streamId, bool incPktSeq = false) const;
 
         /**
          * @brief Helper to send a command message to the specified peer.
@@ -820,6 +770,10 @@ namespace network
          * @param addrLen 
          */
         bool writePeerNAK(uint32_t peerId, const char* tag, NET_CONN_NAK_REASON reason, sockaddr_storage& addr, uint32_t addrLen);
+
+        /*
+        ** Internal KMM Callback.
+        */
 
         /**
          * @brief Helper to process a FNE KMM TEK response.

@@ -21,8 +21,8 @@
 #define __REST_CLIENT_H__
 
 #include "Defines.h"
-#include "common/network/json/json.h"
-#include "common/network/rest/http/HTTPPayload.h"
+#include "common/json/json.h"
+#include "common/restapi/http/HTTPPayload.h"
 
 #include <string>
 
@@ -104,7 +104,7 @@ public:
         const std::string endpoint, json::object payload, json::object& response, bool enableSSL, int timeout, bool debug = false);
 
 private:
-    typedef network::rest::http::HTTPPayload HTTPPayload;
+    typedef restapi::http::HTTPPayload HTTPPayload;
     /**
      * @brief HTTP response handler.
      * @param request HTTP request.
@@ -122,13 +122,13 @@ private:
     uint32_t m_port;
     std::string m_password;
 
-    static bool m_console;
+    static bool s_console;
 
-    static bool m_responseAvailable;
-    static HTTPPayload m_response;
+    static bool s_responseAvailable;
+    static HTTPPayload s_response;
 
-    static bool m_enableSSL;
-    static bool m_debug;
+    static bool s_enableSSL;
+    static bool s_debug;
 };
 
 #endif // __REMOTE_COMMAND_H__

@@ -36,7 +36,7 @@ namespace p25
          * @{
          */
 
-         const uint32_t KMM_NEGATIVE_ACK_LENGTH = KMM_FRAME_LENGTH + 4U;
+         const uint32_t KMM_BODY_NEGATIVE_ACK_LENGTH = 4U;
 
          /** @} */
  
@@ -56,6 +56,12 @@ namespace p25
             ~KMMNegativeAck();
 
             /**
+             * @brief Gets the byte length of this KMMFrame.
+             * @return uint32_t Length of KMMFrame.
+             */
+            uint32_t length() const override;
+
+            /**
              * @brief Decode a KMM NAK.
              * @param[in] data Buffer containing KMM frame data to decode.
              * @returns bool True, if decoded, otherwise false.
@@ -66,6 +72,12 @@ namespace p25
              * @param[out] data Buffer to encode KMM frame data to.
              */
             void encode(uint8_t* data) override;
+
+            /**
+             * @brief Returns a string that represents the current KMM frame.
+             * @returns std::string String representation of the KMM frame.
+             */
+            std::string toString() override;
 
         public:
             /**

@@ -41,8 +41,8 @@ const uint32_t MAX_PREAMBLE_TDU_CNT = 64U;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex Control::m_queueLock;
-std::mutex Control::m_activeTGLock;
+std::mutex Control::s_queueLock;
+std::mutex Control::s_activeTGLock;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -248,7 +248,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
     yaml::Node rfssConfig = systemConf["config"];
     m_control->m_patchSuperGroup = (uint32_t)::strtoul(rfssConfig["pSuperGroup"].as<std::string>("FFFE").c_str(), NULL, 16);
     m_control->m_announcementGroup = (uint32_t)::strtoul(rfssConfig["announcementGroup"].as<std::string>("FFFE").c_str(), NULL, 16);
-    m_defaultNetIdleTalkgroup = (uint32_t)::strtoul(rfssConfig["defaultNetIdleTalkgroup"].as<std::string>("0").c_str(), NULL, 16);
+    m_defaultNetIdleTalkgroup = (uint32_t)rfssConfig["defaultNetIdleTalkgroup"].as<uint32_t>(0U);
 
     yaml::Node secureConfig = rfssConfig["secure"];
     std::string key = secureConfig["key"].as<std::string>();
@@ -452,7 +452,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
     m_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
 
     // set the grant release callback
-    m_affiliations->setReleaseGrantCallback([=](uint32_t chNo, uint32_t dstId, uint8_t slot) {
+    m_affiliations->setReleaseGrantCallback([=](uint32_t chNo, uint32_t srcId, uint32_t dstId, uint8_t slot) {
         // callback REST API to clear TG permit for the granted TG on the specified voice channel
         if (m_authoritative && m_supervisor) {
             ::lookups::VoiceChData voiceChData = m_affiliations->rfCh()->getRFChData(chNo);
@@ -483,7 +483,8 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
 
     // set the In-Call Control function callback
     if (m_network != nullptr) {
-        m_network->setP25ICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId) { processInCallCtrl(command, dstId); });
+        m_network->setP25ICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId,
+            uint32_t peerId, uint32_t ssrc, uint32_t streamId) { processInCallCtrl(command, dstId); });
     }
 
     // throw a warning if we are notifying a CC of our presence (this indicates we're a VC) *AND* we have the control
@@ -502,7 +503,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
                 LogInfo("    Disable Grant Source ID Check: yes");
             }
             if (m_supervisor)
-                LogMessage(LOG_P25, "Host is configured to operate as a P25 control channel, site controller mode.");
+                LogInfoEx(LOG_P25, "Host is configured to operate as a P25 control channel, site controller mode.");
         }
 
         if (m_controlOnly) {
@@ -520,7 +521,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
         LogInfo("    Patch Super Group: $%04X", m_control->m_patchSuperGroup);
         LogInfo("    Announcement Group: $%04X", m_control->m_announcementGroup);
         if (m_defaultNetIdleTalkgroup != 0U) {
-            LogInfo("    Default Network Idle Talkgroup: $%04X", m_defaultNetIdleTalkgroup);
+            LogInfo("    Default Network Idle Talkgroup: %u", m_defaultNetIdleTalkgroup);
         }
 
         LogInfo("    Notify Control: %s", m_notifyCC ? "yes" : "no");
@@ -580,7 +581,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
     // are we overriding the NAC for split NAC operations?
     uint32_t txNAC = (uint32_t)::strtoul(systemConf["config"]["txNAC"].as<std::string>("F7E").c_str(), NULL, 16);
     if (txNAC != NAC_DIGITAL_SQ && txNAC != m_nac) {
-        LogMessage(LOG_P25, "Split NAC operations, setting Tx NAC to $%03X", txNAC);
+        LogInfoEx(LOG_P25, "Split NAC operations, setting Tx NAC to $%03X", txNAC);
         m_txNAC = txNAC;
         m_nid.setTxNAC(m_txNAC);
     }
@@ -684,7 +685,7 @@ bool Control::processFrame(uint8_t* data, uint32_t len)
         // Convert the raw RSSI to dBm
         int rssi = m_rssiMapper->interpolate(raw);
         if (m_verbose) {
-            LogMessage(LOG_RF, "P25, raw RSSI = %u, reported RSSI = %d dBm", raw, rssi);
+            LogInfoEx(LOG_RF, "P25, raw RSSI = %u, reported RSSI = %d dBm", raw, rssi);
         }
 
         // RSSI is always reported as positive
@@ -760,7 +761,7 @@ bool Control::processFrame(uint8_t* data, uint32_t len)
 
 uint32_t Control::peekFrameLength()
 {
-    std::lock_guard<std::mutex> lock(m_queueLock);
+    std::lock_guard<std::mutex> lock(s_queueLock);
 
     if (m_txQueue.isEmpty() && m_txImmQueue.isEmpty())
         return 0U;
@@ -811,7 +812,7 @@ uint32_t Control::getFrame(uint8_t* data)
 {
     assert(data != nullptr);
 
-    std::lock_guard<std::mutex> lock(m_queueLock);
+    std::lock_guard<std::mutex> lock(s_queueLock);
 
     if (m_txQueue.isEmpty() && m_txImmQueue.isEmpty())
         return 0U;
@@ -936,7 +937,7 @@ void Control::clock()
         if (m_rfTGHang.hasExpired()) {
             m_rfTGHang.stop();
             if (m_verbose) {
-                LogMessage(LOG_RF, "talkgroup hang has expired, lastDstId = %u", m_rfLastDstId);
+                LogInfoEx(LOG_RF, "talkgroup hang has expired, lastDstId = %u", m_rfLastDstId);
             }
             m_rfLastDstId = 0U;
             m_rfLastSrcId = 0U;
@@ -972,8 +973,17 @@ void Control::clock()
             if (m_netTGHang.hasExpired()) {
                 m_netTGHang.stop();
                 if (m_verbose) {
-                    LogMessage(LOG_NET, "talkgroup hang has expired, lastDstId = %u", m_netLastDstId);
+                    LogInfoEx(LOG_NET, "talkgroup hang has expired, lastDstId = %u", m_netLastDstId);
                 }
+
+                // if the group is still granted at this point -- forcibly release it
+                if (m_affiliations->isGranted(m_netLastDstId)) {
+                    if (!m_dedicatedControl) {
+                        m_affiliations->releaseGrant(m_netLastDstId, false);
+                        m_network->resetP25();
+                    }
+                }
+
                 m_netLastDstId = 0U;
                 m_netLastSrcId = 0U;
             }
@@ -1153,7 +1163,7 @@ void Control::clockSiteData(uint32_t ms)
                                             }
                                         } 
                                         else
-                                            ::LogMessage(LOG_P25, "VC %s:%u, active TG update, activeCnt = %u", voiceChData.address().c_str(), voiceChData.port(), activeCnt);
+                                            ::LogInfoEx(LOG_P25, "VC %s:%u, active TG update, activeCnt = %u", voiceChData.address().c_str(), voiceChData.port(), activeCnt);
                                     }, voiceChData.address(), voiceChData.port());
                                 }
                             }
@@ -1183,7 +1193,7 @@ void Control::clockSiteData(uint32_t ms)
                                             }
                                         } 
                                         else
-                                            ::LogMessage(LOG_P25, "VC %s:%u, clear active TG update", voiceChData.address().c_str(), voiceChData.port());
+                                            ::LogInfoEx(LOG_P25, "VC %s:%u, clear active TG update", voiceChData.address().c_str(), voiceChData.port());
                                     }, voiceChData.address(), voiceChData.port());
                                 }
                             }
@@ -1205,9 +1215,9 @@ void Control::permittedTG(uint32_t dstId, bool dataPermit)
 
     if (m_verbose) {
         if (dstId == 0U)
-            LogMessage(LOG_P25, "non-authoritative TG unpermit");
+            LogInfoEx(LOG_P25, "non-authoritative TG unpermit");
         else
-            LogMessage(LOG_P25, "non-authoritative TG permit, dstId = %u", dstId);
+            LogInfoEx(LOG_P25, "non-authoritative TG permit, dstId = %u", dstId);
     }
 
     m_permittedDstId = dstId;
@@ -1227,7 +1237,7 @@ void Control::grantTG(uint32_t srcId, uint32_t dstId, bool grp)
     }
 
     if (m_verbose) {
-        LogMessage(LOG_P25, "network TG grant demand, srcId = %u, dstId = %u", srcId, dstId);
+        LogInfoEx(LOG_P25, "network TG grant demand, srcId = %u, dstId = %u", srcId, dstId);
     }
 
     m_control->writeRF_TSDU_Grant(srcId, dstId, 4U, grp);
@@ -1307,7 +1317,7 @@ void Control::addFrame(const uint8_t* data, uint32_t length, bool net, bool imm)
 {
     assert(data != nullptr);
 
-    std::lock_guard<std::mutex> lock(m_queueLock);
+    std::lock_guard<std::mutex> lock(s_queueLock);
 
     if (!net) {
         if (m_rfTimeout.isRunning() && m_rfTimeout.hasExpired())
@@ -1399,7 +1409,6 @@ void Control::processNetwork()
     if (m_netState != RS_NET_DATA) {
         // don't process network frames if the RF modem isn't in a listening state
         if (m_rfState != RS_RF_LISTENING && m_netState == RS_NET_IDLE) {
-            m_network->resetP25();
             return;
         }
     }
@@ -1451,13 +1460,14 @@ void Control::processNetwork()
         }
 
         uint32_t blockLength = GET_UINT24(buffer, 8U);
+        uint8_t currentBlock = buffer[21U];
 
         if (m_debug) {
             LogDebug(LOG_NET, "P25, duid = $%02X, MFId = $%02X, blockLength = %u, len = %u", duid, MFId, blockLength, length);
         }
 
         if (!m_dedicatedControl)
-            m_data->processNetwork(data.get(), frameLength, blockLength);
+            m_data->processNetwork(data.get(), frameLength, currentBlock, blockLength);
 
         return;
     }
@@ -1589,7 +1599,7 @@ void Control::processNetwork()
                     (control.getPriority() & 0x07U);                                    // Priority
 
                 if (m_verbose) {
-                    LogMessage(LOG_NET, P25_TSDU_STR " remote grant demand, srcId = %u, dstId = %u, unitToUnit = %u, encrypted = %u", srcId, dstId, unitToUnit, grantEncrypt);
+                    LogInfoEx(LOG_NET, P25_TSDU_STR " remote grant demand, srcId = %u, dstId = %u, unitToUnit = %u, encrypted = %u", srcId, dstId, unitToUnit, grantEncrypt);
                 }
 
                 // are we denying the grant?
@@ -1636,7 +1646,7 @@ void Control::processFrameLoss()
                 float(m_voice->m_rfFrames) / 5.56F, float(m_voice->m_rfErrs * 100U) / float(m_voice->m_rfBits), m_frameLossCnt);
         }
 
-        LogMessage(LOG_RF, P25_TDU_STR ", total frames: %d, bits: %d, undecodable LC: %d, errors: %d, BER: %.4f%%",
+        LogInfoEx(LOG_RF, P25_TDU_STR ", total frames: %d, bits: %d, undecodable LC: %d, errors: %d, BER: %.4f%%",
             m_voice->m_rfFrames, m_voice->m_rfBits, m_voice->m_rfUndecodableLC, m_voice->m_rfErrs, float(m_voice->m_rfErrs * 100U) / float(m_voice->m_rfBits));
 
         m_affiliations->releaseGrant(m_voice->m_rfLC.getDstId(), false);
@@ -1741,7 +1751,7 @@ void Control::notifyCC_ReleaseGrant(uint32_t dstId)
     }
 
     if (m_verbose) {
-        LogMessage(LOG_P25, "CC %s:%u, notifying CC of call termination, dstId = %u", m_controlChData.address().c_str(), m_controlChData.port(), dstId);
+        LogInfoEx(LOG_P25, "CC %s:%u, notifying CC of call termination, dstId = %u", m_controlChData.address().c_str(), m_controlChData.port(), dstId);
     }
 
     // callback REST API to release the granted TG on the specified control channel
@@ -1763,7 +1773,7 @@ void Control::notifyCC_ReleaseGrant(uint32_t dstId)
             }
         } 
         else
-            ::LogMessage(LOG_P25, "CC %s:%u, released grant, dstId = %u", m_controlChData.address().c_str(), m_controlChData.port(), dstId);
+            ::LogInfoEx(LOG_P25, "CC %s:%u, released grant, dstId = %u", m_controlChData.address().c_str(), m_controlChData.port(), dstId);
     }, m_controlChData.address(), m_controlChData.port());
 
     m_rfLastDstId = 0U;
@@ -1807,7 +1817,7 @@ void Control::notifyCC_TouchGrant(uint32_t dstId)
             }
         }
         else
-            ::LogMessage(LOG_P25, "CC %s:%u, touched grant, dstId = %u", m_controlChData.address().c_str(), m_controlChData.port(), dstId);
+            ::LogInfoEx(LOG_P25, "CC %s:%u, touched grant, dstId = %u", m_controlChData.address().c_str(), m_controlChData.port(), dstId);
     }, m_controlChData.address(), m_controlChData.port());
 }
 
@@ -1988,7 +1998,7 @@ void Control::RPC_activeTG(json::object& req, json::object& reply)
     }
     json::array active = req["active"].get<json::array>();
 
-    std::lock_guard<std::mutex> lock(m_activeTGLock);
+    std::lock_guard<std::mutex> lock(s_activeTGLock);
     m_activeTG.clear();
 
     if (active.size() > 0) {
@@ -2002,7 +2012,7 @@ void Control::RPC_activeTG(json::object& req, json::object& reply)
         }
     }
 
-    ::LogMessage(LOG_P25, "active TG update, activeCnt = %u", m_activeTG.size());
+    ::LogInfoEx(LOG_P25, "active TG update, activeCnt = %u", m_activeTG.size());
 }
 
 /* (RPC Handler) Clear active TGID list from the authoritative CC host. */
@@ -2012,7 +2022,7 @@ void Control::RPC_clearActiveTG(json::object& req, json::object& reply)
     g_RPC->defaultResponse(reply, "OK", network::NetRPC::OK);
 
     if (m_activeTG.size() > 0) {
-        std::lock_guard<std::mutex> lock(m_activeTGLock);
+        std::lock_guard<std::mutex> lock(s_activeTGLock);
         m_activeTG.clear();
     }
 }
@@ -2044,7 +2054,7 @@ void Control::RPC_releaseGrantTG(json::object& req, json::object& reply)
     // LogDebugEx(LOG_P25, "Control::RPC_releaseGrantTG()", "callback, dstId = %u", dstId);
 
     if (m_verbose) {
-        LogMessage(LOG_P25, "VC request, release TG grant, dstId = %u", dstId);
+        LogInfoEx(LOG_P25, "VC request, release TG grant, dstId = %u", dstId);
     }
 
     if (m_affiliations->isGranted(dstId)) {
@@ -2053,7 +2063,7 @@ void Control::RPC_releaseGrantTG(json::object& req, json::object& reply)
         ::lookups::VoiceChData voiceCh = m_affiliations->rfCh()->getRFChData(chNo);
 
         if (m_verbose) {
-            LogMessage(LOG_P25, "VC %s:%u, TG grant released, srcId = %u, dstId = %u, chNo = %u-%u", voiceCh.address().c_str(), voiceCh.port(), srcId, dstId, voiceCh.chId(), chNo);
+            LogInfoEx(LOG_P25, "VC %s:%u, TG grant released, srcId = %u, dstId = %u, chNo = %u-%u", voiceCh.address().c_str(), voiceCh.port(), srcId, dstId, voiceCh.chId(), chNo);
         }
 
         m_affiliations->releaseGrant(dstId, false);
@@ -2092,7 +2102,7 @@ void Control::RPC_touchGrantTG(json::object& req, json::object& reply)
         ::lookups::VoiceChData voiceCh = m_affiliations->rfCh()->getRFChData(chNo);
 
         if (m_verbose) {
-            LogMessage(LOG_P25, "VC %s:%u, call in progress, srcId = %u, dstId = %u, chNo = %u-%u", voiceCh.address().c_str(), voiceCh.port(), srcId, dstId, voiceCh.chId(), chNo);
+            LogInfoEx(LOG_P25, "VC %s:%u, call in progress, srcId = %u, dstId = %u, chNo = %u-%u", voiceCh.address().c_str(), voiceCh.port(), srcId, dstId, voiceCh.chId(), chNo);
         }
 
         m_affiliations->touchGrant(dstId);
@@ -2138,7 +2148,7 @@ void Control::generateLLA_AM1_Parameters()
     ::memcpy(m_llaKS, KS, AUTH_KEY_LENGTH_BYTES);
 
     if (m_verbose) {
-        LogMessage(LOG_P25, "P25, generated LLA AM1 parameters");
+        LogInfoEx(LOG_P25, "P25, generated LLA AM1 parameters");
     }
 
     // cleanup

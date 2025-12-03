@@ -609,8 +609,9 @@ namespace lookups
 
         /**
          * @brief Saves loaded talkgroup rules.
+         * @param quiet Disable logging during save operation.
          */
-        bool commit();
+        bool commit(bool quiet = false);
 
         /**
          * @brief Flag indicating whether talkgroup ID access control is enabled or not.
@@ -643,8 +644,8 @@ namespace lookups
         bool m_acl;
         bool m_stop;
 
-        static std::mutex m_mutex;  //! Mutex used for change locking.
-        static bool m_locked;       //! Flag used for read locking (prevents find lookups), should be used when atomic operations (add/erase/etc) are being used.
+        static std::mutex s_mutex;  //!< Mutex used for change locking.
+        static bool s_locked;       //!< Flag used for read locking (prevents find lookups), should be used when atomic operations (add/erase/etc) are being used.
 
         /**
          * @brief Loads the table from the passed lookup table file.
@@ -653,9 +654,10 @@ namespace lookups
         bool load();
         /**
          * @brief Saves the table to the passed lookup table file.
+         * @param quiet Disable logging during save operation.
          * @return True, if lookup table was saved, otherwise false.
          */
-        bool save();
+        bool save(bool quiet = false);
 
     public:
         /**

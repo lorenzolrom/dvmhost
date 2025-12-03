@@ -39,8 +39,8 @@ namespace network
          */
         struct viface_queues
         {
-            int rxFd;               //! Receive Packet File Descriptor
-            int txFd;               //! Transmit Packet File Descriptor
+            int rxFd;               //!< Receive Packet File Descriptor
+            int txFd;               //!< Transmit Packet File Descriptor
         };
 
         // ---------------------------------------------------------------------------
@@ -54,6 +54,10 @@ namespace network
          */
         class HOST_SW_API VIFace {
         public:
+            auto operator=(VIFace&) -> VIFace& = delete;
+            auto operator=(VIFace&&) -> VIFace& = delete;
+            VIFace(VIFace&) = delete;
+
             /**
              * @brief Initializes a new instance of the VIFace class.
              * @param name Name of the virtual interface. The placeholder %d can be used and a number will be assigned to it.
@@ -233,7 +237,7 @@ namespace network
             uint32_t m_mtu;
 
             uint32_t m_id;
-            static uint32_t m_idSeq;
+            static uint32_t s_idSeq;
 
             /**
              * @brief Internal helper that performs a kernel IOCTL to get the IPv4 address by request.

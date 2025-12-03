@@ -49,6 +49,7 @@ using namespace network::udp;
 //  Constants
 // ---------------------------------------------------------------------------
 
+#define TEK_DES "des"
 #define TEK_AES "aes"
 #define TEK_ARC4 "arc4"
 
@@ -56,7 +57,7 @@ using namespace network::udp;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex HostPatch::m_networkMutex;
+std::mutex HostPatch::s_networkMutex;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -89,8 +90,10 @@ HostPatch::HostPatch(const std::string& confFile) :
     m_callAlgoId(P25DEF::ALGO_UNENCRYPT),
     m_rxStartTime(0U),
     m_rxStreamId(0U),
+    m_tekSrcEnable(false),
     m_tekSrcAlgoId(P25DEF::ALGO_UNENCRYPT),
     m_tekSrcKeyId(0U),
+    m_tekDstEnable(false),
     m_tekDstAlgoId(P25DEF::ALGO_UNENCRYPT),
     m_tekDstKeyId(0U),
     m_requestedSrcTek(false),
@@ -247,12 +250,12 @@ int HostPatch::run()
         // ------------------------------------------------------
 
         if (m_network != nullptr) {
-            std::lock_guard<std::mutex> lock(HostPatch::m_networkMutex);
+            std::lock_guard<std::mutex> lock(HostPatch::s_networkMutex);
             m_network->clock(ms);
         }
 
         if (m_mmdvmP25Reflector) {
-            std::lock_guard<std::mutex> lock(HostPatch::m_networkMutex);
+            std::lock_guard<std::mutex> lock(HostPatch::s_networkMutex);
             m_mmdvmP25Net->clock(ms);
         }
 
@@ -351,6 +354,7 @@ bool HostPatch::createNetwork()
     m_dstSlot = (uint8_t)networkConf["destinationSlot"].as<uint32_t>(1U);
 
     // source TEK parameters
+    m_tekSrcEnable = false;
     yaml::Node srcTekConf = networkConf["srcTek"];
     bool tekSrcEnable = srcTekConf["enable"].as<bool>(false);
     std::string tekSrcAlgo = srcTekConf["tekAlgo"].as<std::string>();
@@ -361,8 +365,10 @@ bool HostPatch::createNetwork()
             m_tekSrcAlgoId = P25DEF::ALGO_AES_256;
         else if (tekSrcAlgo == TEK_ARC4)
             m_tekSrcAlgoId = P25DEF::ALGO_ARC4;
+        else if (tekSrcAlgo == TEK_DES)
+            m_tekSrcAlgoId = P25DEF::ALGO_DES;
         else {
-            ::LogError(LOG_HOST, "Invalid TEK algorithm specified, must be \"aes\" or \"adp\".");
+            ::LogError(LOG_HOST, "Invalid TEK algorithm specified, must be \"aes\" or \"arc4\".");
             m_tekSrcAlgoId = P25DEF::ALGO_UNENCRYPT;
             m_tekSrcKeyId = 0U;
         }
@@ -372,9 +378,12 @@ bool HostPatch::createNetwork()
         m_tekSrcAlgoId = P25DEF::ALGO_UNENCRYPT;
     if (m_tekSrcAlgoId == P25DEF::ALGO_UNENCRYPT)
         m_tekSrcKeyId = 0U;
+    if (m_tekSrcAlgoId != P25DEF::ALGO_UNENCRYPT)
+        m_tekSrcEnable = true;
 
     // destination TEK parameters
-    yaml::Node dstTekConf = networkConf["srcTek"];
+    m_tekDstEnable = false;
+    yaml::Node dstTekConf = networkConf["dstTek"];
     bool tekDstEnable = dstTekConf["enable"].as<bool>(false);
     std::string tekDstAlgo = dstTekConf["tekAlgo"].as<std::string>();
     std::transform(tekDstAlgo.begin(), tekDstAlgo.end(), tekDstAlgo.begin(), ::tolower);
@@ -384,8 +393,10 @@ bool HostPatch::createNetwork()
             m_tekDstAlgoId = P25DEF::ALGO_AES_256;
         else if (tekDstAlgo == TEK_ARC4)
             m_tekDstAlgoId = P25DEF::ALGO_ARC4;
+        else if (tekDstAlgo == TEK_DES)
+            m_tekDstAlgoId = P25DEF::ALGO_DES;
         else {
-            ::LogError(LOG_HOST, "Invalid TEK algorithm specified, must be \"aes\" or \"adp\".");
+            ::LogError(LOG_HOST, "Invalid TEK algorithm specified, must be \"aes\" or \"arc4\".");
             m_tekDstAlgoId = P25DEF::ALGO_UNENCRYPT;
             m_tekDstKeyId = 0U;
         }
@@ -395,6 +406,8 @@ bool HostPatch::createNetwork()
         m_tekDstAlgoId = P25DEF::ALGO_UNENCRYPT;
     if (m_tekDstAlgoId == P25DEF::ALGO_UNENCRYPT)
         m_tekDstKeyId = 0U;
+    if (m_tekDstAlgoId != P25DEF::ALGO_UNENCRYPT)
+        m_tekDstEnable = true;
 
     m_twoWayPatch = networkConf["twoWay"].as<bool>(false);
 
@@ -681,7 +694,7 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
             uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             m_rxStartTime = now;
 
-            LogMessage(LOG_HOST, "DMR, call start, srcId = %u, dstId = %u, slot = %u", srcId, dstId, slotNo);
+            LogInfoEx(LOG_HOST, "DMR, call start, srcId = %u, dstId = %u, slot = %u", srcId, dstId, slotNo);
         }
 
         if (dataSync && (dataType == DataType::TERMINATOR_WITH_LC)) {
@@ -710,7 +723,7 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
                 uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                 uint64_t diff = now - m_rxStartTime;
 
-                LogMessage(LOG_HOST, "DMR, call end, srcId = %u, dstId = %u, dur = %us", srcId, dstId, diff / 1000U);
+                LogInfoEx(LOG_HOST, "DMR, call end, srcId = %u, dstId = %u, dur = %us", srcId, dstId, diff / 1000U);
             }
 
             m_callInProgress = false;
@@ -729,7 +742,7 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
             lc::FullLC fullLC = lc::FullLC();
             lc = *fullLC.decode(data.get(), DataType::VOICE_LC_HEADER);
 
-            LogMessage(LOG_HOST, DMR_DT_VOICE_LC_HEADER ", slot = %u, srcId = %u, dstId = %u, FLCO = $%02X", m_srcSlot,
+            LogInfoEx(LOG_HOST, DMR_DT_VOICE_LC_HEADER ", slot = %u, srcId = %u, dstId = %u, FLCO = $%02X", m_srcSlot,
                 lc.getSrcId(), lc.getDstId(), flco);
 
             // send DMR voice header
@@ -778,7 +791,7 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
             lc::FullLC fullLC = lc::FullLC();
             lc = *fullLC.decodePI(data.get());
 
-            LogMessage(LOG_HOST, DMR_DT_VOICE_PI_HEADER ", slot = %u, algId = %u, kId = %u, dstId = %u", m_srcSlot,
+            LogInfoEx(LOG_HOST, DMR_DT_VOICE_PI_HEADER ", slot = %u, algId = %u, kId = %u, dstId = %u", m_srcSlot,
                 lc.getAlgId(), lc.getKId(), lc.getDstId());
 
             // send DMR voice header
@@ -842,7 +855,7 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
                 emb.encode(buffer);
             }
 
-            LogMessage(LOG_HOST, DMR_DT_VOICE ", srcId = %u, dstId = %u, slot = %u, seqNo = %u", srcId, dstId, m_srcSlot, seqNo);
+            LogInfoEx(LOG_HOST, DMR_DT_VOICE ", srcId = %u, dstId = %u, slot = %u, seqNo = %u", srcId, dstId, m_srcSlot, seqNo);
 
             // generate DMR network frame
             data::NetData dmrData;
@@ -947,6 +960,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
             return;
 
         bool reverseEncrypt = false;
+        bool tekEnable = m_tekSrcEnable;
         uint32_t actualDstId = m_srcTGId;
         uint8_t tekAlgoId = m_tekSrcAlgoId;
         uint16_t tekKeyId = m_tekSrcKeyId;
@@ -956,6 +970,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
             if (m_twoWayPatch) {
                 if (dstId == m_dstTGId) {
                     actualDstId = m_srcTGId;
+                    tekEnable = m_tekDstEnable;
                     tekAlgoId = m_tekDstAlgoId;
                     tekKeyId = m_tekDstKeyId;
                     reverseEncrypt = true;
@@ -975,7 +990,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
             uint8_t frameType = buffer[180U];
             if (frameType == FrameType::HDU_VALID) {
                 m_callAlgoId = buffer[181U];
-                if (m_callAlgoId != ALGO_UNENCRYPT) {
+                if (tekEnable && m_callAlgoId != ALGO_UNENCRYPT) {
                     callKID = GET_UINT16(buffer, 182U);
 
                     if (m_callAlgoId != tekAlgoId && callKID != tekKeyId) {
@@ -1005,7 +1020,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
             uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             m_rxStartTime = now;
 
-            LogMessage(LOG_HOST, "P25, call start, srcId = %u, dstId = %u", srcId, dstId);
+            LogInfoEx(LOG_HOST, "P25, call start, srcId = %u, dstId = %u", srcId, dstId);
 
             if (m_grantDemand) {
                 p25::lc::LC lc = p25::lc::LC();
@@ -1034,7 +1049,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
 
             p25::data::LowSpeedData lsd = p25::data::LowSpeedData();
 
-            LogMessage(LOG_HOST, P25_TDU_STR);
+            LogInfoEx(LOG_HOST, P25_TDU_STR);
 
             if (m_mmdvmP25Reflector) {
                 m_mmdvmP25Net->writeTDU();
@@ -1048,7 +1063,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                 uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                 uint64_t diff = now - m_rxStartTime;
 
-                LogMessage(LOG_HOST, "P25, call end, srcId = %u, dstId = %u, dur = %us", srcId, dstId, diff / 1000U);
+                LogInfoEx(LOG_HOST, "P25, call end, srcId = %u, dstId = %u, dur = %us", srcId, dstId, diff / 1000U);
             }
 
             m_rxStartTime = 0U;
@@ -1119,9 +1134,9 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                 dfsiLC.decodeLDU1(data.get() + count, netLDU + 204U);
                 count += DFSI_LDU1_VOICE9_FRAME_LENGTH_BYTES;
 
-                LogMessage(LOG_NET, P25_LDU1_STR " audio, srcId = %u, dstId = %u", srcId, dstId);
+                LogInfoEx(LOG_NET, P25_LDU1_STR " audio, srcId = %u, dstId = %u", srcId, dstId);
 
-                if (tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
+                if (tekEnable && tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
                     cryptP25AudioFrame(netLDU, reverseEncrypt, 1U);
                 }
 
@@ -1149,7 +1164,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                 }
 
                 // the previous is nice and all -- but if we're cross-encrypting, we need to use the TEK
-                if (tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
+                if (tekEnable && tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
                     control.setAlgId(tekAlgoId);
                     control.setKId(tekKeyId);
 
@@ -1219,9 +1234,9 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                 dfsiLC.decodeLDU2(data.get() + count, netLDU + 204U);
                 count += DFSI_LDU2_VOICE18_FRAME_LENGTH_BYTES;
 
-                LogMessage(LOG_NET, P25_LDU2_STR " audio, algo = $%02X, kid = $%04X", dfsiLC.control()->getAlgId(), dfsiLC.control()->getKId());
+                LogInfoEx(LOG_NET, P25_LDU2_STR " audio, algo = $%02X, kid = $%04X", dfsiLC.control()->getAlgId(), dfsiLC.control()->getKId());
 
-                if (tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
+                if (tekEnable && tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
                     cryptP25AudioFrame(netLDU, reverseEncrypt, 2U);
                 }
 
@@ -1231,7 +1246,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                 control.setDstId(actualDstId);
 
                 // set the algo ID and key ID
-                if (tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
+                if (tekEnable && tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
                     control.setAlgId(tekAlgoId);
                     control.setKId(tekKeyId);
 
@@ -1336,6 +1351,9 @@ void HostPatch::cryptP25AudioFrame(uint8_t* ldu, bool reverseEncrypt, uint8_t p2
                 case P25DEF::ALGO_ARC4:
                     m_p25SrcCrypto->cryptARC4_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
                     break;
+                case P25DEF::ALGO_DES:
+                    m_p25SrcCrypto->cryptDES_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
+                    break;
                 default:
                     LogError(LOG_HOST, "Unsupported TEK algorithm, tekAlgoId = $%02X", tekSrcAlgoId);
                     break;
@@ -1348,6 +1366,9 @@ void HostPatch::cryptP25AudioFrame(uint8_t* ldu, bool reverseEncrypt, uint8_t p2
                         break;
                     case P25DEF::ALGO_ARC4:
                         m_p25DstCrypto->cryptARC4_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
+                        break;
+                    case P25DEF::ALGO_DES:
+                        m_p25DstCrypto->cryptDES_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
                         break;
                     default:
                         LogError(LOG_HOST, "Unsupported TEK algorithm, tekAlgoId = $%02X", tekDstAlgoId);
@@ -1367,6 +1388,9 @@ void HostPatch::cryptP25AudioFrame(uint8_t* ldu, bool reverseEncrypt, uint8_t p2
                 case P25DEF::ALGO_ARC4:
                     m_p25DstCrypto->cryptARC4_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
                     break;
+                case P25DEF::ALGO_DES:
+                    m_p25DstCrypto->cryptDES_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
+                    break;
                 default:
                     LogError(LOG_HOST, "Unsupported TEK algorithm, tekAlgoId = $%02X", tekDstAlgoId);
                     break;
@@ -1379,6 +1403,9 @@ void HostPatch::cryptP25AudioFrame(uint8_t* ldu, bool reverseEncrypt, uint8_t p2
                         break;
                     case P25DEF::ALGO_ARC4:
                         m_p25SrcCrypto->cryptARC4_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
+                        break;
+                    case P25DEF::ALGO_DES:
+                        m_p25SrcCrypto->cryptDES_IMBE(imbe, (p25N == 1U) ? DUID::LDU1 : DUID::LDU2);
                         break;
                     default:
                         LogError(LOG_HOST, "Unsupported TEK algorithm, tekAlgoId = $%02X", tekSrcAlgoId);
@@ -1398,7 +1425,7 @@ void HostPatch::processTEKResponse(p25::kmm::KeyItem* ki, uint8_t algId, uint8_t
         return;
 
     if (algId == m_tekSrcAlgoId && ki->kId() == m_tekSrcKeyId) {
-        LogMessage(LOG_HOST, "Source TEK loaded, algId = $%02X, kId = $%04X, sln = $%04X", algId, ki->kId(), ki->sln());
+        LogInfoEx(LOG_HOST, "Source TEK loaded, algId = $%02X, kId = $%04X, sln = $%04X", algId, ki->kId(), ki->sln());
         UInt8Array tek = std::make_unique<uint8_t[]>(keyLength);
         ki->getKey(tek.get());
 
@@ -1408,7 +1435,7 @@ void HostPatch::processTEKResponse(p25::kmm::KeyItem* ki, uint8_t algId, uint8_t
     }
 
     if (algId == m_tekDstAlgoId && ki->kId() == m_tekDstKeyId) {
-        LogMessage(LOG_HOST, "Destination TEK loaded, algId = $%02X, kId = $%04X, sln = $%04X", algId, ki->kId(), ki->sln());
+        LogInfoEx(LOG_HOST, "Destination TEK loaded, algId = $%02X, kId = $%04X, sln = $%04X", algId, ki->kId(), ki->sln());
         UInt8Array tek = std::make_unique<uint8_t[]>(keyLength);
         ki->getKey(tek.get());
 
@@ -1453,7 +1480,7 @@ void HostPatch::writeNet_LDU1(bool toFNE)
             uint32_t dstId = GET_UINT24(m_netLDU1, 76U);
             uint32_t srcId = GET_UINT24(m_netLDU1, 101U);
 
-            LogMessage(LOG_HOST, "MMDVM P25, call start, srcId = %u, dstId = %u", srcId, dstId);
+            LogInfoEx(LOG_HOST, "MMDVM P25, call start, srcId = %u, dstId = %u", srcId, dstId);
 
             lc::LC lc = lc::LC();
             m_netLC = lc;
@@ -1479,7 +1506,7 @@ void HostPatch::writeNet_LDU1(bool toFNE)
         lsd.setLSD1(m_netLDU1[201U]);
         lsd.setLSD2(m_netLDU1[202U]);
 
-        LogMessage(LOG_NET, "MMDVM " P25_LDU1_STR " audio, srcId = %u, dstId = %u", m_netLC.getSrcId(), m_netLC.getDstId());
+        LogInfoEx(LOG_NET, "MMDVM " P25_LDU1_STR " audio, srcId = %u, dstId = %u", m_netLC.getSrcId(), m_netLC.getDstId());
 
         if (m_debug)
             Utils::dump(1U, "P25, HostPatch::writeNet_LDU1(), MMDVM -> DVM LDU1", m_netLDU1, 9U * 25U);
@@ -1535,7 +1562,7 @@ void HostPatch::writeNet_LDU2(bool toFNE)
         lsd.setLSD1(m_netLDU2[201U]);
         lsd.setLSD2(m_netLDU2[202U]);
 
-        LogMessage(LOG_NET, "MMDVM " P25_LDU2_STR " audio");
+        LogInfoEx(LOG_NET, "MMDVM " P25_LDU2_STR " audio");
 
         if (m_debug)
             Utils::dump(1U, "P25, HostPatch::writeNet_LDU2(), MMDVM -> DVM LDU2", m_netLDU2, 9U * 25U);
@@ -1585,7 +1612,7 @@ void* HostPatch::threadNetworkProcess(void* arg)
             return nullptr;
         }
 
-        LogMessage(LOG_HOST, "[ OK ] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[ OK ] %s", threadName.c_str());
 #ifdef _GNU_SOURCE
         ::pthread_setname_np(th->thread, threadName.c_str());
 #endif // _GNU_SOURCE
@@ -1601,7 +1628,7 @@ void* HostPatch::threadNetworkProcess(void* arg)
                 if (patch->m_tekSrcAlgoId != P25DEF::ALGO_UNENCRYPT && patch->m_tekSrcKeyId > 0U) {
                     if (patch->m_p25SrcCrypto->getTEKLength() == 0U && !patch->m_requestedSrcTek) {
                         patch->m_requestedSrcTek = true;
-                        LogMessage(LOG_HOST, "Patch source TGID encryption enabled, requesting TEK from network.");
+                        LogInfoEx(LOG_HOST, "Patch source TGID encryption enabled, requesting TEK from network.");
                         patch->m_network->writeKeyReq(patch->m_tekSrcKeyId, patch->m_tekSrcAlgoId);
                     }
                 }
@@ -1610,7 +1637,7 @@ void* HostPatch::threadNetworkProcess(void* arg)
                 if (patch->m_tekDstAlgoId != P25DEF::ALGO_UNENCRYPT && patch->m_tekDstKeyId > 0U) {
                     if (patch->m_p25DstCrypto->getTEKLength() == 0U && !patch->m_requestedDstTek) {
                         patch->m_requestedDstTek = true;
-                        LogMessage(LOG_HOST, "Patch destination TGID encryption enabled, requesting TEK from network.");
+                        LogInfoEx(LOG_HOST, "Patch destination TGID encryption enabled, requesting TEK from network.");
                         patch->m_network->writeKeyReq(patch->m_tekDstKeyId, patch->m_tekDstAlgoId);
                     }
                 }
@@ -1619,7 +1646,7 @@ void* HostPatch::threadNetworkProcess(void* arg)
             uint32_t length = 0U;
             bool netReadRet = false;
             if (patch->m_digiMode == TX_MODE_DMR) {
-                std::lock_guard<std::mutex> lock(HostPatch::m_networkMutex);
+                std::lock_guard<std::mutex> lock(HostPatch::s_networkMutex);
                 UInt8Array dmrBuffer = patch->m_network->readDMR(netReadRet, length);
                 if (netReadRet) {
                     patch->processDMRNetwork(dmrBuffer.get(), length);
@@ -1627,7 +1654,7 @@ void* HostPatch::threadNetworkProcess(void* arg)
             }
 
             if (patch->m_digiMode == TX_MODE_P25) {
-                std::lock_guard<std::mutex> lock(HostPatch::m_networkMutex);
+                std::lock_guard<std::mutex> lock(HostPatch::s_networkMutex);
                 UInt8Array p25Buffer = patch->m_network->readP25(netReadRet, length);
                 if (netReadRet) {
                     patch->processP25Network(p25Buffer.get(), length);
@@ -1637,7 +1664,7 @@ void* HostPatch::threadNetworkProcess(void* arg)
             Thread::sleep(1U);
         }
 
-        LogMessage(LOG_HOST, "[STOP] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[STOP] %s", threadName.c_str());
         delete th;
     }
 
@@ -1672,7 +1699,7 @@ void* HostPatch::threadMMDVMProcess(void* arg)
             return nullptr;
         }
 
-        LogMessage(LOG_HOST, "[ OK ] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[ OK ] %s", threadName.c_str());
 #ifdef _GNU_SOURCE
         ::pthread_setname_np(th->thread, threadName.c_str());
 #endif // _GNU_SOURCE
@@ -1692,7 +1719,7 @@ void* HostPatch::threadMMDVMProcess(void* arg)
             stopWatch.start();
 
             if (patch->m_digiMode == TX_MODE_P25) {
-                std::lock_guard<std::mutex> lock(HostPatch::m_networkMutex);
+                std::lock_guard<std::mutex> lock(HostPatch::s_networkMutex);
 
                 DECLARE_UINT8_ARRAY(buffer, 100U);
                 uint32_t len = patch->m_mmdvmP25Net->read(buffer, 100U);
@@ -1775,7 +1802,7 @@ void* HostPatch::threadMMDVMProcess(void* arg)
 
                             p25::data::LowSpeedData lsd = p25::data::LowSpeedData();
 
-                            LogMessage(LOG_HOST, "MMDVM " P25_TDU_STR);
+                            LogInfoEx(LOG_HOST, "MMDVM " P25_TDU_STR);
 
                             uint8_t controlByte = 0x00U;
                             patch->m_network->writeP25TDU(patch->m_netLC, lsd, controlByte);
@@ -1784,7 +1811,7 @@ void* HostPatch::threadMMDVMProcess(void* arg)
                                 uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                                 uint64_t diff = now - patch->m_rxStartTime;
 
-                                LogMessage(LOG_HOST, "MMDVM P25, call end, srcId = %u, dstId = %u, dur = %us", patch->m_netLC.getSrcId(), patch->m_netLC.getDstId(), diff / 1000U);
+                                LogInfoEx(LOG_HOST, "MMDVM P25, call end, srcId = %u, dstId = %u, dur = %us", patch->m_netLC.getSrcId(), patch->m_netLC.getDstId(), diff / 1000U);
                             }
 
                             patch->m_rxStartTime = 0U;
@@ -1812,7 +1839,7 @@ void* HostPatch::threadMMDVMProcess(void* arg)
                 Thread::sleep(5U);
         }
 
-        LogMessage(LOG_HOST, "[STOP] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[STOP] %s", threadName.c_str());
         delete th;
     }
 

@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  * 
- *  Copyright (C) 2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2024-2025 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -63,10 +63,15 @@ namespace network
                  * @param peerId Peer ID.
                  * @param pktSeq RTP packet sequence.
                  * @param streamId Stream ID.
-                 * @param external Flag indicating traffic is from an external peer.
+                 * @param fromUpstream Flag indicating traffic is from a upstream master.
                  * @returns bool True, if frame is processed, otherwise false.
                  */
-                bool processFrame(const uint8_t* data, uint32_t len, uint32_t peerId, uint16_t pktSeq, uint32_t streamId, bool external = false);
+                bool processFrame(const uint8_t* data, uint32_t len, uint32_t peerId, uint16_t pktSeq, uint32_t streamId, bool fromUpstream = false);
+
+                /**
+                 * @brief Helper to cleanup any call's left in a dangling state without any further updates.
+                 */
+                void cleanupStale();
 
             private:
                 FNENetwork* m_network;
@@ -78,6 +83,7 @@ namespace network
                 class RxStatus {
                 public:
                     system_clock::hrc::hrc_t callStartTime;
+                    system_clock::hrc::hrc_t lastPacket;
                     uint32_t srcId;
                     uint32_t dstId;
                     uint8_t slotNo;
@@ -85,8 +91,11 @@ namespace network
                     uint32_t peerId;
 
                     dmr::data::DataHeader header;
+                    bool hasRxHeader;
                     uint8_t dataBlockCnt;
                     uint8_t frames;
+
+                    bool callBusy;
 
                     uint8_t* pduUserData;
                     uint32_t pduDataOffset;
@@ -101,7 +110,10 @@ namespace network
                         streamId(0U),
                         peerId(0U),
                         header(),
+                        hasRxHeader(false),
                         dataBlockCnt(0U),
+                        frames(0U),
+                        callBusy(false),
                         pduUserData(nullptr),
                         pduDataOffset(0U)
                     {

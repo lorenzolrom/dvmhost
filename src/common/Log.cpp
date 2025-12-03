@@ -11,21 +11,17 @@
 #include "Log.h"
 #include "network/BaseNetwork.h"
 
-#if defined(_WIN32)
-#include "Clock.h"
-#else
-#include <sys/time.h>
-#include <syslog.h>
-#endif // defined(_WIN32)
-
 #if defined(CATCH2_TEST_COMPILATION)
 #include <catch2/catch_test_macros.hpp>
 #endif
 
+#if !defined(_WIN32)
+#include <syslog.h>
+#endif // defined(_WIN32)
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstdarg>
-#include <ctime>
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -42,13 +38,13 @@ const uint32_t LOG_BUFFER_LEN = 4096U;
 //  Global Variables
 // ---------------------------------------------------------------------------
 
-static uint32_t m_fileLevel = 0U;
-static std::string m_filePath;
-static std::string m_fileRoot;
+static uint32_t g_fileLevel = 0U;
+static std::string g_filePath;
+static std::string g_fileRoot;
 
-static network::BaseNetwork* m_network;
+static network::BaseNetwork* g_network;
 
-static FILE* m_fpLog = nullptr;
+static FILE* g_fpLog = nullptr;
 
 uint32_t g_logDisplayLevel = 2U;
 bool g_disableTimeDisplay = false;
@@ -56,11 +52,11 @@ bool g_disableTimeDisplay = false;
 bool g_useSyslog = false;
 bool g_disableNetworkLog = false;
 
-static struct tm m_tm;
+static struct tm g_tm;
 
-static std::ostream m_outStream { std::cerr.rdbuf() };
+static std::ostream g_outStream { std::cerr.rdbuf() };
 
-static char LEVELS[] = " DMIWEF";
+bool log_stacktrace::SignalHandling::s_foreground = false;
 
 // ---------------------------------------------------------------------------
 //  Global Functions
@@ -68,15 +64,15 @@ static char LEVELS[] = " DMIWEF";
 
 /* Helper to get the current log file level. */
 
-uint32_t CurrentLogFileLevel() { return m_fileLevel; }
+uint32_t CurrentLogFileLevel() { return g_fileLevel; }
 
 /* Helper to get the current log file path. */
 
-std::string LogGetFilePath() { return m_filePath; }
+std::string LogGetFilePath() { return g_filePath; }
 
 /* Helper to get the current log file root. */
 
-std::string LogGetFileRoot() { return m_fileRoot; }
+std::string LogGetFileRoot() { return g_fileRoot; }
 
 /* Helper to open the detailed log file, file handle. */
 
@@ -85,7 +81,7 @@ static bool LogOpen()
 #if defined(CATCH2_TEST_COMPILATION)
     return true;
 #endif
-    if (m_fileLevel == 0U)
+    if (g_fileLevel == 0U)
         return true;
 
     if (!g_useSyslog) {
@@ -94,26 +90,26 @@ static bool LogOpen()
 
         struct tm* tm = ::localtime(&now);
 
-        if (tm->tm_mday == m_tm.tm_mday && tm->tm_mon == m_tm.tm_mon && tm->tm_year == m_tm.tm_year) {
-            if (m_fpLog != nullptr)
+        if (tm->tm_mday == g_tm.tm_mday && tm->tm_mon == g_tm.tm_mon && tm->tm_year == g_tm.tm_year) {
+            if (g_fpLog != nullptr)
                 return true;
         }
         else {
-            if (m_fpLog != nullptr)
-                ::fclose(m_fpLog);
+            if (g_fpLog != nullptr)
+                ::fclose(g_fpLog);
         }
 
         char filename[200U];
-        ::sprintf(filename, "%s/%s-%04d-%02d-%02d.log", m_filePath.c_str(), m_fileRoot.c_str(), tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
+        ::sprintf(filename, "%s/%s-%04d-%02d-%02d.log", g_filePath.c_str(), g_fileRoot.c_str(), tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
 
-        m_fpLog = ::fopen(filename, "a+t");
-        m_tm = *tm;
+        g_fpLog = ::fopen(filename, "a+t");
+        g_tm = *tm;
 
-        return m_fpLog != nullptr;
+        return g_fpLog != nullptr;
     }
     else {
 #if !defined(_WIN32)
-        switch (m_fileLevel) {
+        switch (g_fileLevel) {
         case 1U:
             setlogmask(LOG_UPTO(LOG_DEBUG));
             break;
@@ -132,7 +128,7 @@ static bool LogOpen()
             break;
         }
 
-        openlog(m_fileRoot.c_str(), LOG_CONS | LOG_PID | LOG_NDELAY, LOG_DAEMON);
+        openlog(g_fileRoot.c_str(), LOG_CONS | LOG_PID | LOG_NDELAY, LOG_DAEMON);
         return true;
 #else
         return false;
@@ -140,19 +136,12 @@ static bool LogOpen()
     }
 }
 
-/* Internal helper to set an output stream to direct logging to. */
-
-void __InternalOutputStream(std::ostream& stream)
-{
-    m_outStream.rdbuf(stream.rdbuf());
-}
-
 /* Gets the instance of the Network class to transfer the activity log with. */
 
 void* LogGetNetwork()
 {
     // NO GOOD, VERY BAD, TERRIBLE HACK
-    return (void*)m_network;
+    return (void*)g_network;
 }
 
 /* Sets the instance of the Network class to transfer the activity log with. */
@@ -164,16 +153,16 @@ void LogSetNetwork(void* network)
 #endif
     // note: The Network class is passed here as a void so we can avoid including the Network.h
     // header in Log.h. This is dirty and probably terrible...
-    m_network = (network::BaseNetwork*)network;
+    g_network = (network::BaseNetwork*)network;
 }
 
 /* Initializes the diagnostics log. */
 
 bool LogInitialise(const std::string& filePath, const std::string& fileRoot, uint32_t fileLevel, uint32_t displayLevel, bool disableTimeDisplay, bool useSyslog)
 {
-    m_filePath = filePath;
-    m_fileRoot = fileRoot;
-    m_fileLevel = fileLevel;
+    g_filePath = filePath;
+    g_fileRoot = fileRoot;
+    g_fileLevel = fileLevel;
     g_logDisplayLevel = displayLevel;
     g_disableTimeDisplay = disableTimeDisplay;
 #if defined(_WIN32)
@@ -192,9 +181,9 @@ void LogFinalise()
 #if defined(CATCH2_TEST_COMPILATION)
     return;
 #endif
-    if (m_fpLog != nullptr) {
-        ::fclose(m_fpLog);
-        m_fpLog = nullptr;
+    if (g_fpLog != nullptr) {
+        ::fclose(g_fpLog);
+        g_fpLog = nullptr;
     }
 #if !defined(_WIN32)
     if (g_useSyslog)
@@ -202,140 +191,42 @@ void LogFinalise()
 #endif // !defined(_WIN32)
 }
 
+/* Internal helper to set an output stream to direct logging to. */
+
+void log_internal::SetInternalOutputStream(std::ostream& stream)
+{
+    g_outStream.rdbuf(stream.rdbuf());
+}
+
 /* Writes a new entry to the diagnostics log. */
 
-void Log(uint32_t level, const char *module, const char* file, const int lineNo, const char* func, const char* fmt, ...)
+void log_internal::LogInternal(uint32_t level, const std::string& log)
 {
-    assert(fmt != nullptr);
-#if defined(CATCH2_TEST_COMPILATION)
-    g_disableTimeDisplay = true;
-#endif
-    char buffer[LOG_BUFFER_LEN];
-    if (!g_disableTimeDisplay && !g_useSyslog) {
-        time_t now;
-        ::time(&now);
-        struct tm* tm = ::localtime(&now);
-
-        struct timeval nowMillis;
-        ::gettimeofday(&nowMillis, NULL);
-
-        if (module != nullptr) {
-            // level 1 is DEBUG
-            if (level == 1U) {
-                // if we have a file and line number -- add that to the log entry
-                if (file != nullptr && lineNo > 0) {
-                    // if we have a function name add that to the log entry
-                    if (func != nullptr) {
-                        ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu (%s)[%s:%u][%s] ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U, module, file, lineNo, func);
-                    }
-                    else {
-                        ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu (%s)[%s:%u] ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U, module, file, lineNo);
-                    }
-                } else {
-                    ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu (%s) ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U, module);
-                }
-            } else {
-                ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu (%s) ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U, module);
-            }
-        }
-        else {
-            // level 1 is DEBUG
-            if (level == 1U) {
-                // if we have a file and line number -- add that to the log entry
-                if (file != nullptr && lineNo > 0) {
-                    // if we have a function name add that to the log entry
-                    if (func != nullptr) {
-                        ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu [%s:%u][%s] ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U, file, lineNo, func);
-                    }
-                    else {
-                        ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu [%s:%u] ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U, file, lineNo);
-                    }
-                } else {
-                    ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U);
-                }
-            } else {
-                ::sprintf(buffer, "%c: %04d-%02d-%02d %02d:%02d:%02d.%03lu ", LEVELS[level], tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, nowMillis.tv_usec / 1000U);
-            }
-        }
-    }
-    else {
-        if (module != nullptr) {
-            // level 1 is DEBUG
-            if (level == 1U) {
-                // if we have a file and line number -- add that to the log entry
-                if (file != nullptr && lineNo > 0) {
-                    // if we have a function name add that to the log entry
-                    if (func != nullptr) {
-                        ::sprintf(buffer, "%c: (%s)[%s:%u][%s] ", LEVELS[level], module, file, lineNo, func);
-                    }
-                    else {
-                        ::sprintf(buffer, "%c: (%s)[%s:%u] ", LEVELS[level], module, file, lineNo);
-                    }
-                }
-                else {
-                    ::sprintf(buffer, "%c: (%s) ", LEVELS[level], module);
-                }
-            } else {
-                ::sprintf(buffer, "%c: (%s) ", LEVELS[level], module);
-            }
-        }
-        else {
-            if (level >= 9999U) {
-                ::sprintf(buffer, "U: ");
-            }
-            else {
-                 // if we have a file and line number -- add that to the log entry
-                 if (file != nullptr && lineNo > 0) {
-                    // if we have a function name add that to the log entry
-                    if (func != nullptr) {
-                        ::sprintf(buffer, "%c: [%s:%u][%s] ", LEVELS[level], file, lineNo, func);
-                    }
-                    else {
-                        ::sprintf(buffer, "%c: [%s:%u] ", LEVELS[level], file, lineNo);
-                    }
-                }
-                else {
-                    ::sprintf(buffer, "%c: ", LEVELS[level]);
-                }
-            }
-        }
+    if (g_outStream && g_logDisplayLevel == 0U) {
+        g_outStream << log << std::endl;
     }
 
-    va_list vl, vl_len;
-    va_start(vl, fmt);
-    va_copy(vl_len, vl);
-
-    size_t len = ::vsnprintf(nullptr, 0U, fmt, vl_len);
-    ::vsnprintf(buffer + ::strlen(buffer), len + 1U, fmt, vl);
-
-    va_end(vl_len);
-    va_end(vl);
-
-    if (m_outStream && g_logDisplayLevel == 0U) {
-        m_outStream << buffer << std::endl;
-    }
-
-    if (m_network != nullptr && !g_disableNetworkLog) {
+    if (g_network != nullptr && !g_disableNetworkLog) {
         // don't transfer debug data...
         if (level > 1U) {
-            m_network->writeDiagLog(buffer);
+            g_network->writeDiagLog(log.c_str());
         }
     }
 
 #if defined(CATCH2_TEST_COMPILATION)
-    UNSCOPED_INFO(buffer);
+    UNSCOPED_INFO(log.c_str());
     return;
 #endif
 
-    if (level >= m_fileLevel && m_fileLevel != 0U) {
+    if (level >= g_fileLevel && g_fileLevel != 0U) {
         if (!g_useSyslog) {
             bool ret = ::LogOpen();
             if (!ret)
                 return;
 
-            if (m_fpLog != nullptr) {
-                ::fprintf(m_fpLog, "%s\n", buffer);
-                ::fflush(m_fpLog);
+            if (g_fpLog != nullptr) {
+                ::fprintf(g_fpLog, "%s\n", log.c_str());
+                ::fflush(g_fpLog);
             }
         } else {
 #if !defined(_WIN32)
@@ -346,16 +237,13 @@ void Log(uint32_t level, const char *module, const char* file, const int lineNo,
                 syslogLevel = LOG_DEBUG;
                 break;
             case 2U:
-                syslogLevel = LOG_NOTICE;
-                break;
-            case 3U:
             case 9999U: // in-band U: messages should also be info level
                 syslogLevel = LOG_INFO;
                 break;
-            case 4U:
+            case 3U:
                 syslogLevel = LOG_WARNING;
                 break;
-            case 5U:
+            case 4U:
                 syslogLevel = LOG_ERR;
                 break;
             default:
@@ -363,24 +251,45 @@ void Log(uint32_t level, const char *module, const char* file, const int lineNo,
                 break;
             }
 
-            syslog(syslogLevel, "%s", buffer);
+            syslog(syslogLevel, "%s", log.c_str());
 #endif // !defined(_WIN32)
         }
     }
 
     if (!g_useSyslog && level >= g_logDisplayLevel && g_logDisplayLevel != 0U) {
-        ::fprintf(stdout, "%s" EOL, buffer);
+        ::fprintf(stdout, "%s" EOL, log.c_str());
         ::fflush(stdout);
     }
 
     // fatal error (specially allow any log levels above 9999)
-    if (level >= 6U && level < 9999U) {
-        if (m_fpLog != nullptr)
-            ::fclose(m_fpLog);
+    if (level >= 5U && level < 9999U) {
+        if (g_fpLog != nullptr)
+            ::fclose(g_fpLog);
 #if !defined(_WIN32)
         if (g_useSyslog)
             ::closelog();
 #endif // !defined(_WIN32)
         exit(1);
     }
+}
+
+/* Internal helper to get the log file path. */
+
+std::string log_internal::GetLogFilePath()
+{
+    return g_filePath;
+}
+
+/* Internal helper to get the log file root name. */
+
+std::string log_internal::GetLogFileRoot()
+{
+    return g_fileRoot;
+}
+
+/* Internal helper to get the log file handle pointer. */
+
+FILE* log_internal::GetLogFile()
+{
+    return g_fpLog;
 }

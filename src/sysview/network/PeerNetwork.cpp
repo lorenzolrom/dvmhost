@@ -4,13 +4,13 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2024-2025 Bryan Biedenkapp, N2PLL
  *
  */
 #include "sysview/Defines.h"
-#include "common/network/json/json.h"
 #include "common/p25/dfsi/DFSIDefines.h"
 #include "common/p25/dfsi/LC.h"
+#include "common/json/json.h"
 #include "common/zlib/zlib.h"
 #include "common/Utils.h"
 #include "network/PeerNetwork.h"
@@ -26,7 +26,7 @@ using namespace network;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex PeerNetwork::m_peerStatusMutex;
+std::mutex PeerNetwork::s_peerStatusMutex;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -38,9 +38,9 @@ PeerNetwork::PeerNetwork(const std::string& address, uint16_t port, uint16_t loc
     bool duplex, bool debug, bool allowActivityTransfer, bool allowDiagnosticTransfer, bool updateLookup, bool saveLookup) :
     Network(address, port, localPort, peerId, password, duplex, debug, true, true, true, true, true, true, allowActivityTransfer, allowDiagnosticTransfer, updateLookup, saveLookup),
     peerStatus(),
-    m_peerLink(false),
-    m_tgidPkt(true, "Peer-Link, TGID List"),
-    m_ridPkt(true, "Peer-Link, RID List")
+    m_peerReplica(false),
+    m_tgidPkt(true, "Peer Replication, TGID List"),
+    m_ridPkt(true, "Peer Replication, RID List")
 {
     assert(!address.empty());
     assert(port > 0U);
@@ -77,7 +77,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
             if (it != g_peerIdentityNameMap.end())
                 identity = g_peerIdentityNameMap[peerId];
 
-            ::Log(9999U, nullptr, "%.9u (%8s) %s", peerId, identity.c_str(), payload.c_str());
+            ::Log(9999U, {nullptr, nullptr, 0U, nullptr}, "%.9u (%8s) %s", peerId, identity.c_str(), payload.c_str());
             g_disableTimeDisplay = currState;
         }
         break;
@@ -89,7 +89,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
             std::string payload(rawPayload, rawPayload + (length - 11U));
 
             if (g_debug)
-                LogMessage(LOG_NET, "Peer Status, peerId = %u", peerId);
+                LogInfoEx(LOG_NET, "Peer Status, peerId = %u", peerId);
 
             // parse JSON body
             json::value v;
@@ -105,7 +105,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
 
             json::object obj = v.get<json::object>();
             uint32_t actualPeerId = obj["peerId"].getDefault<uint32_t>(peerId);
-            std::lock_guard<std::mutex> lock(m_peerStatusMutex);
+            std::lock_guard<std::mutex> lock(s_peerStatusMutex);
             peerStatus[actualPeerId] = obj;
         }
         break;
@@ -116,10 +116,10 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
     }
     break;
     
-    case NET_FUNC::PEER_LINK:
+    case NET_FUNC::REPL:
     {
         switch (opcode.second) {
-        case NET_SUBFUNC::PL_TALKGROUP_LIST:
+        case NET_SUBFUNC::REPL_TALKGROUP_LIST:
         {
             uint32_t decompressedLen = 0U;
             uint8_t* decompressed = nullptr;
@@ -160,8 +160,8 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 m_tidLookup->filename(filename);
                 m_tidLookup->reload();
 
-                // flag this peer as Peer-Link enabled
-                m_peerLink = true;
+                // flag this peer as replica enabled
+                m_peerReplica = true;
 
                 // cleanup temporary file
                 ::remove(filename.c_str());
@@ -171,7 +171,7 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
         }
         break;
 
-        case NET_SUBFUNC::PL_RID_LIST:
+        case NET_SUBFUNC::REPL_RID_LIST:
         {
             uint32_t decompressedLen = 0U;
             uint8_t* decompressed = nullptr;
@@ -212,8 +212,8 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 m_ridLookup->filename(filename);
                 m_ridLookup->reload();
 
-                // flag this peer as Peer-Link enabled
-                m_peerLink = true;
+                // flag this peer as replica enabled
+                m_peerReplica = true;
 
                 // cleanup temporary file
                 ::remove(filename.c_str());
@@ -280,6 +280,7 @@ bool PeerNetwork::writeConfig()
     // Flags
     bool external = true;
     config["externalPeer"].set<bool>(external);                                     // External Peer Marker
+    config["masterPeerId"].set<uint32_t>(m_peerId);                                 // Master Peer ID
     bool convPeer = true;
     config["conventionalPeer"].set<bool>(convPeer);                                 // Conventional Peer Marker
     bool sysView = true;

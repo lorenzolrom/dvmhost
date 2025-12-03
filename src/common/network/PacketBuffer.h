@@ -39,9 +39,27 @@ namespace network
     /**
      * @brief Represents a fragmented packet buffer.
      * @ingroup network_core
+     * \code{.unparsed}
+     *  Below is the representation of the fragment layout for a packet buffer message. The ultimate
+     *  buffer is variable length up to a maximum of 534 bytes for a single fragment.
+     * 
+     *  Byte 0               1               2               3
+     *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+     *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *      | Uncompressed Length                                           |
+     *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *      | Compressed Length                                             |
+     *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *      | Block Number  | Total Blocks  | Payload ..................... |
+     *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     * \endcode
      */
     class HOST_SW_API PacketBuffer {
     public:
+        auto operator=(PacketBuffer&) -> PacketBuffer& = delete;
+        auto operator=(PacketBuffer&&) -> PacketBuffer& = delete;
+        PacketBuffer(PacketBuffer&) = delete;
+
         /**
          * @brief Initializes a new instance of the PacketBuffer class.
          * @param compression Flag indicating whether packet data should be compressed automatically.

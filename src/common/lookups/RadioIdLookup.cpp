@@ -24,8 +24,8 @@ using namespace lookups;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex RadioIdLookup::m_mutex;
-bool RadioIdLookup::m_locked = false;
+std::mutex RadioIdLookup::s_mutex;
+bool RadioIdLookup::s_locked = false;
 
 // ---------------------------------------------------------------------------
 //  Macros
@@ -33,16 +33,16 @@ bool RadioIdLookup::m_locked = false;
 
 // Lock the table.
 #define __LOCK_TABLE()                          \
-    std::lock_guard<std::mutex> lock(m_mutex);  \
-    m_locked = true;
+    std::lock_guard<std::mutex> lock(s_mutex);  \
+    s_locked = true;
 
 // Unlock the table.
-#define __UNLOCK_TABLE() m_locked = false;
+#define __UNLOCK_TABLE() s_locked = false;
 
 // Spinlock wait for table to be read unlocked.
 #define __SPINLOCK()                            \
-    if (m_locked) {                             \
-        while (m_locked)                        \
+    if (s_locked) {                             \
+        while (s_locked)                        \
             Thread::sleep(2U);                  \
     }
 
@@ -148,9 +148,9 @@ RadioId RadioIdLookup::find(uint32_t id)
 
 /* Saves loaded talkgroup rules. */
 
-void RadioIdLookup::commit()
+void RadioIdLookup::commit(bool quiet)
 {
-    save();
+    save(quiet);
 }
 
 /* Flag indicating whether radio ID access control is enabled or not. */
@@ -241,7 +241,7 @@ bool RadioIdLookup::load()
 
 /* Saves the table to the passed lookup table file. */
 
-bool RadioIdLookup::save()
+bool RadioIdLookup::save(bool quiet)
 {
     if (m_filename.empty()) {
         return false;
@@ -253,12 +253,13 @@ bool RadioIdLookup::save()
         return false;
     }
 
-    LogMessage(LOG_HOST, "Saving RID lookup file to %s", m_filename.c_str());
+    if (!quiet)
+        LogInfoEx(LOG_HOST, "Saving RID lookup file to %s", m_filename.c_str());
 
     // Counter for lines written
     unsigned int lines = 0;
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
 
     // String for writing
     std::string line;
@@ -296,7 +297,8 @@ bool RadioIdLookup::save()
     if (lines != m_table.size())
         return false;
 
-    LogInfoEx(LOG_HOST, "Saved %u entries to lookup table file %s", lines, m_filename.c_str());
+    if (!quiet)
+        LogInfoEx(LOG_HOST, "Saved %u entries to lookup table file %s", lines, m_filename.c_str());
 
     return true;
 }

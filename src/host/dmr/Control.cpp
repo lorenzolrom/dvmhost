@@ -94,7 +94,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
 
     m_supervisor = supervisor;
 
-    Slot::m_verifyReg = dmrProtocol["verifyReg"].as<bool>(false);
+    Slot::s_verifyReg = dmrProtocol["verifyReg"].as<bool>(false);
 
     uint8_t nRandWait = (uint8_t)dmrProtocol["nRandWait"].as<uint32_t>(DEFAULT_NRAND_WAIT);
     if (nRandWait > 15U)
@@ -143,7 +143,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
     m_enableTSCC = enableTSCC;
 
     yaml::Node rfssConfig = systemConf["config"];
-    uint32_t defaultNetIdleTalkgroup = (uint32_t)::strtoul(rfssConfig["defaultNetIdleTalkgroup"].as<std::string>("0").c_str(), NULL, 16);
+    uint32_t defaultNetIdleTalkgroup = (uint32_t)rfssConfig["defaultNetIdleTalkgroup"].as<uint32_t>(0U);
     m_slot1->setDefaultNetIdleTG(defaultNetIdleTalkgroup);
     m_slot2->setDefaultNetIdleTG(defaultNetIdleTalkgroup);
 
@@ -153,8 +153,8 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
     m_slot2->setNotifyCC(notifyCC);
 
     bool disableUnitRegTimeout = dmrProtocol["disableUnitRegTimeout"].as<bool>(false);
-    m_slot1->m_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
-    m_slot2->m_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
+    m_slot1->s_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
+    m_slot2->s_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
 
     /*
     ** Voice Silence and Frame Loss Thresholds
@@ -196,7 +196,8 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
 
     // set the In-Call Control function callback
     if (m_network != nullptr) {
-        m_network->setDMRICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId, uint8_t slotNo) { processInCallCtrl(command, dstId, slotNo); });
+        m_network->setDMRICCCallback([=](network::NET_ICC::ENUM command, uint32_t dstId, 
+            uint8_t slotNo, uint32_t peerId, uint32_t ssrc, uint32_t streamId) { processInCallCtrl(command, dstId, slotNo); });
     }
 
     /*
@@ -220,14 +221,14 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
                 LogInfo("    TSCC Disable Grant Source ID Check: yes");
             }
             if (m_supervisor)
-                LogMessage(LOG_DMR, "Host is configured to operate as a DMR TSCC, site controller mode.");
+                LogInfoEx(LOG_DMR, "Host is configured to operate as a DMR TSCC, site controller mode.");
         }
         if (disableNetworkGrant) {
             LogInfo("    Disable Network Grants: yes");
         }
 
         if (defaultNetIdleTalkgroup != 0U) {
-            LogInfo("    Default Network Idle Talkgroup: $%04X", defaultNetIdleTalkgroup);
+            LogInfo("    Default Network Idle Talkgroup: %u", defaultNetIdleTalkgroup);
         }
 
         LogInfo("    Ignore Affiliation Check: %s", ignoreAffiliationCheck ? "yes" : "no");
@@ -236,7 +237,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
         LogInfo("    Silence Threshold: %u (%.1f%%)", silenceThreshold, float(silenceThreshold) / 1.41F);
         LogInfo("    Frame Loss Threshold: %u", frameLossThreshold);
 
-        LogInfo("    Verify Registration: %s", Slot::m_verifyReg ? "yes" : "no");
+        LogInfo("    Verify Registration: %s", Slot::s_verifyReg ? "yes" : "no");
         LogInfo("    Conventional Network Grant Demand: %s", convNetGrantDemand ? "yes" : "no");
     }
 }
@@ -316,7 +317,7 @@ bool Control::processWakeup(const uint8_t* data)
     }
 
     if (m_verbose) {
-        LogMessage(LOG_RF, "DMR, CSBKO, BSDWNACT, srcId = %u", srcId);
+        LogInfoEx(LOG_RF, "DMR, CSBKO, BSDWNACT, srcId = %u", srcId);
     }
 
     return true;
@@ -467,9 +468,9 @@ dmr::lookups::DMRAffiliationLookup* Control::affiliations()
 {
     switch (m_tsccSlotNo) {
     case 1U:
-        return m_slot1->m_affiliations;
+        return m_slot1->s_affiliations;
     case 2U:
-        return m_slot2->m_affiliations;
+        return m_slot2->s_affiliations;
     default:
         LogError(LOG_DMR, "DMR, invalid slot, slotNo = %u", m_tsccSlotNo);
         break;
@@ -531,7 +532,7 @@ Slot* Control::getTSCCSlot() const
 void Control::tsccActivateSlot(uint32_t slotNo, uint32_t dstId, uint32_t srcId, bool group, bool voice)
 {
     if (m_verbose) {
-        LogMessage(LOG_DMR, "DMR Slot %u, payload activation, srcId = %u, group = %u, dstId = %u",
+        LogInfoEx(LOG_DMR, "DMR Slot %u, payload activation, srcId = %u, group = %u, dstId = %u",
             slotNo, srcId, group, dstId);
     }
 
@@ -561,7 +562,7 @@ void Control::tsccActivateSlot(uint32_t slotNo, uint32_t dstId, uint32_t srcId, 
 void Control::tsccClearActivatedSlot(uint32_t slotNo)
 {
     if (m_verbose) {
-        LogMessage(LOG_DMR, "DMR Slot %u, payload activation clear", slotNo);
+        LogInfoEx(LOG_DMR, "DMR Slot %u, payload activation clear", slotNo);
     }
 
     switch (slotNo) {
@@ -769,7 +770,7 @@ void Control::processNetwork()
     if (m_enableTSCC) {
         Slot* tscc = getTSCCSlot();
         if (tscc != nullptr) {
-            if (!tscc->m_affiliations->isGranted(dstId)) {
+            if (!tscc->s_affiliations->isGranted(dstId)) {
                 tscc->m_control->writeRF_CSBK_Grant(srcId, dstId, 4U, (flco == FLCO::GROUP) ? true : false, true);
             }
         }

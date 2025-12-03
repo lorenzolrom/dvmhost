@@ -50,9 +50,16 @@ bool KMMZeroize::decode(const uint8_t* data)
 void KMMZeroize::encode(uint8_t* data)
 {
     assert(data != nullptr);
-    m_messageLength = KMM_ZEROIZE_LENGTH;
+    m_messageLength = length();
 
     KMMFrame::encodeHeader(data);
+}
+
+/* Returns a string that represents the current KMM frame. */
+
+std::string KMMZeroize::toString()
+{
+    return std::string("KMM, ZEROIZE_CMD (Zeroize Command)");
 }
 
 // ---------------------------------------------------------------------------

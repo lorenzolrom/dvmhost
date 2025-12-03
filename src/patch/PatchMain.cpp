@@ -194,6 +194,8 @@ int main(int argc, char** argv)
         }
     }
 
+    log_stacktrace::SignalHandling sh(g_foreground);
+
     ::signal(SIGINT, sigHandler);
     ::signal(SIGTERM, sigHandler);
 #if !defined(_WIN32)

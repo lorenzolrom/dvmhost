@@ -74,6 +74,76 @@ namespace p25
             void resetKeystream();
 
             /**
+             * @brief Helper to crypt a P25 TEK with the given AES-256 KEK.
+             * @note This assumes AES-256 KEK and will not work with other key types.
+             * @param kek Key Encryption Key
+             * @param tek Traffic Encryption Key
+             * @param tekLen Traffic Encryption Key Length
+             * @returns UInt8Array Buffer containing the encryption wrapped TEK.
+             */
+            UInt8Array cryptAES_TEK(const uint8_t* kek, uint8_t* tek, uint8_t tekLen);
+            /**
+             * @brief Helper to decrypt a P25 TEK with the given AES-256 KEK.
+             * @note This assumes AES-256 KEK and will not work with other key types.
+             * @param kek Key Encryption Key
+             * @param tek Wrapped Traffic Encryption Key
+             * @param tekLen Wrapped Traffic Encryption Key Length
+             * @returns UInt8Array Buffer containing the decrypted TEK.
+             */
+            UInt8Array decryptAES_TEK(const uint8_t* kek, uint8_t* tek, uint8_t tekLen);
+            /**
+             * @brief Helper to generate a P25 KMM CBC MAC key with the given AES-256 KEK.
+             * @note This assumes AES-256 KEK and will not work with other key types.
+             * @param kek Key Encryption Key
+             * @param msg KMM Message
+             * @param msgLen Message Length
+             * @returns UInt8Array Buffer containing the derived MAC key.
+             */
+            UInt8Array cryptAES_KMM_CBC_KDF(const uint8_t* kek, const uint8_t* msg, uint16_t msgLen);
+            /**
+             * @brief Helper to generate a P25 KMM CBC-MAC with the given AES-256 CBC-MAC key.
+             * @note This assumes AES-256 KEK and will not work with other key types.
+             * @param macKey CBC-MAC Derived Key
+             * @param msg KMM Message
+             * @param msgLen Message Length
+             * @returns UInt8Array Buffer containing the derived MAC key.
+             */
+            UInt8Array cryptAES_KMM_CBC(const uint8_t* macKey, const uint8_t* msg, uint16_t msgLen);
+
+            /**
+             * @brief Helper to generate a P25 KMM CMAC MAC key with the given AES-256 KEK.
+             * @note This assumes AES-256 KEK and will not work with other key types.
+             * @param kek Key Encryption Key
+             * @param msg KMM Message
+             * @param msgLen Message Length
+             * @param hasMN Message has a message number.
+             * @returns UInt8Array Buffer containing the derived MAC key.
+             */
+            UInt8Array cryptAES_KMM_CMAC_KDF(const uint8_t* kek, const uint8_t* msg, uint16_t msgLen, bool hasMN);
+            /**
+             * @brief Helper to generate a P25 KMM CMAC with the given AES-256 CMAC key.
+             * @note This assumes AES-256 KEK and will not work with other key types.
+             * @param macKey CMAC Derived Key
+             * @param msg KMM Message
+             * @param msgLen Message Length
+             * @returns UInt8Array Buffer containing the derived MAC key.
+             */
+            UInt8Array cryptAES_KMM_CMAC(const uint8_t* macKey, const uint8_t* msg, uint16_t msgLen);
+
+            /**
+             * @brief Helper to crypt a P25 PDU frame using AES-256.
+             * @param frame Data frame
+             * @param frameLen Data frame Length
+             */
+            void cryptAES_PDU(uint8_t* frame, uint8_t frameLen);
+
+            /**
+             * @brief Helper to crypt P25 IMBE audio using DES.
+             * @param imbe Buffer containing IMBE to crypt.
+             * @param duid P25 DUID.
+             */
+            void cryptDES_IMBE(uint8_t* imbe, P25DEF::DUID::E duid);
+            /**
              * @brief Helper to crypt P25 IMBE audio using AES-256.
              * @param imbe Buffer containing IMBE to crypt.
              * @param duid P25 DUID.

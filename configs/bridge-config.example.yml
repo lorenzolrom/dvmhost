@@ -10,11 +10,10 @@ daemon: true
 #
 #   Logging Levels:
 #     1 - Debug
-#     2 - Message
-#     3 - Informational
-#     4 - Warning
-#     5 - Error
-#     6 - Fatal
+#     2 - Informational
+#     3 - Warning
+#     4 - Error
+#     5 - Fatal
 #
 log:
     # Console display logging level (used when in foreground).
@@ -80,19 +79,9 @@ network:
     # Flag indicating UDP audio should follow the USRP format.
     udpUsrp: false
 
-    # Delay in-between UDP audio frames (in ms).
-    #   (Some applications will send RTP/PCM audio too fast, requiring a delay in-between packets to 
-    #    be added for appropriate IMBE audio pacing. For most cases a 20ms delay will properly pace 
-    #    audio frames. If set to 0, no frame pacing or jitter buffer will be applied and audio will be 
-    #    encoded as fast as it is received.)
-    udpInterFrameDelay: 0
-    # Jitter Buffer Length (in ms).
-    #   (This is only applied if utilizing inter frame delay, otherwise packet timing is assumed to be
-    #    properly handled by the source.)
-    udpJitter: 200
-
-    # Flag indicating the UDP audio will be padded with silence during hang time before end of call.
-    udpHangSilence: true
+    # Flag indicating UDP audio frame timing will be performed at the bridge.
+    #   (This allows the sending source to send audio as fast as it wants.)
+    udpFrameTiming: false
 
     # Traffic Encryption
     tek:
@@ -190,3 +179,15 @@ system:
     rtsPttEnable: false
     # Serial port device for RTS PTT control (e.g., /dev/ttyUSB0).
     rtsPttPort: "/dev/ttyUSB0"
+    # Hold-off time (ms) before clearing RTS PTT after last audio output.
+    rtsPttHoldoffMs: 250
+
+    # CTS COR Configuration
+    # Flag indicating whether CTS-based COR detection is enabled.
+    ctsCorEnable: false
+    # Serial port device for CTS COR (e.g., /dev/ttyUSB0). Often same as RTS PTT.
+    ctsCorPort: "/dev/ttyUSB0"
+    # Flag indicating whether to invert COR logic (if true, COR LOW triggers instead of HIGH).
+    ctsCorInvert: false
+    # Hold-off time (ms) before ending call after CTS COR deasserts.
+    ctsCorHoldoffMs: 250

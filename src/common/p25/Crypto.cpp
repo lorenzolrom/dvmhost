@@ -12,9 +12,17 @@
 #include "p25/P25Defines.h"
 #include "p25/Crypto.h"
 #include "AESCrypto.h"
+#include "DESCrypto.h"
 #include "RC4Crypto.h"
 #include "Log.h"
 #include "Utils.h"
+
+#if defined(ENABLE_SSL)
+#include <openssl/evp.h>
+#include <openssl/kdf.h>
+#include <openssl/err.h>
+#include <openssl/core_names.h>
+#endif // ENABLE_SSL
 
 using namespace ::crypto;
 using namespace p25;
@@ -27,6 +35,7 @@ using namespace p25::crypto;
 //  Constants
 // ---------------------------------------------------------------------------
 
+#define TEMP_BUFFER_LEN 1024U
 #define MAX_ENC_KEY_LENGTH_BYTES 32U
 
 // ---------------------------------------------------------------------------
@@ -129,6 +138,34 @@ void P25Crypto::generateKeystream()
 
     // generate keystream
     switch (m_tekAlgoId) {
+    case ALGO_DES:
+        {
+            if (m_keystream == nullptr)
+                m_keystream = new uint8_t[224U];
+            ::memset(m_keystream, 0x00U, 224U);
+
+            uint8_t desKey[8U];
+            ::memset(desKey, 0x00U, 8U);
+            uint8_t padLen = (uint8_t)::fmax(8 - m_tekLength, 0);
+            for (uint8_t i = 0U; i < padLen; i++)
+                desKey[i] = 0U;
+            for (uint8_t i = padLen; i < 8U; i++)
+                desKey[i] = m_tek[i - padLen];
+
+            DES des = DES();
+
+            uint8_t input[8U];
+            ::memset(input, 0x00U, 8U);
+            ::memcpy(input, m_mi, 8U);
+
+            for (uint32_t i = 0U; i < (224U / 8U); i++) {
+                uint8_t* output = des.encryptBlock(input, desKey);
+                ::memcpy(m_keystream + (i * 8U), output, 8U);
+                ::memcpy(input, output, 8U);
+                delete[] output;
+            }
+        }
+        break;
     case ALGO_AES_256:
         {
             if (m_keystream == nullptr)
@@ -147,6 +184,7 @@ void P25Crypto::generateKeystream()
                 uint8_t* output = aes.encryptECB(input, 16U, m_tek.get());
                 ::memcpy(m_keystream + (i * 16U), output, 16U);
                 ::memcpy(input, output, 16U);
+                delete[] output;
             }
 
             delete[] iv;
@@ -192,6 +230,450 @@ void P25Crypto::resetKeystream()
         delete[] m_keystream;
         m_keystream = nullptr;
         m_keystreamPos = 0U;
+    }
+}
+
+/* Helper to crypt a P25 TEK with the given AES-256 KEK. */
+
+UInt8Array P25Crypto::cryptAES_TEK(const uint8_t* kek, uint8_t* tek, uint8_t tekLen)
+{
+#if defined(ENABLE_SSL)
+    // static IV with $A6 pattern defined in TIA-102.AACA-C-2023 13.3
+    uint8_t iv[AES::BLOCK_BYTES_LEN / 2] = {
+        0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U
+    };
+
+    int len;
+    uint8_t tempBuf[TEMP_BUFFER_LEN];
+    ::memset(tempBuf, 0x00U, TEMP_BUFFER_LEN);
+
+    ERR_load_crypto_strings();
+
+    EVP_CIPHER_CTX* ctx;
+
+    // create and initialize a cipher context
+    if (!(ctx = EVP_CIPHER_CTX_new())) {
+        LogError(LOG_P25, "EVP_CIPHER_CTX_new(), failed to initialize cipher context: %s", ERR_error_string(ERR_get_error(), NULL));
+        return nullptr;
+    }
+
+    // initialize the wrapper context with AES-256-WRAP
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, kek, iv) != 1) {
+        LogError(LOG_P25, "EVP_EncryptInit_ex(), failed to initialize cipher wrapping context: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+
+    // perform the wrapping operation
+    if (EVP_EncryptUpdate(ctx, tempBuf, &len, tek, tekLen) != 1) {
+        LogError(LOG_P25, "EVP_EncryptUpdate(), failed to wrap TEK: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+
+    // finalize the wrapping (no output, just padding)
+    int tempLen;
+    if (EVP_EncryptFinal_ex(ctx, tempBuf + len, &tempLen) != 1) {
+        LogError(LOG_P25, "EVP_EncryptFinal_ex(), failed to finalize wrapping TEK: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+    len += tempLen;
+
+    EVP_CIPHER_CTX_free(ctx);
+
+    UInt8Array wrappedKey = std::unique_ptr<uint8_t[]>(new uint8_t[len]);
+    ::memset(wrappedKey.get(), 0x00U, len);
+    ::memcpy(wrappedKey.get(), tempBuf, len);
+
+    return wrappedKey;
+#else
+    LogError(LOG_P25, "No OpenSSL, TEK encryption is not supported!");
+    return nullptr;
+#endif // ENABLE_SSL
+}
+
+/* Helper to decrypt a P25 TEK with the given AES-256 KEK. */
+
+UInt8Array P25Crypto::decryptAES_TEK(const uint8_t* kek, uint8_t* tek, uint8_t tekLen)
+{
+#if defined(ENABLE_SSL)
+    // static IV with $A6 pattern defined in TIA-102.AACA-C-2023 13.3
+    uint8_t iv[AES::BLOCK_BYTES_LEN / 2] = {
+        0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U, 0xA6U
+    };
+
+    int len;
+    uint8_t tempBuf[TEMP_BUFFER_LEN];
+    ::memset(tempBuf, 0x00U, TEMP_BUFFER_LEN);
+
+    ERR_load_crypto_strings();
+
+    EVP_CIPHER_CTX* ctx;
+
+    // create and initialize a cipher context
+    if (!(ctx = EVP_CIPHER_CTX_new())) {
+        LogError(LOG_P25, "EVP_CIPHER_CTX_new(), failed to initialize cipher context: %s", ERR_error_string(ERR_get_error(), NULL));
+        return nullptr;
+    }
+
+    // initialize the wrapper context with AES-256-WRAP
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, kek, iv) != 1) {
+        LogError(LOG_P25, "EVP_DecryptInit_ex(), failed to initialize cipher wrapping context: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+
+    // perform the wrapping operation
+    if (EVP_DecryptUpdate(ctx, tempBuf, &len, tek, tekLen) != 1) {
+        LogError(LOG_P25, "EVP_DecryptUpdate(), failed to unwrap TEK: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+
+    // finalize the wrapping (no output, just padding)
+    int tempLen;
+    if (EVP_DecryptFinal_ex(ctx, tempBuf + len, &tempLen) != 1) {
+        LogError(LOG_P25, "EVP_DecryptFinal_ex(), failed to finalize unwrapping TEK: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+    len += tempLen;
+
+    EVP_CIPHER_CTX_free(ctx);
+
+    UInt8Array unwrappedKey = std::unique_ptr<uint8_t[]>(new uint8_t[len]);
+    ::memset(unwrappedKey.get(), 0x00U, len);
+    ::memcpy(unwrappedKey.get(), tempBuf, len);
+
+    return unwrappedKey;
+#else
+    LogError(LOG_P25, "No OpenSSL, TEK encryption is not supported!");
+    return nullptr;
+#endif // ENABLE_SSL
+}
+
+/* Helper to generate a P25 KMM CBC MAC key with the given AES-256 KEK. */
+
+UInt8Array P25Crypto::cryptAES_KMM_CBC_KDF(const uint8_t* kek, const uint8_t* msg, uint16_t msgLen)
+{
+#if defined(ENABLE_SSL)
+
+    /*
+    ** bryanb: some bizarre bullshit requiring a 8-byte IV -- thanks Ilya (https://github.com/ilyacodes) for helping look at this
+    */
+
+    uint8_t iv[AES::BLOCK_BYTES_LEN / 2] = {
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U
+    };
+
+    uint16_t authLen = msgLen - KMM_AES_MAC_LENGTH;
+    SET_UINT16(authLen, iv, 6U);
+
+    int len;
+    uint8_t tempBuf[TEMP_BUFFER_LEN];
+    ::memset(tempBuf, 0x00U, TEMP_BUFFER_LEN);
+
+    ERR_load_crypto_strings();
+
+    EVP_CIPHER_CTX* ctx;
+
+    // create and initialize a cipher context
+    if (!(ctx = EVP_CIPHER_CTX_new())) {
+        LogError(LOG_P25, "EVP_CIPHER_CTX_new(), failed to initialize cipher context: %s", ERR_error_string(ERR_get_error(), NULL));
+        return nullptr;
+    }
+
+    // initialize the wrapper context with AES-256-WRAP
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_wrap(), NULL, kek, iv) != 1) {
+        LogError(LOG_P25, "EVP_EncryptInit_ex(), failed to initialize cipher wrapping context: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+
+    // perform the wrapping operation
+    if (EVP_EncryptUpdate(ctx, tempBuf, &len, kek, MAX_ENC_KEY_LENGTH_BYTES) != 1) {
+        LogError(LOG_P25, "EVP_EncryptUpdate(), failed to wrap KEK: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+
+    // finalize the wrapping (no output, just padding)
+    int tempLen;
+    if (EVP_EncryptFinal_ex(ctx, tempBuf + len, &tempLen) != 1) {
+        LogError(LOG_P25, "EVP_EncryptFinal_ex(), failed to finalize wrapping KEK: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+    len += tempLen;
+
+    EVP_CIPHER_CTX_free(ctx);
+
+    UInt8Array wrappedKey = std::unique_ptr<uint8_t[]>(new uint8_t[MAX_ENC_KEY_LENGTH_BYTES]);
+    ::memset(wrappedKey.get(), 0x00U, MAX_ENC_KEY_LENGTH_BYTES);
+    ::memcpy(wrappedKey.get(), tempBuf + 8U, MAX_ENC_KEY_LENGTH_BYTES);
+
+    return wrappedKey;
+#else
+    LogError(LOG_P25, "No OpenSSL, CBC-MAC generation is not supported!");
+    return nullptr;
+#endif // ENABLE_SSL
+}
+
+/* Helper to generate a P25 KMM CBC-MAC with the given AES-256 CBC-MAC key. */
+
+UInt8Array P25Crypto::cryptAES_KMM_CBC(const uint8_t* macKey, const uint8_t* msg, uint16_t msgLen)
+{
+    uint8_t iv[AES::BLOCK_BYTES_LEN] = {
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U
+    };
+
+    AES aes = AES(AESKeyLength::AES_256);
+
+    // pad the message as necessary
+    size_t paddedLen = msgLen + (AES::BLOCK_BYTES_LEN - (msgLen % AES::BLOCK_BYTES_LEN));
+    uint8_t paddedMessage[TEMP_BUFFER_LEN];
+    ::memset(paddedMessage, 0x00U, TEMP_BUFFER_LEN);
+
+    ::memcpy(paddedMessage, msg, msgLen - KMM_AES_MAC_LENGTH - 5U);
+    ::memcpy(paddedMessage + msgLen - KMM_AES_MAC_LENGTH - 5U, msg + msgLen - 5U, 5U);
+
+    // perform AES-CBC encryption
+    uint8_t* tempBuf = aes.encryptCBC(paddedMessage, paddedLen, macKey, iv);
+
+    UInt8Array wrappedKey = std::unique_ptr<uint8_t[]>(new uint8_t[8U]);
+    ::memset(wrappedKey.get(), 0x00U, 8U);
+    ::memcpy(wrappedKey.get(), tempBuf + (msgLen - AES::BLOCK_BYTES_LEN), 8U);
+
+    delete[] tempBuf;
+    return wrappedKey;
+}
+
+/* Helper to generate a P25 KMM CMAC MAC key with the given AES-256 KEK. */
+
+UInt8Array P25Crypto::cryptAES_KMM_CMAC_KDF(const uint8_t* kek, const uint8_t* msg, uint16_t msgLen, bool hasMN)
+{
+#if defined(ENABLE_SSL)
+    //                       O      T      A      R             M      A      C
+    uint8_t label[8U] = { 0x4FU, 0x54U, 0x41U, 0x52U, 0x20U, 0x4DU, 0x41U, 0x43U };
+
+    uint8_t context[12U];
+    ::memset(context, 0x00U, 12U);
+
+    uint8_t contextLen = 0U;
+    if (hasMN) {
+        ::memcpy(context, msg, 12U);
+        contextLen = 12U;
+    } else {
+        ::memcpy(context, msg, 10U);
+        contextLen = 10U;
+    }
+
+    /** DEBUG REMOVEME */
+    Utils::dump(2U, "KEK", kek, MAX_ENC_KEY_LENGTH_BYTES);
+    Utils::dump(2U, "Label", label, 8U);
+    Utils::dump(2U, "Context", context, contextLen);
+    /** DEBUG REMOVEME */
+
+    size_t len;
+    uint8_t tempBuf[TEMP_BUFFER_LEN];
+    ::memset(tempBuf, 0x00U, TEMP_BUFFER_LEN);
+
+    ERR_load_crypto_strings();
+
+    // create a library context (required for OpenSSL 3.0+)
+    OSSL_LIB_CTX* libCtx = OSSL_LIB_CTX_new();
+    if (!libCtx) {
+        LogError(LOG_P25, "OSSL_LIB_CTX_new(), failed to finalize OpenSSL: %s", ERR_error_string(ERR_get_error(), NULL));
+        return nullptr;
+    }
+
+    // load the KDF algorithm
+    EVP_KDF* kdf = EVP_KDF_fetch(NULL, "KBKDF", NULL);
+    if (!kdf) {
+        LogError(LOG_P25, "EVP_KDF_fetch(), failed to load OpenSSL KDF algorithm: %s", ERR_error_string(ERR_get_error(), NULL));
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    // create a context for the MAC operation
+    EVP_KDF_CTX* ctx = EVP_KDF_CTX_new(kdf);
+    if (!ctx) {
+        LogError(LOG_P25, "EVP_KDF_CTX_new(), failed to create a OpenSSL KDF context: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_KDF_free(kdf);
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    // set the cipher to AES-256-CBC and initialize the MAC operation
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_MAC, "HMAC", 0),
+        OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, "SHA-256", 0),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY, (void*)kek, MAX_ENC_KEY_LENGTH_BYTES),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT, (void*)label, 8U),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO, (void*)context, contextLen),
+        OSSL_PARAM_END
+    };
+
+    // derive MAC key
+    if (EVP_KDF_derive(ctx, tempBuf, MAX_ENC_KEY_LENGTH_BYTES, params) <= 0) {
+        LogError(LOG_P25, "EVP_KDF_derive(), failed to derive MAC key: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_KDF_CTX_free(ctx);
+        EVP_KDF_free(kdf);
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    EVP_KDF_CTX_free(ctx);
+    EVP_KDF_free(kdf);
+    OSSL_LIB_CTX_free(libCtx);
+
+    /** DEBUG REMOVEME */
+    Utils::dump(2U, "tempBuf", tempBuf, 128U);
+    /** DEBUG REMOVEME */
+
+    UInt8Array wrappedKey = std::unique_ptr<uint8_t[]>(new uint8_t[MAX_ENC_KEY_LENGTH_BYTES]);
+    ::memset(wrappedKey.get(), 0x00U, MAX_ENC_KEY_LENGTH_BYTES);
+    ::memcpy(wrappedKey.get(), tempBuf, MAX_ENC_KEY_LENGTH_BYTES);
+
+    return wrappedKey;
+#else
+    LogError(LOG_P25, "No OpenSSL, CMAC generation is not supported!");
+    return nullptr;
+#endif // ENABLE_SSL
+}
+
+/* Helper to generate a P25 KMM CMAC with the given AES-256 CMAC key. */
+
+UInt8Array P25Crypto::cryptAES_KMM_CMAC(const uint8_t* macKey, const uint8_t* msg, uint16_t msgLen)
+{
+#if defined(ENABLE_SSL)
+    size_t len;
+    uint8_t tempBuf[TEMP_BUFFER_LEN];
+    ::memset(tempBuf, 0x00U, TEMP_BUFFER_LEN);
+
+    uint8_t paddedMessage[TEMP_BUFFER_LEN];
+    ::memset(paddedMessage, 0x00U, TEMP_BUFFER_LEN);
+
+    ::memcpy(paddedMessage, msg, msgLen - KMM_AES_MAC_LENGTH - 5U);
+    ::memcpy(paddedMessage + msgLen - KMM_AES_MAC_LENGTH - 5U, msg + msgLen - 5U, 5U);
+
+    // create a library context (required for OpenSSL 3.0+)
+    OSSL_LIB_CTX* libCtx = OSSL_LIB_CTX_new();
+    if (!libCtx) {
+        LogError(LOG_P25, "OSSL_LIB_CTX_new(), failed to finalize OpenSSL: %s", ERR_error_string(ERR_get_error(), NULL));
+        return nullptr;
+    }
+
+    // fetch the CMAC implementation
+    EVP_MAC* hmac = EVP_MAC_fetch(libCtx, "CMAC", NULL);
+    if (!hmac) {
+        LogError(LOG_P25, "EVP_MAC_fetch(), failed to fetch OpenSSL CMAC: %s", ERR_error_string(ERR_get_error(), NULL));
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    // create a context for the MAC operation
+    EVP_MAC_CTX* ctx = EVP_MAC_CTX_new(hmac);
+    if (!ctx) {
+        LogError(LOG_P25, "EVP_MAC_CTX_new(), failed to create a OpenSSL CMAC context: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_MAC_free(hmac);
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    // set the cipher to AES-256-CBC and initialize the MAC operation
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_CIPHER, "AES-256-CBC", 0),
+        OSSL_PARAM_END
+    };
+
+    // initialize the MAC operation
+    if (!EVP_MAC_init(ctx, macKey, MAX_ENC_KEY_LENGTH_BYTES, params)) {
+        LogError(LOG_P25, "EVP_MAC_init(), failed to initialize the AES-256-CBC MAC operation: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(hmac);
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    // provide the message data to be authenticated
+    if (!EVP_MAC_update(ctx, paddedMessage, msgLen - KMM_AES_MAC_LENGTH)) {
+        LogError(LOG_P25, "EVP_MAC_update(), failed to set message data to authenticate: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(hmac);
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    // get the length of the MAC
+    if (!EVP_MAC_final(ctx, NULL, &len, 0)) {
+        LogError(LOG_P25, "EVP_MAC_final(), failed to get MAC length: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(hmac);
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    // generate the MAC
+    if (!EVP_MAC_final(ctx, tempBuf, &len, len)) {
+        LogError(LOG_P25, "EVP_MAC_final(), failed to get MAC length: %s", ERR_error_string(ERR_get_error(), NULL));
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(hmac);
+        OSSL_LIB_CTX_free(libCtx);
+        return nullptr;
+    }
+
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(hmac);
+    OSSL_LIB_CTX_free(libCtx);
+
+    UInt8Array wrappedKey = std::unique_ptr<uint8_t[]>(new uint8_t[len]);
+    ::memset(wrappedKey.get(), 0x00U, len);
+    ::memcpy(wrappedKey.get(), tempBuf, len);
+
+    return wrappedKey;
+#else
+    LogError(LOG_P25, "No OpenSSL, CMAC generation is not supported!");
+    return nullptr;
+#endif // ENABLE_SSL
+}
+
+/* Helper to crypt a P25 PDU frame using AES-256. */
+
+void P25Crypto::cryptAES_PDU(uint8_t* frame, uint8_t frameLen)
+{
+    if (m_keystream == nullptr)
+        return;
+
+    uint32_t offset = 16U;
+    for (uint8_t i = 0U; i < frameLen; i++) {
+        if (offset > 240U) {
+            offset = 16U;
+        }
+
+        frame[i] ^= m_keystream[offset];
+        offset++;
+    }
+}
+
+/* Helper to crypt IMBE audio using DES. */
+
+void P25Crypto::cryptDES_IMBE(uint8_t* imbe, DUID::E duid)
+{
+    if (m_keystream == nullptr)
+        return;
+
+    uint32_t offset = 8U;
+    if (duid == DUID::LDU2) {
+        offset += 101U;
+    }
+
+    offset += (m_keystreamPos * RAW_IMBE_LENGTH_BYTES) + RAW_IMBE_LENGTH_BYTES + ((m_keystreamPos < 8U) ? 0U : 2U);
+    m_keystreamPos = (m_keystreamPos + 1U) % 9U;
+
+    for (uint8_t i = 0U; i < RAW_IMBE_LENGTH_BYTES; i++) {
+        imbe[i] ^= m_keystream[offset + i];
     }
 }
 

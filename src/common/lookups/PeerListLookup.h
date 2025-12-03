@@ -49,9 +49,10 @@ namespace lookups
             m_peerId(0U),
             m_peerAlias(),
             m_peerPassword(),
-            m_peerLink(false),
+            m_peerReplica(false),
             m_canRequestKeys(false),
             m_canIssueInhibit(false),
+            m_hasCallPriority(false),
             m_peerDefault(false)
         {
             /* stub */
@@ -68,9 +69,10 @@ namespace lookups
             m_peerId(peerId),
             m_peerAlias(peerAlias),
             m_peerPassword(peerPassword),
-            m_peerLink(false),
+            m_peerReplica(false),
             m_canRequestKeys(false),
             m_canIssueInhibit(false),
+            m_hasCallPriority(false),
             m_peerDefault(peerDefault)
         {
             /* stub */
@@ -86,9 +88,10 @@ namespace lookups
                 m_peerId = data.m_peerId;
                 m_peerAlias = data.m_peerAlias;
                 m_peerPassword = data.m_peerPassword;
-                m_peerLink = data.m_peerLink;
+                m_peerReplica = data.m_peerReplica;
                 m_canRequestKeys = data.m_canRequestKeys;
                 m_canIssueInhibit = data.m_canIssueInhibit;
+                m_hasCallPriority = data.m_hasCallPriority;
                 m_peerDefault = data.m_peerDefault;
             }
 
@@ -117,7 +120,7 @@ namespace lookups
          */
         DECLARE_PROPERTY_PLAIN(uint32_t, peerId);
         /**
-         * @breif Peer Alias
+         * @brief Peer Alias
          */
         DECLARE_PROPERTY_PLAIN(std::string, peerAlias);
         /**
@@ -125,9 +128,9 @@ namespace lookups
          */
         DECLARE_PROPERTY_PLAIN(std::string, peerPassword);
         /**
-         * @brief Flag indicating if the peer participates in peer link and should be sent configuration.
+         * @brief Flag indicating if the peer participates in peer replication and should be sent configuration.
          */
-        DECLARE_PROPERTY_PLAIN(bool, peerLink);
+        DECLARE_PROPERTY_PLAIN(bool, peerReplica);
         /**
          * @brief Flag indicating if the peer can request encryption keys.
          */
@@ -136,6 +139,10 @@ namespace lookups
          * @brief Flag indicating if the peer can issue inhibit/uninhibit packets.
          */
         DECLARE_PROPERTY_PLAIN(bool, canIssueInhibit);
+        /**
+         * @brief Flag indicating if the peer has call transmit priority.
+         */
+        DECLARE_PROPERTY_PLAIN(bool, hasCallPriority);
         /**
          * @brief Flag indicating if the peer is default.
          */
@@ -186,8 +193,9 @@ namespace lookups
 
         /**
          * @brief Commit the table.
+         * @param quiet Disable logging during save operation.
          */
-        void commit();
+        void commit(bool quiet = false);
 
         /**
          * @brief Gets whether the lookup is enabled.
@@ -236,13 +244,14 @@ namespace lookups
 
         /**
          * @brief Saves the table to the passed lookup table file.
+         * @param quiet Disable logging during save operation.
          * @return True, if lookup table was saved, otherwise false.
          */
-        bool save() override;
+        bool save(bool quiet = false) override;
 
     private:
-        static std::mutex m_mutex;  //! Mutex used for change locking.
-        static bool m_locked;       //! Flag used for read locking (prevents find lookups), should be used when atomic operations (add/erase/etc) are being used.
+        static std::mutex s_mutex;  //!< Mutex used for change locking.
+        static bool s_locked;       //!< Flag used for read locking (prevents find lookups), should be used when atomic operations (add/erase/etc) are being used.
     };
 } // namespace lookups
 

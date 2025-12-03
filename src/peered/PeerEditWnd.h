@@ -150,9 +150,10 @@ private:
     FLineEdit m_peerPassword{&m_sourceGroup};
 
     FButtonGroup m_configGroup{"Configuration", this};
-    FCheckBox m_peerLinkEnabled{"Peer Link", &m_configGroup};
+    FCheckBox m_peerReplicaEnabled{"Peer Replica", &m_configGroup};
     FCheckBox m_canReqKeysEnabled{"Request Keys", &m_configGroup};
     FCheckBox m_canInhibitEnabled{"Issue Inhibit", &m_configGroup};
+    FCheckBox m_callPriorityEnabled{"Call Priority", &m_configGroup};
 
     /**
      * @brief Initializes the window layout.
@@ -263,12 +264,12 @@ private:
 
         // configuration
         {
-            m_configGroup.setGeometry(FPoint(39, 5), FSize(23, 5));
+            m_configGroup.setGeometry(FPoint(39, 5), FSize(23, 6));
 
-            m_peerLinkEnabled.setGeometry(FPoint(2, 1), FSize(10, 1));
-            m_peerLinkEnabled.setChecked(m_rule.peerLink());
-            m_peerLinkEnabled.addCallback("toggled", [&]() {
-                m_rule.peerLink(m_peerLinkEnabled.isChecked());
+            m_peerReplicaEnabled.setGeometry(FPoint(2, 1), FSize(10, 1));
+            m_peerReplicaEnabled.setChecked(m_rule.peerReplica());
+            m_peerReplicaEnabled.addCallback("toggled", [&]() {
+                m_rule.peerReplica(m_peerReplicaEnabled.isChecked());
             });
 
             m_canReqKeysEnabled.setGeometry(FPoint(2, 2), FSize(10, 1));
@@ -282,6 +283,12 @@ private:
             m_canInhibitEnabled.addCallback("toggled", [&]() {
                 m_rule.canIssueInhibit(m_canInhibitEnabled.isChecked());
             });
+
+            m_callPriorityEnabled.setGeometry(FPoint(2, 4), FSize(10, 1));
+            m_callPriorityEnabled.setChecked(m_rule.hasCallPriority());
+            m_callPriorityEnabled.addCallback("toggled", [&]() {
+                m_rule.hasCallPriority(m_callPriorityEnabled.isChecked());
+            });
         }
 
         CloseWndBase::initControls();
@@ -294,11 +301,12 @@ private:
     {
         std::string peerAlias = m_rule.peerAlias();
         uint32_t peerId = m_rule.peerId();
-        bool peerLink = m_rule.peerLink();
+        bool peerReplica = m_rule.peerReplica();
         bool canRequestKeys = m_rule.canRequestKeys();
         bool canIssueInhibit = m_rule.canIssueInhibit();
+        bool hasCallPriority = m_rule.hasCallPriority();
 
-        ::LogInfoEx(LOG_HOST, "Peer ALIAS: %s PEERID: %u PEER LINK: %u CAN REQUEST KEYS: %u CAN ISSUE INHIBIT: %u", peerAlias.c_str(), peerId, peerLink, canRequestKeys, canIssueInhibit);
+        ::LogInfoEx(LOG_HOST, "Peer ALIAS: %s PEERID: %u REPLICA: %u CAN REQUEST KEYS: %u CAN ISSUE INHIBIT: %u HAS CALL PRIORITY: %u", peerAlias.c_str(), peerId, peerReplica, canRequestKeys, canIssueInhibit, hasCallPriority);
     }
 
     /*
@@ -357,18 +365,18 @@ private:
                 // update peer
                 auto peers = g_pidLookups->tableAsList();
                 auto it = std::find_if(peers.begin(), peers.end(),
-                    [&](lookups::PeerId x)
-                    {
+                    [&](lookups::PeerId& x) {
                         return x.peerId() == m_origPeerId;
                     });
                 if (it != peers.end()) {
-                    LogMessage(LOG_HOST, "Updating peer %s (%u) to %s (%u)", it->peerAlias().c_str(), it->peerId(), m_rule.peerAlias().c_str(), m_rule.peerId());
+                    LogInfoEx(LOG_HOST, "Updating peer %s (%u) to %s (%u)", it->peerAlias().c_str(), it->peerId(), m_rule.peerAlias().c_str(), m_rule.peerId());
                     g_pidLookups->eraseEntry(m_origPeerId);
 
                     lookups::PeerId entry = lookups::PeerId(m_rule.peerId(), m_rule.peerAlias(), m_rule.peerPassword(), false);
-                    entry.peerLink(m_rule.peerLink());
+                    entry.peerReplica(m_rule.peerReplica());
                     entry.canRequestKeys(m_rule.canRequestKeys());
                     entry.canIssueInhibit(m_rule.canIssueInhibit());
+                    entry.hasCallPriority(m_rule.hasCallPriority());
 
                     g_pidLookups->addEntry(m_rule.peerId(), entry);
 
@@ -383,8 +391,7 @@ private:
 
                 auto peers = g_pidLookups->tableAsList();
                 auto it = std::find_if(peers.begin(), peers.end(),
-                    [&](lookups::PeerId x)
-                    {
+                    [&](lookups::PeerId& x) {
                         return x.peerId() == m_rule.peerId();
                     });
                 if (it != peers.end()) {
@@ -397,15 +404,16 @@ private:
 
                 // add new peer
                 if (m_saveCopy.isChecked()) {
-                    LogMessage(LOG_HOST, "Copying Peer. Adding Peer %s (%u)", m_rule.peerAlias().c_str(), m_rule.peerId());
+                    LogInfoEx(LOG_HOST, "Copying Peer. Adding Peer %s (%u)", m_rule.peerAlias().c_str(), m_rule.peerId());
                 } else {
-                    LogMessage(LOG_HOST, "Adding Peer %s (%u)", m_rule.peerAlias().c_str(), m_rule.peerId());
+                    LogInfoEx(LOG_HOST, "Adding Peer %s (%u)", m_rule.peerAlias().c_str(), m_rule.peerId());
                 }
 
                 lookups::PeerId entry = lookups::PeerId(m_rule.peerId(), m_rule.peerAlias(), m_rule.peerPassword(), false);
-                entry.peerLink(m_rule.peerLink());
+                entry.peerReplica(m_rule.peerReplica());
                 entry.canRequestKeys(m_rule.canRequestKeys());
                 entry.canIssueInhibit(m_rule.canIssueInhibit());
+                entry.hasCallPriority(m_rule.hasCallPriority());
 
                 g_pidLookups->addEntry(m_rule.peerId(), entry);
 

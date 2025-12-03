@@ -21,6 +21,8 @@
 #include "common/network/Network.h"
 #include "common/network/PacketBuffer.h"
 #include "common/ThreadPool.h"
+#include "fne/network/SpanningTree.h"
+#include "fne/network/HAParameters.h"
 
 #include <string>
 #include <cstdint>
@@ -37,17 +39,17 @@ namespace network
      * @ingroup fne_network
      */
     struct PeerPacketRequest : thread_t {
-        uint32_t peerId;                    //! Peer ID for this request.
-        uint32_t streamId;                  //! Stream ID for this request.
+        uint32_t peerId;                    //!< Peer ID for this request.
+        uint32_t streamId;                  //!< Stream ID for this request.
 
-        frame::RTPHeader rtpHeader;         //! RTP Header
-        frame::RTPFNEHeader fneHeader;      //! RTP FNE Header
-        int length = 0U;                    //! Length of raw data buffer
-        uint8_t* buffer = nullptr;          //! Raw data buffer
+        frame::RTPHeader rtpHeader;         //!< RTP Header
+        frame::RTPFNEHeader fneHeader;      //!< RTP FNE Header
+        int length = 0U;                    //!< Length of raw data buffer
+        uint8_t* buffer = nullptr;          //!< Raw data buffer
 
-        network::NET_SUBFUNC::ENUM subFunc; //! Sub-function of the packet
+        network::NET_SUBFUNC::ENUM subFunc; //!< Sub-function of the packet
 
-        uint64_t pktRxTime;                 //! Packet receive time
+        uint64_t pktRxTime;                 //!< Packet receive time
     };
 
     // ---------------------------------------------------------------------------
@@ -87,6 +89,11 @@ namespace network
         ~PeerNetwork() override;
 
         /**
+         * @brief Set the peer ID of this FNE's master.
+         * @param masterPeerId Master Peer ID.
+         */
+        void setMasterPeerId(uint32_t masterPeerId) { m_masterPeerId = masterPeerId; }
+        /**
          * @brief Sets the instances of the Peer List lookup tables.
          * @param pidLookup Peer List Lookup Table Instance
          */
@@ -125,39 +132,127 @@ namespace network
         void setAnalogCallback(std::function<void(PeerNetwork*, const uint8_t*, uint32_t, uint32_t, const frame::RTPFNEHeader&, const frame::RTPHeader&)>&& callback) { m_analogCallback = callback; }
 
         /**
-         * @brief Gets the blocked traffic peer ID table.
-         * @returns std::vector<uint32_t> List of peer IDs this peer network cannot send traffic to.
+         * @brief Helper to set the network tree disconnect callback.
+         * @param callback 
          */
-        std::vector<uint32_t> blockTrafficTo() const { return m_blockTrafficToTable; }
+        void setNetTreeDiscCallback(std::function<void(PeerNetwork*, const uint32_t offendingPeerId)>&& callback) { m_netTreeDiscCallback = callback; }
         /**
-         * @brief Adds an entry to the blocked traffic peer ID table.
-         * @param peerId Peer ID to add to the blocked traffic table.
+         * @brief Helper to set the peer replica notification callback.
+         * @param callback 
          */
-        void addBlockedTrafficPeer(uint32_t peerId) { m_blockTrafficToTable.push_back(peerId); }
-        /**
-         * @brief Checks if the passed peer ID is blocked from sending to this peer.
-         * @returns bool True, if blocked peer table is cleared, otherwise false.
-         */
-        bool checkBlockedPeer(uint32_t peerId);
+        void setNotifyPeerReplicaCallback(std::function<void(PeerNetwork*)>&& callback) { m_peerReplicaCallback = callback; }
 
         /**
          * @brief Writes a complete update of this CFNE's active peer list to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the active peer listmessage.
+         *  The active peer list message is a JSON body, and is a packet buffer compressed message.
+         *
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Protocol Tag (REPL)                                           |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Variable Length JSON Payload ................................ |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *
+         * The JSON payload is variable length and looks like this:
+         *  {
+         *      "peerId": <Peer ID>,
+         *      "address": "<Peer IP Address>",
+         *      "port": <Peer Port>,
+         *      "connected": <Boolean flag indicating whether or not this peer is connected>,
+         *      "connectionState": <Numerical connection state value>,
+         *      "pingsReceived": <Number of pings received>,
+         *      "lastPing": <Last ping time>,
+         *      "controlChannel": <Control Channel Peer ID>,
+         *      "config": {
+         *          <This is the JSON object from writeConfig()>
+         *      },
+         *      "voiceChannels": [
+         *          <Peer ID>,
+         *      ]
+         *  }
+         * \endcode
          * @param peerList List of active peers.
          * @returns bool True, if list was sent, otherwise false.
          */
         bool writePeerLinkPeers(json::array* peerList);
+        /**
+         * @brief Writes a complete update of this CFNE's known spanning tree upstream to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the spanning tree message.
+         *  The spanning tree message is a JSON body, and is a packet buffer compressed message.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Protocol Tag (REPL)                                           |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Variable Length JSON Payload ................................ |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * 
+         * The JSON payload is variable length and looks like this:
+         *  {
+         *      "id": <FNE Peer ID>,
+         *      "masterId": <FNE Master ID>,
+         *      "identity": "<FNE Peer Identity>",
+         *      "children": [
+         *          "id": <FNE Peer ID>,
+         *          "masterId": <FNE Master ID>,
+         *          "identity": "<FNE Peer Identity>",
+         *          "children": [],
+         *      ]
+         *  }
+         * \endcode
+         * @param treeRoot Root of the master tree.
+         * @returns bool True, if list was sent, otherwise false.
+         */
+        bool writeSpanningTree(SpanningTree* treeRoot);
+        /**
+         * @brief Writes a complete update of this CFNE's HA parameters to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is variable bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Total length of all included entries                          |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Peer ID                                                |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: IP Address                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Port                   |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
+         * @param haParams List of HA parameters.
+         * @returns bool True, if list was sent, otherwise false.
+         */
+        bool writeHAParams(std::vector<HAParameters>& haParams);
 
         /**
-         * @brief Returns flag indicating whether or not this peer connection is Peer-Link enabled.
-         * @returns bool True, if Peer-Link enabled, otherwise false.
+         * @brief Returns flag indicating whether or not this peer connection is peer replication enabled.
+         * @returns bool True, if peer replication enabled, otherwise false.
          */
-        bool isPeerLink() const { return m_peerLink; }
+        bool isReplica() const { return m_peerReplica; }
 
         /**
-         * @brief Enables the option that will save the pushed peer link ACL data to the local ACL files.
-         * @param enabled Flag to enable ACL data saving.
+         * @brief Enables the option that will save replicated ACL data to the local ACL files.
+         * @param enabled Flag to enable replicated ACL data saving.
          */
-        void setPeerLinkSaveACL(bool enabled) { m_peerLinkSavesACL = enabled; }
+        void setPeerReplicationSaveACL(bool enabled) { m_peerReplicaSavesACL = enabled; }
+
+        /**
+         * @brief Gets the remote peer ID.
+         * @returns uint32_t Remote Peer ID.
+         */
+        uint32_t getRemotePeerId() const { return m_remotePeerId; }
 
     public:
         /**
@@ -166,8 +261,6 @@ namespace network
         DECLARE_PROPERTY(bool, attachedKeyRSPHandler, AttachedKeyRSPHandler);
 
     protected:
-        std::vector<uint32_t> m_blockTrafficToTable;
-
         /**
          * @brief DMR Protocol Callback.
          *  (This is called when the master sends a DMR packet.)
@@ -190,6 +283,15 @@ namespace network
         std::function<void(PeerNetwork* peer, const uint8_t* data, uint32_t length, uint32_t streamId, const frame::RTPFNEHeader& fneHeader, const frame::RTPHeader& rtpHeader)> m_analogCallback;
 
         /**
+         * @brief Network Tree Disconnect Callback.
+         */
+        std::function<void(PeerNetwork* peer, const uint32_t offendingPeerId)> m_netTreeDiscCallback;
+        /**
+         * @brief Peer Replica Notification Callback.
+         */
+        std::function<void(PeerNetwork* peer)> m_peerReplicaCallback;
+
+        /**
          * @brief User overrideable handler that allows user code to process network packets not handled by this class.
          * @param peerId Peer ID.
          * @param opcode FNE network opcode pair.
@@ -209,15 +311,19 @@ namespace network
         bool writeConfig() override;
 
     private:
+        uint32_t m_masterPeerId;
+
         lookups::PeerListLookup* m_pidLookup;
-        bool m_peerLink;
-        bool m_peerLinkSavesACL;
+        bool m_peerReplica;
+        bool m_peerReplicaSavesACL;
 
         PacketBuffer m_tgidPkt;
         PacketBuffer m_ridPkt;
         PacketBuffer m_pidPkt;
 
         ThreadPool m_threadPool;
+
+        uint32_t m_prevSpanningTreeChildren;
 
         /**
          * @brief Entry point to process a given network packet.

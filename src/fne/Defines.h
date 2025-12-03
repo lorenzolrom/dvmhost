@@ -20,6 +20,7 @@
 #define __DEFINES_H__
 
 #include "common/Defines.h"
+#include "common/GitHash.h"
 
 // ---------------------------------------------------------------------------
 //  Constants
@@ -37,5 +38,15 @@
 #define DEFAULT_CONF_FILE "fne-config.yml"
 #undef DEFAULT_LOCK_FILE
 #define DEFAULT_LOCK_FILE "/tmp/dvmfne.lock"
+
+/** @cond */
+
+#define LOG_MASTER  "MSTR"
+#define LOG_DIAG    "DIAG"
+#define LOG_PEER    "PEER"
+#define LOG_REPL    "REPL"
+#define LOG_STP     "STP"
+
+/** @endcond */
 
 #endif // __DEFINES_H__

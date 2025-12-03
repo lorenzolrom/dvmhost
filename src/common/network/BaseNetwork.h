@@ -32,8 +32,8 @@
 #include "common/p25/lc/LC.h"
 #include "common/p25/Audio.h"
 #include "common/nxdn/lc/RTCH.h"
+#include "common/json/json.h"
 #include "common/network/FrameQueue.h"
-#include "common/network/json/json.h"
 #include "common/network/udp/Socket.h"
 #include "common/RingBuffer.h"
 #include "common/Utils.h"
@@ -63,13 +63,15 @@
 #define TAG_REPEATER_GRANT      "RPTG"
 #define TAG_REPEATER_KEY        "RKEY"
 
+#define TAG_INCALL_CTRL         "ICC "
+
 #define TAG_TRANSFER            "TRNS"
 #define TAG_TRANSFER_ACT_LOG    "TRNSLOG"
 #define TAG_TRANSFER_DIAG_LOG   "TRNSDIAG"
 #define TAG_TRANSFER_STATUS     "TRNSSTS"
 
 #define TAG_ANNOUNCE            "ANNC"
-#define TAG_PEER_LINK           "PRLNK"
+#define TAG_PEER_REPLICA        "REPL"
 
 #define MAX_PEER_PING_TIME      60U // 60 seconds
 
@@ -93,25 +95,27 @@ namespace network
     const uint32_t  NXDN_PACKET_LENGTH = 70U;       // 20 byte header + NXDN_FRAME_LENGTH_BYTES + 2 byte trailer
     const uint32_t  ANALOG_PACKET_LENGTH = 324U;    // 20 byte header + AUDIO_SAMPLES_LENGTH_BYTES + 4 byte trailer
 
+    const uint32_t  HA_PARAMS_ENTRY_LEN = 20U;
+
     /**
      * @brief Network Peer Connection Status
      * @ingroup network_core
      */
     enum NET_CONN_STATUS {
         // Common States
-        NET_STAT_WAITING_CONNECT,                   //! Waiting for Connection
-        NET_STAT_WAITING_LOGIN,                     //! Waiting for Login
-        NET_STAT_WAITING_AUTHORISATION,             //! Waiting for Authorization
-        NET_STAT_WAITING_CONFIG,                    //! Waiting for Configuration
-        NET_STAT_RUNNING,                           //! Peer Running
+        NET_STAT_WAITING_CONNECT,                   //!< Waiting for Connection
+        NET_STAT_WAITING_LOGIN,                     //!< Waiting for Login
+        NET_STAT_WAITING_AUTHORISATION,             //!< Waiting for Authorization
+        NET_STAT_WAITING_CONFIG,                    //!< Waiting for Configuration
+        NET_STAT_RUNNING,                           //!< Peer Running
 
         // Master States
-        NET_STAT_RPTL_RECEIVED,                     //! Login Received
-        NET_STAT_CHALLENGE_SENT,                    //! Authentication Challenge Sent
+        NET_STAT_RPTL_RECEIVED,                     //!< Login Received
+        NET_STAT_CHALLENGE_SENT,                    //!< Authentication Challenge Sent
 
-        NET_STAT_MST_RUNNING,                       //! Master Running
+        NET_STAT_MST_RUNNING,                       //!< Master Running
 
-        NET_STAT_INVALID = 0x7FFFFFF                //! Invalid
+        NET_STAT_INVALID = 0x7FFFFFF                //!< Invalid
     };
 
     /**
@@ -119,20 +123,21 @@ namespace network
      * @ingroup network_core
      */
     enum NET_CONN_NAK_REASON {
-        NET_CONN_NAK_GENERAL_FAILURE,               //! General Failure
+        NET_CONN_NAK_GENERAL_FAILURE,               //!< General Failure
 
-        NET_CONN_NAK_MODE_NOT_ENABLED,              //! Mode Not Enabled
-        NET_CONN_NAK_ILLEGAL_PACKET,                //! Illegal Packet
+        NET_CONN_NAK_MODE_NOT_ENABLED,              //!< Mode Not Enabled
+        NET_CONN_NAK_ILLEGAL_PACKET,                //!< Illegal Packet
 
-        NET_CONN_NAK_FNE_UNAUTHORIZED,              //! FNE Unauthorized
-        NET_CONN_NAK_BAD_CONN_STATE,                //! Bad Connection State
-        NET_CONN_NAK_INVALID_CONFIG_DATA,           //! Invalid Configuration Data
-        NET_CONN_NAK_PEER_RESET,                    //! Peer Reset
-        NET_CONN_NAK_PEER_ACL,                      //! Peer ACL
+        NET_CONN_NAK_FNE_UNAUTHORIZED,              //!< FNE Unauthorized
+        NET_CONN_NAK_BAD_CONN_STATE,                //!< Bad Connection State
+        NET_CONN_NAK_INVALID_CONFIG_DATA,           //!< Invalid Configuration Data
+        NET_CONN_NAK_PEER_RESET,                    //!< Peer Reset
+        NET_CONN_NAK_PEER_ACL,                      //!< Peer ACL
 
-        NET_CONN_NAK_FNE_MAX_CONN,                  //! FNE Maximum Connections
+        NET_CONN_NAK_FNE_MAX_CONN,                  //!< FNE Maximum Connections
+        NET_CONN_NAK_FNE_DUPLICATE_CONN,            //!< FNE Duplicate Connection
 
-        NET_CONN_NAK_INVALID = 0xFFFF               //! Invalid
+        NET_CONN_NAK_INVALID = 0xFFFF               //!< Invalid
     };
 
     /**
@@ -141,11 +146,219 @@ namespace network
      * @ingroup network_core
      */
     enum CONTROL_BYTE {
-        NET_CTRL_GRANT_DEMAND = 0x80U,              //! Grant Demand
-        NET_CTRL_GRANT_DENIAL = 0x40U,              //! Grant Denial
-        NET_CTRL_SWITCH_OVER = 0x20U,               //! Call Source RID Switch Over
-        NET_CTRL_GRANT_ENCRYPT = 0x08U,             //! Grant Encrypt
-        NET_CTRL_U2U = 0x01U,                       //! Unit-to-Unit
+        NET_CTRL_GRANT_DEMAND = 0x80U,              //!< Grant Demand
+        NET_CTRL_GRANT_DENIAL = 0x40U,              //!< Grant Denial
+        NET_CTRL_SWITCH_OVER = 0x20U,               //!< Call Source RID Switch Over
+        NET_CTRL_GRANT_ENCRYPT = 0x08U,             //!< Grant Encrypt
+        NET_CTRL_U2U = 0x01U,                       //!< Unit-to-Unit
+    };
+
+    /**
+     * @brief RTP Stream Multiplex Validation Return Codes
+     * @ingroup network_core
+     */
+    enum MULTIPLEX_RET_CODE {
+        MUX_VALID_SUCCESS = 0U,                     //!< Successful Validation
+
+        MUX_LOST_FRAMES = 1U,                       //!< Lost Frames
+        MUX_OUT_OF_ORDER = 2U                       //!< Out-of-Order
+    };
+
+    // ---------------------------------------------------------------------------
+    //  Class Declaration
+    // ---------------------------------------------------------------------------
+
+    /**
+     * @brief Handles dealing with maintaining RTP sequencing for multiple multiplexed RTP streams.
+     * @ingroup fne_network
+     */
+    class HOST_SW_API RTPStreamMultiplex {
+    public:
+        auto operator=(RTPStreamMultiplex&) -> RTPStreamMultiplex& = delete;
+        auto operator=(RTPStreamMultiplex&&) -> RTPStreamMultiplex& = delete;
+        RTPStreamMultiplex(RTPStreamMultiplex&) = delete;
+
+        /**
+         * @brief Initializes a new instance of the RTPStreamMultiplex class.
+         */
+        RTPStreamMultiplex() :
+            m_mutex(),
+            m_streamSeqNos()
+        {
+            /* stub */
+        }
+        /**
+         * @brief Finalizes a instance of the RTPStreamMultiplex class.
+         */
+        ~RTPStreamMultiplex()
+        {
+            m_streamSeqNos.clear();
+        }
+
+        /**
+         * @brief Helper to verify the given RTP sequence for the given multiplexed RTP stream.
+         * @param streamId Stream ID.
+         * @param pktSeq Packet Sequence.
+         * @param func Network function.
+         * @param[out] lastRxSeq Last Received Sequence.
+         * @return MULTIPLEX_RET_CODE Return code.
+         */
+        MULTIPLEX_RET_CODE verifyStream(uint64_t streamId, uint16_t pktSeq, uint8_t func, uint16_t* lastRxSeq)
+        {
+            MULTIPLEX_RET_CODE ret = MUX_VALID_SUCCESS;
+            if (pktSeq == RTP_END_OF_CALL_SEQ) {
+                // only reset packet sequences if we're a PROTOCOL or RPTC function
+                if ((func == NET_FUNC::PROTOCOL) || (func == NET_FUNC::RPTC)) {
+                    erasePktSeq(streamId); // attempt to erase packet sequence for the stream
+                }
+            } else {
+                if (hasPktSeq(streamId)) {
+                    *lastRxSeq = getPktSeq(streamId);
+
+                    if (*lastRxSeq == RTP_END_OF_CALL_SEQ) {
+                        // reset the received sequence back to 0
+                        setPktSeq(streamId, 0U);
+                    }
+                    else {
+                        if ((pktSeq >= *lastRxSeq) || (pktSeq == 0U)) {
+                            // if the sequence isn't 0, and is greater then the last received sequence + 1 frame
+                            // assume a packet was lost
+                            if ((pktSeq != 0U) && pktSeq >= *lastRxSeq + 1U) {
+                                ret = MUX_LOST_FRAMES;
+                            }
+
+                            setPktSeq(streamId, pktSeq);
+                        }
+                        else {
+                            if (pktSeq < *lastRxSeq) {
+                                ret = MUX_OUT_OF_ORDER;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return ret;
+        }
+
+        /**
+         * @brief Helper to return the current count of multiplexed RTP streams.
+         * @returns size_t Count of stored streams.
+         */
+        size_t streamCount()
+        {
+            return m_streamSeqNos.size();
+        }
+
+        /**
+         * @brief Helper to determine if the given multiplexed stream has a stored RTP sequence.
+         * @param streamId Stream ID.
+         * @returns bool True, if stream ID has a stored RTP sequence, otherwise false.
+         */
+        bool hasPktSeq(uint64_t streamId)
+        {
+            bool ret = false;
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+            // determine if the stream has a current sequence no and return
+            {
+                auto it = m_streamSeqNos.find(streamId);
+                if (it == m_streamSeqNos.end()) {
+                    ret = false;
+                }
+                else {
+                    ret = true;
+                }
+            }
+
+            return ret;
+        }
+
+        /**
+         * @brief Helper to get the stored RTP sequence for the given multiplexed stream.
+         * @param streamId Stream ID.
+         * @returns uint16_t Sequence number.
+         */
+        uint16_t getPktSeq(uint64_t streamId)
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+            // find the current sequence no and return
+            uint32_t pktSeq = 0U;
+            {
+                auto it = m_streamSeqNos.find(streamId);
+                if (it == m_streamSeqNos.end()) {
+                    pktSeq = RTP_END_OF_CALL_SEQ;
+                } else {
+                    pktSeq = m_streamSeqNos[streamId];
+                }
+            }
+
+            return pktSeq;
+        }
+
+        /**
+         * @brief Helper to set the stored RTP sequence for the given multiplexed stream.
+         * @param streamId Stream ID.
+         * @param seq Sequence number.
+         */
+        void setPktSeq(uint64_t streamId, uint16_t seq)
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            auto it = m_streamSeqNos.find(streamId);
+            if (it == m_streamSeqNos.end()) {
+                m_streamSeqNos.insert({streamId, seq});
+            } else {
+                m_streamSeqNos[streamId] = seq;
+            }
+        }
+
+        /**
+         * @brief Helper to increment the stored RTP sequence for the given multiplexed stream.
+         * @param streamId Stream ID.
+         * @returns uint16_t Incremented packet sequence.
+         */
+        uint16_t incPktSeq(uint64_t streamId)
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+            uint32_t pktSeq = 0U;
+            auto it = m_streamSeqNos.find(streamId);
+            if (it == m_streamSeqNos.end()) {
+                m_streamSeqNos.insert({streamId, pktSeq});
+            } else {
+                pktSeq = m_streamSeqNos[streamId];
+                ++pktSeq;
+
+                if (pktSeq > (RTP_END_OF_CALL_SEQ - 1U))
+                    pktSeq = 0U;
+
+                m_streamSeqNos[streamId] = pktSeq;
+            }
+
+            return pktSeq;
+        }
+
+        /**
+         * @brief Helper to erase the stored RTP sequence for the given multiplexed stream.
+         * @param streamId Stream ID.
+         */
+        void erasePktSeq(uint64_t streamId)
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+            // find the sequence no and erase
+            {
+                auto entry = m_streamSeqNos.find(streamId);
+                if (entry != m_streamSeqNos.end()) {
+                    m_streamSeqNos.erase(streamId);
+                }
+            }
+        }
+
+    private:
+        std::recursive_mutex m_mutex;
+        std::unordered_map<uint64_t, uint16_t> m_streamSeqNos;
     };
 
     // ---------------------------------------------------------------------------
@@ -183,6 +396,26 @@ namespace network
 
         /**
          * @brief Writes a grant request to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the group affiliation
+         *  announcement message. The message is 24 bytes in length.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                                                               |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                               | Source ID                     |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Source ID                     | Destination ID                |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Destination ID                | Reserved      |S| Reserverd   |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Mode          | Reserved                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param mode Digital Mode.
          * @param srcId Source Radio ID.
          * @param dstId Destination Radio ID.
@@ -202,6 +435,22 @@ namespace network
 
         /**
          * @brief Writes the local activity log to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the activity log message.
+         *  The message is variable length bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                                                               |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                                               | Log Message . |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Log Message ................................................. |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param message Textual string to send as activity log information.
          * @returns bool True, if message was sent, otherwise false. 
          */
@@ -209,13 +458,100 @@ namespace network
 
         /**
          * @brief Writes the local diagnostic logs to the network.
-         * @param message Textual string to send as diagnostic log information.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the diagnostic log message.
+         *  The message is variable length bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                                                               |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                                               | Log Message . |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Log Message ................................................. |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @returns bool True, if message was sent, otherwise false. 
          */
         virtual bool writeDiagLog(const char* message);
 
         /**
          * @brief Writes the local status to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the peer status message.
+         *  The message is variable length bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Reserved                                                      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                                                               |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      |                                               | Variable      |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Length JSON Payload ......................................... |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * 
+         * The JSON payload is variable length and looks like this:
+         *  {
+         *      "state": <Modem State>,
+         *      "isTxCW": <Boolean flag indicating if the end-point is transmitting CW>,
+         *      "fixedMode": <Boolean flag indicating if the end-point is operating in fixed mode>,
+         *      "dmrTSCCEnable": <Boolean flag indicating whether or not dedicated DMR TSCC is enabled>,
+         *      "dmrCC": <Boolean flag indicating whether or not DMR CC is enabled>,
+         *      "p25CtrlEnable": <Boolean flag indicating whether or not dedicatd P25 control is enabled>,
+         *      "p25CC": <Boolean flag indicating whether or not P25 CC is enabled>,
+         *      "nxdnCtrlEnable": <Boolean flag indicating whether or not dedicatd NXDN control is enabled>,
+         *      "nxdnCC": <Boolean flag indicating whether or not NXDN CC is enabled>,
+         *      "tx": <Boolean flag indicating whether end-point is transmitting>,
+         *      "channelId": <Channel ID from the IDEN channel bandplan>,
+         *      "channelNo": <Channel Number from the IDEN channel bandplan>,
+         *      "lastDstId": <Last destination ID transmitted, may revert to 0 after a call ends>,
+         *      "lastSrcId": <Last source ID transmitted, may revert to 0 after a call ends>,
+         *      "peerId": <Unique Peer Identification Number>,
+         *      "sysId": <System ID>,
+         *      "siteId": <Site ID>,
+         *      "p25RfssId": <P25 RFSS ID>,
+         *      "p25NetId": <P25 WACN/Network ID>,
+         *      "p25NAC": <P25 NAC>,
+         *      "vcChannels": [
+         *          {
+         *              "channelId": <Channel ID from the IDEN channel bandplan>,
+         *              "channelNo": <Channel Number from the IDEN channel bandplan>,
+         *              "tx": <Boolean flag indicating whether end-point is transmitting>,
+         *              "lastDstId": <Last destination ID transmitted, may revert to 0 after a call ends>,
+         *              "lastSrcId": <Last source ID transmitted, may revert to 0 after a call ends>,
+         *          }
+         *      ],
+         *      "modem": {
+         *          "portType": "<Port Type>",
+         *          "modemPort": "<Modem Port>",
+         *          "portSpeed": <Port Speed>,
+         *          "rxLevel": <Configured Rx Level>,
+         *          "cwTxLevel": <Configured CWID Tx Level>,
+         *          "dmrTxLevel": <Configured DMR Tx Level>,
+         *          "p25TxLevel": <Configured P25 Tx Level>,
+         *          "nxdnTxLevel": <Configured NXDN Tx Level>,
+         *          "rxDCOffset": <Configured Rx DC Offset>,
+         *          "txDCOffset": <Configured Tx DC Offset>,
+         *          "fdmaPremables": <Configured FDMA Preambles>,
+         *          "dmrRxDelay": <Configured DMR Rx Delay>,
+         *          "p25CorrCount": <Configured P25 Correlation Count>,
+         *          "rxFrequency": <Peer Rx Frequency in Hz>,
+         *          "txFrequency": <Peer Tx Frequency in Hz>,
+         *          "rxTuning": <Peer Rx Tuning Offset>,
+         *          "txTuning": <Peer Tx Tuning Offset>,
+         *          "rxFrequencyEffective": <Peer Rx Effective Frequency in Hz>,
+         *          "txFrequencyEffective": <Peer Tx Effective Frequency in Hz>,
+         *          "v24Connected": <Boolean indicating V.24 is connected (if a V.24 modem)>,
+         *          "protoVer": <Protocol version>
+         *      }
+         *  }
+         * \endcode
          * @param obj JSON object representing the local peer status.
          * @returns bool True, if peer status was sent, otherwise false. 
          */
@@ -242,6 +578,16 @@ namespace network
         virtual bool announceGroupAffiliation(uint32_t srcId, uint32_t dstId);
         /**
          * @brief Writes a group affiliation removal to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the unit registration
+         *  announcement message. The message is 3 bytes in length.
+         * 
+         *  Byte 0               1               2
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Source ID                                     |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param srcId Source Radio ID.
          * @returns bool True, if group affiliation announcement was sent, otherwise false. 
          */
@@ -265,6 +611,16 @@ namespace network
         virtual bool announceUnitRegistration(uint32_t srcId);
         /**
          * @brief Writes a unit deregistration to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the unit deregistration
+         *  announcement message. The message is 3 bytes in length.
+         * 
+         *  Byte 0               1               2
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Source ID                                     |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param srcId Source Radio ID.
          * @returns bool True, if unit deregistration announcement was sent, otherwise false. 
          */
@@ -272,6 +628,22 @@ namespace network
 
         /**
          * @brief Writes a complete update of the peer affiliation list to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is variable bytes in length.
+         * 
+         *  Each affiliation update entry is 7 bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Number of entries                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Source ID                                | E: Dst Id   |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Destination ID                           |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param affs Complete map of peer unit affiliations.
          * @returns bool True, if affiliation update announcement was sent, otherwise false. 
          */
@@ -279,6 +651,20 @@ namespace network
 
         /**
          * @brief Writes a complete update of the peer's voice channel list to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is variable bytes in length.
+         * 
+         *  Each peer ID entry is 4 bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Number of entries                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Peer ID                                                |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
          * @param peers List of voice channel peers.
          * @returns bool True, if peer update announcement was sent, otherwise false. 
          */
@@ -348,15 +734,13 @@ namespace network
          * @param length Length of buffer to write.
          * @param pktSeq RTP packet sequence.
          * @param streamId Stream ID.
-         * @param queueOnly Flag indicating this message should be queued instead of send immediately.
          * @param useAlternatePort Flag indicating the message shuold be sent using the alternate port (mainly for activity and diagnostics).
          * @param peerId If non-zero, overrides the peer ID sent in the packet to the master.
          * @param ssrc If non-zero, overrides the RTP synchronization source ID sent in the packet to the master.
          * @returns bool True, if message was sent, otherwise false. 
          */
         bool writeMaster(FrameQueue::OpcodePair opcode, const uint8_t* data, uint32_t length, 
-            uint16_t pktSeq, uint32_t streamId, bool queueOnly = false, bool useAlternatePort = false, uint32_t peerId = 0U,
-            uint32_t ssrc = 0U);
+            uint16_t pktSeq, uint32_t streamId, bool useAlternatePort = false, uint32_t peerId = 0U, uint32_t ssrc = 0U);
 
         // Digital Mobile Radio
         /**
@@ -592,6 +976,9 @@ namespace network
          *      | Reserved                                                      |
          *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
          * 
+         *  S = Slot Number (clear Slot 1, set Slot 2)
+         *  G = Group Flag
+         * 
          *  The data starting at offset 20 for 33 bytes of the raw DMR frame.
          * 
          *  DMR frame message has 2 trailing bytes:
@@ -754,6 +1141,8 @@ namespace network
          *      | Blk to Flw    | Current Block | DUID          | Frame Length  |
          *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
          * 
+         *  C = Confirmed PDU Flag
+         * 
          *  The data starting at offset 24 for variable number of bytes (DUID dependant)
          *  is the P25 frame.
          * \endcode
@@ -788,6 +1177,8 @@ namespace network
          *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
          *      |                                               | Frame Length  |
          *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * 
+         *  G = Group Flag
          * 
          *  The data starting at offset 24 for 48 bytes if the raw NXDN frame.
          * \endcode

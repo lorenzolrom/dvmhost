@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2018-2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2018-2025 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -37,6 +37,11 @@ namespace p25
         class HOST_SW_API DataBlock {
         public:
             /**
+             * @brief Initializes a copy instance of the DataBlock class.
+             * @param data Instance of DataBlock class to copy from.
+             */
+            DataBlock(const DataBlock& data);
+            /**
              * @brief Initializes a new instance of the DataBlock class.
              */
             DataBlock();
@@ -49,14 +54,16 @@ namespace p25
              * @brief Decodes P25 PDU data block.
              * @param[in] data Buffer containing a PDU data block to decode.
              * @param header P25 PDU data header.
+             * @param noTrellis Flag indicating not to perform Trellis encoding.
              * @returns bool True, if PDU data block decoded, otherwise false.
              */
-            bool decode(const uint8_t* data, const DataHeader& header);
+            bool decode(const uint8_t* data, const DataHeader& header, bool noTrellis = false);
             /**
              * @brief Encodes a P25 PDU data block.
              * @param[out] data Buffer to encode a PDU data block.
+             * @param noTrellis Flag indicating not to perform Trellis encoding.
              */
-            void encode(uint8_t* data);
+            void encode(uint8_t* data, bool noTrellis = false);
 
             /**
              * @brief Sets the data format.
@@ -104,6 +111,11 @@ namespace p25
             uint8_t m_headerSap;
 
             uint8_t* m_data;
+
+            /**
+             * @brief Internal helper to copy the class.
+             */
+            void copy(const DataBlock& data);
         };
     } // namespace data
 } // namespace p25

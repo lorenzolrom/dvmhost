@@ -22,8 +22,8 @@ using namespace lookups;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex PeerListLookup::m_mutex;
-bool PeerListLookup::m_locked = false;
+std::mutex PeerListLookup::s_mutex;
+bool PeerListLookup::s_locked = false;
 
 // ---------------------------------------------------------------------------
 //  Macros
@@ -31,16 +31,16 @@ bool PeerListLookup::m_locked = false;
 
 // Lock the table.
 #define __LOCK_TABLE()                          \
-    std::lock_guard<std::mutex> lock(m_mutex);  \
-    m_locked = true;
+    std::lock_guard<std::mutex> lock(s_mutex);  \
+    s_locked = true;
 
 // Unlock the table.
-#define __UNLOCK_TABLE() m_locked = false;
+#define __UNLOCK_TABLE() s_locked = false;
 
 // Spinlock wait for table to be read unlocked.
 #define __SPINLOCK()                            \
-    if (m_locked) {                             \
-        while (m_locked)                        \
+    if (s_locked) {                             \
+        while (s_locked)                        \
             Thread::sleep(2U);                  \
     }
 
@@ -123,9 +123,9 @@ PeerId PeerListLookup::find(uint32_t id)
 
 /* Commit the table. */
 
-void PeerListLookup::commit()
+void PeerListLookup::commit(bool quiet)
 {
-    save();
+    save(quiet);
 }
 
 /* Gets whether the lookup is enabled. */
@@ -223,9 +223,9 @@ bool PeerListLookup::load()
                 alias = parsed[3].c_str();
 
             // parse peer link flag
-            bool peerLink = false;
+            bool peerReplica = false;
             if (parsed.size() >= 3)
-                peerLink = ::atoi(parsed[2].c_str()) == 1;
+                peerReplica = ::atoi(parsed[2].c_str()) == 1;
 
             // parse can request keys flag
             bool canRequestKeys = false;
@@ -237,6 +237,11 @@ bool PeerListLookup::load()
             if (parsed.size() >= 6)
                 canIssueInhibit = ::atoi(parsed[5].c_str()) == 1;
 
+            // parse can issue inhibit flag
+            bool hasCallPriority = false;
+            if (parsed.size() >= 7)
+                hasCallPriority = ::atoi(parsed[6].c_str()) == 1;
+
             // parse optional password
             std::string password = "";
             if (parsed.size() >= 2)
@@ -244,19 +249,21 @@ bool PeerListLookup::load()
 
             // load into table
             PeerId entry = PeerId(id, alias, password, false);
-            entry.peerLink(peerLink);
+            entry.peerReplica(peerReplica);
             entry.canRequestKeys(canRequestKeys);
             entry.canIssueInhibit(canIssueInhibit);
+            entry.hasCallPriority(hasCallPriority);
 
             m_table[id] = entry;
 
             // log depending on what was loaded
-            LogMessage(LOG_HOST, "Loaded peer ID %u%s into peer ID lookup table, %s%s%s", id,
+            LogInfoEx(LOG_HOST, "Loaded peer ID %u%s into peer ID lookup table, %s%s%s%s", id,
                 (!alias.empty() ? (" (" + alias + ")").c_str() : ""),
                 (!password.empty() ? "using unique peer password" : "using master password"),
-                (peerLink) ? ", Peer-Link Enabled" : "",
+                (peerReplica) ? ", Replication Enabled" : "",
                 (canRequestKeys) ? ", Can Request Keys" : "",
-                (canIssueInhibit) ? ", Can Issue Inhibit" : "");
+                (canIssueInhibit) ? ", Can Issue Inhibit" : "",
+                (hasCallPriority) ? ", Has Call Priority" : "");
         }
     }
 
@@ -273,7 +280,7 @@ bool PeerListLookup::load()
 
 /* Saves the table to the passed lookup table file. */
 
-bool PeerListLookup::save()
+bool PeerListLookup::save(bool quiet)
 {
     if (m_filename.empty()) {
         return false;
@@ -285,12 +292,13 @@ bool PeerListLookup::save()
         return false;
     }
 
-    LogMessage(LOG_HOST, "Saving peer lookup file to %s", m_filename.c_str());
+    if (!quiet)
+        LogInfoEx(LOG_HOST, "Saving peer lookup file to %s", m_filename.c_str());
 
     // Counter for lines written
     unsigned int lines = 0;
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
 
     // String for writing
     std::string line;
@@ -310,9 +318,9 @@ bool PeerListLookup::save()
         }
         line += ",";
 
-        // add peerLink flag
-        bool peerLink = entry.second.peerLink();
-        if (peerLink) {
+        // add peer replication flag
+        bool peerReplica = entry.second.peerReplica();
+        if (peerReplica) {
             line += "1,";
         } else {
             line += "0,";
@@ -342,6 +350,14 @@ bool PeerListLookup::save()
             line += "0,";
         }
 
+        // add hasCallPriority flag
+        bool hasCallPriority = entry.second.hasCallPriority();
+        if (hasCallPriority) {
+            line += "1,";
+        } else {
+            line += "0,";
+        }
+
         line += "\n";
         file << line;
         lines++;
@@ -352,7 +368,8 @@ bool PeerListLookup::save()
     if (lines != m_table.size())
         return false;
 
-    LogInfoEx(LOG_HOST, "Saved %u entries to lookup table file %s", lines, m_filename.c_str());
+    if (!quiet)
+        LogInfoEx(LOG_HOST, "Saved %u entries to lookup table file %s", lines, m_filename.c_str());
 
     return true;
 }

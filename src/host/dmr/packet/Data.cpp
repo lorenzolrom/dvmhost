@@ -45,7 +45,7 @@ bool Data::process(uint8_t* data, uint32_t len)
     DataType::E dataType = (DataType::E)(data[1U] & 0x0FU);
 
     SlotType slotType;
-    slotType.setColorCode(m_slot->m_colorCode);
+    slotType.setColorCode(m_slot->s_colorCode);
     slotType.setDataType(dataType);
 
     if (dataType == DataType::TERMINATOR_WITH_LC) {
@@ -60,7 +60,7 @@ bool Data::process(uint8_t* data, uint32_t len)
         slotType.encode(data + 2U);
 
         // Convert the Data Sync to be from the BS or MS as needed
-        Sync::addDMRDataSync(data + 2U, m_slot->m_duplex);
+        Sync::addDMRDataSync(data + 2U, m_slot->s_duplex);
 
         if (!m_slot->m_rfTimeout) {
             data[0U] = modem::TAG_EOT;
@@ -68,21 +68,21 @@ bool Data::process(uint8_t* data, uint32_t len)
 
             m_slot->writeNetwork(data, DataType::TERMINATOR_WITH_LC, 0U);
 
-            if (m_slot->m_duplex) {
-                for (uint32_t i = 0U; i < m_slot->m_hangCount; i++)
+            if (m_slot->s_duplex) {
+                for (uint32_t i = 0U; i < m_slot->s_hangCount; i++)
                     m_slot->addFrame(data);
             }
         }
 
         if (m_verbose) {
-            LogMessage(LOG_RF, DMR_DT_TERMINATOR_WITH_LC ", slot = %u, dstId = %u", m_slot->m_slotNo, m_slot->m_rfLC->getDstId());
+            LogInfoEx(LOG_RF, DMR_DT_TERMINATOR_WITH_LC ", slot = %u, dstId = %u", m_slot->m_slotNo, m_slot->m_rfLC->getDstId());
         }
 
         // release trunked grant (if necessary)
-        Slot *m_tscc = m_slot->m_dmr->getTSCCSlot();
+        Slot *m_tscc = m_slot->s_dmr->getTSCCSlot();
         if (m_tscc != nullptr) {
             if (m_tscc->m_enableTSCC) {
-                m_tscc->m_affiliations->releaseGrant(m_slot->m_rfLC->getDstId(), false);
+                m_tscc->s_affiliations->releaseGrant(m_slot->m_rfLC->getDstId(), false);
                 m_slot->clearTSCCActivated();
             }
         }
@@ -97,10 +97,10 @@ bool Data::process(uint8_t* data, uint32_t len)
                 m_slot->m_slotNo, float(m_slot->m_rfFrames) / 16.667F, float(m_slot->m_rfErrs * 100U) / float(m_slot->m_rfBits));
         }
 
-        LogMessage(LOG_RF, "DMR Slot %u, total frames: %d, total bits: %d, errors: %d, BER: %.4f%%",
+        LogInfoEx(LOG_RF, "DMR Slot %u, total frames: %d, total bits: %d, errors: %d, BER: %.4f%%",
             m_slot->m_slotNo, m_slot->m_rfFrames, m_slot->m_rfBits, m_slot->m_rfErrs, float(m_slot->m_rfErrs * 100U) / float(m_slot->m_rfBits));
 
-        m_slot->m_dmr->tsccClearActivatedSlot(m_slot->m_slotNo);
+        m_slot->s_dmr->tsccClearActivatedSlot(m_slot->m_slotNo);
 
         if (m_slot->m_rfTimeout) {
             m_slot->writeEndRF();
@@ -124,7 +124,7 @@ bool Data::process(uint8_t* data, uint32_t len)
         uint32_t srcId = m_rfDataHeader.getSrcId();
         uint32_t dstId = m_rfDataHeader.getDstId();
 
-        if (!m_slot->m_authoritative && m_slot->m_permittedDstId != dstId) {
+        if (!m_slot->s_authoritative && m_slot->m_permittedDstId != dstId) {
             if (!g_disableNonAuthoritativeLogging)
                 LogWarning(LOG_RF, "[NON-AUTHORITATIVE] Ignoring RF traffic, destination not permitted!");
             m_slot->m_rfState = RS_RF_LISTENING;
@@ -139,7 +139,7 @@ bool Data::process(uint8_t* data, uint32_t len)
         }
 
         if (m_slot->m_enableTSCC && dstId == m_slot->m_netLastDstId) {
-            if (m_slot->m_affiliations->isNetGranted(dstId)) {
+            if (m_slot->s_affiliations->isNetGranted(dstId)) {
                 LogWarning(LOG_RF, "DMR Slot %u, Traffic collision detect, preempting new RF traffic to existing granted network traffic (Are we in a voting condition?)", m_slot->m_slotNo);
                 m_slot->m_rfState = RS_RF_LISTENING;
                 return false;
@@ -173,34 +173,34 @@ bool Data::process(uint8_t* data, uint32_t len)
         m_slot->m_rfLC = std::make_unique<lc::LC>(gi ? FLCO::GROUP : FLCO::PRIVATE, srcId, dstId);
 
         if (m_verbose) {
-            LogMessage(LOG_RF, DMR_DT_DATA_HEADER ", slot = %u, dpf = $%02X, ack = %u, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, seqNo = %u, dstId = %u, srcId = %u, group = %u",
-                m_slot->m_slotNo, m_rfDataHeader.getDPF(), m_rfDataHeader.getA(), m_rfDataHeader.getSAP(), m_rfDataHeader.getFullMesage(), m_rfDataHeader.getBlocksToFollow(), m_rfDataHeader.getPadLength(), m_rfDataHeader.getPacketLength(),
+            LogInfoEx(LOG_RF, DMR_DT_DATA_HEADER ", slot = %u, dpf = $%02X, ack = %u, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, seqNo = %u, dstId = %u, srcId = %u, group = %u",
+                m_slot->m_slotNo, m_rfDataHeader.getDPF(), m_rfDataHeader.getA(), m_rfDataHeader.getSAP(), m_rfDataHeader.getFullMesage(), m_rfDataHeader.getBlocksToFollow(), m_rfDataHeader.getPadLength(), m_rfDataHeader.getPacketLength(dataType),
                 m_rfDataHeader.getFSN(), dstId, srcId, gi);
         }
 
         // did we receive a response header?
         if (m_rfDataHeader.getDPF() == DPF::RESPONSE) {
             if (m_verbose) {
-                LogMessage(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, slot = %u, sap = $%02X, rspClass = $%02X, rspType = $%02X, rspStatus = $%02X, dstId = %u, srcId = %u, group = %u",
+                LogInfoEx(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, slot = %u, sap = $%02X, rspClass = $%02X, rspType = $%02X, rspStatus = $%02X, dstId = %u, srcId = %u, group = %u",
                         m_slot->m_slotNo, m_rfDataHeader.getSAP(), m_rfDataHeader.getResponseClass(), m_rfDataHeader.getResponseType(), m_rfDataHeader.getResponseStatus(),
                         dstId, srcId, gi);
 
                 if (m_rfDataHeader.getResponseClass() == PDUResponseClass::ACK && m_rfDataHeader.getResponseType() == PDUResponseType::ACK) {
-                    LogMessage(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP ACK, slot = %u, dstId = %u, srcId = %u, group = %u",
+                    LogInfoEx(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP ACK, slot = %u, dstId = %u, srcId = %u, group = %u",
                         m_slot->m_slotNo, dstId, srcId, gi);
                 } else {
                     if (m_rfDataHeader.getResponseClass() == PDUResponseClass::NACK) {
                         switch (m_rfDataHeader.getResponseType()) {
                             case PDUResponseType::NACK_ILLEGAL:
-                                LogMessage(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, illegal format, slot = %u, dstId = %u, srcId = %u, group = %u",
+                                LogInfoEx(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, illegal format, slot = %u, dstId = %u, srcId = %u, group = %u",
                                     m_slot->m_slotNo, dstId, srcId, gi);
                                 break;
                             case PDUResponseType::NACK_PACKET_CRC:
-                                LogMessage(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet CRC error, slot = %u, dstId = %u, srcId = %u, group = %u",
+                                LogInfoEx(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet CRC error, slot = %u, dstId = %u, srcId = %u, group = %u",
                                     m_slot->m_slotNo, dstId, srcId, gi);
                                 break;
                             case PDUResponseType::NACK_UNDELIVERABLE:
-                                LogMessage(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet undeliverable, slot = %u, dstId = %u, srcId = %u, group = %u",
+                                LogInfoEx(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet undeliverable, slot = %u, dstId = %u, srcId = %u, group = %u",
                                     m_slot->m_slotNo, dstId, srcId, gi);
                                 break;
 
@@ -208,7 +208,7 @@ bool Data::process(uint8_t* data, uint32_t len)
                                 break;
                             }
                     } else if (m_rfDataHeader.getResponseClass() == PDUResponseClass::ACK_RETRY) {
-                        LogMessage(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP ACK RETRY, slot = %u, dstId = %u, srcId = %u, group = %u",
+                        LogInfoEx(LOG_RF, DMR_DT_DATA_HEADER " ISP, response, OSP ACK RETRY, slot = %u, dstId = %u, srcId = %u, group = %u",
                             m_slot->m_slotNo, dstId, srcId, gi);
                     }
                 }
@@ -222,12 +222,12 @@ bool Data::process(uint8_t* data, uint32_t len)
         slotType.encode(data + 2U);
 
         // Convert the Data Sync to be from the BS or MS as needed
-        Sync::addDMRDataSync(data + 2U, m_slot->m_duplex);
+        Sync::addDMRDataSync(data + 2U, m_slot->s_duplex);
 
         data[0U] = m_slot->m_rfFrames == 0U ? modem::TAG_EOT : modem::TAG_DATA;
         data[1U] = 0x00U;
 
-        if (m_slot->m_duplex && m_repeatDataPacket)
+        if (m_slot->s_duplex && m_repeatDataPacket)
             m_slot->addFrame(data);
 
         uint8_t controlByte = 0U;
@@ -245,6 +245,7 @@ bool Data::process(uint8_t* data, uint32_t len)
         }
 
         ::ActivityLog("DMR", true, "Slot %u RF data header from %u to %s%u, %u blocks", m_slot->m_slotNo, srcId, gi ? "TG " : "", dstId, m_slot->m_rfFrames);
+        LogInfoEx(LOG_RF, "DMR Data Call, slot = %u, srcId = %u, dstId = %u", m_slot->m_slotNo, srcId, dstId);
 
         ::memset(m_pduUserData, 0x00U, MAX_PDU_COUNT * DMR_PDU_UNCODED_LENGTH_BYTES + 2U);
         m_pduDataOffset = 0U;
@@ -274,12 +275,12 @@ bool Data::process(uint8_t* data, uint32_t len)
 
             if (m_verbose) {
                 if (dataType == DataType::RATE_34_DATA) {
-                    LogMessage(LOG_RF, DMR_DT_RATE_34_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_rfDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
+                    LogInfoEx(LOG_RF, DMR_DT_RATE_34_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_rfDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
                 } else if (dataType == DataType::RATE_12_DATA) {
-                    LogMessage(LOG_RF, DMR_DT_RATE_12_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_rfDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
+                    LogInfoEx(LOG_RF, DMR_DT_RATE_12_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_rfDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
                 }
                 else {
-                    LogMessage(LOG_RF, DMR_DT_RATE_1_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_rfDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
+                    LogInfoEx(LOG_RF, DMR_DT_RATE_1_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_rfDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
                 }
             }
 
@@ -288,7 +289,20 @@ bool Data::process(uint8_t* data, uint32_t len)
         }
 
         if (m_rfDataHeader.getBlocksToFollow() > 0U && m_slot->m_rfFrames == 0U) {
-            bool crcRet = edac::CRC::checkCRC32(m_pduUserData, m_pduDataOffset);
+            // ooookay -- lets do the insane, and ridiculously stupid, ETSI Big-Endian reversed byte ordering bullshit for the CRC-32
+            uint8_t crcBytes[MAX_PDU_COUNT * DMR_PDU_UNCODED_LENGTH_BYTES + 2U];
+            ::memset(crcBytes, 0x00U, MAX_PDU_COUNT * DMR_PDU_UNCODED_LENGTH_BYTES + 2U);
+            for (uint8_t i = 0U; i < m_pduDataOffset - 4U; i += 2U) {
+                crcBytes[i + 1U] = m_pduUserData[i];
+                crcBytes[i] = m_pduUserData[i + 1U];
+            }
+
+            crcBytes[m_pduDataOffset - 1U] = m_pduUserData[m_pduDataOffset - 4U];
+            crcBytes[m_pduDataOffset - 2U] = m_pduUserData[m_pduDataOffset - 3U];
+            crcBytes[m_pduDataOffset - 3U] = m_pduUserData[m_pduDataOffset - 2U];
+            crcBytes[m_pduDataOffset - 4U] = m_pduUserData[m_pduDataOffset - 1U];
+
+            bool crcRet = edac::CRC::checkInvertedCRC32(crcBytes, m_pduDataOffset);
             if (!crcRet) {
                 LogWarning(LOG_RF, P25_PDU_STR ", failed CRC-32 check, blocks %u, len %u", m_rfDataHeader.getBlocksToFollow(), m_pduDataOffset);
             }
@@ -305,16 +319,16 @@ bool Data::process(uint8_t* data, uint32_t len)
         slotType.encode(data + 2U);
 
         // convert the Data Sync to be from the BS or MS as needed
-        Sync::addDMRDataSync(data + 2U, m_slot->m_duplex);
+        Sync::addDMRDataSync(data + 2U, m_slot->s_duplex);
 
         m_slot->writeNetwork(data, dataType, 0U);
 
-        if (m_slot->m_duplex && m_repeatDataPacket) {
+        if (m_slot->s_duplex && m_repeatDataPacket) {
             m_slot->addFrame(data);
         }
 
         if (m_slot->m_rfFrames == 0U) {
-            LogMessage(LOG_RF, "DMR Slot %u, RATE_12/34_DATA, ended data transmission", m_slot->m_slotNo);
+            LogInfoEx(LOG_RF, "DMR Slot %u, RATE_12/34_DATA, ended data transmission", m_slot->m_slotNo);
             m_slot->writeEndRF();
         }
 
@@ -343,19 +357,19 @@ void Data::processNetwork(const data::NetData& dmrData)
 
         // Regenerate the Slot Type
         SlotType slotType;
-        slotType.setColorCode(m_slot->m_colorCode);
+        slotType.setColorCode(m_slot->s_colorCode);
         slotType.setDataType(DataType::TERMINATOR_WITH_LC);
         slotType.encode(data + 2U);
 
         // Convert the Data Sync to be from the BS or MS as needed
-        Sync::addDMRDataSync(data + 2U, m_slot->m_duplex);
+        Sync::addDMRDataSync(data + 2U, m_slot->s_duplex);
 
         if (!m_slot->m_netTimeout) {
             data[0U] = modem::TAG_EOT;
             data[1U] = 0x00U;
 
-            if (m_slot->m_duplex) {
-                for (uint32_t i = 0U; i < m_slot->m_hangCount; i++)
+            if (m_slot->s_duplex) {
+                for (uint32_t i = 0U; i < m_slot->s_hangCount; i++)
                     m_slot->addFrame(data, true);
             }
             else {
@@ -365,14 +379,14 @@ void Data::processNetwork(const data::NetData& dmrData)
         }
 
         if (m_verbose) {
-            LogMessage(LOG_RF, DMR_DT_TERMINATOR_WITH_LC ", slot = %u, dstId = %u", m_slot->m_slotNo, m_slot->m_netLC->getDstId());
+            LogInfoEx(LOG_RF, DMR_DT_TERMINATOR_WITH_LC ", slot = %u, dstId = %u", m_slot->m_slotNo, m_slot->m_netLC->getDstId());
         }
 
         // release trunked grant (if necessary)
-        Slot *m_tscc = m_slot->m_dmr->getTSCCSlot();
+        Slot *m_tscc = m_slot->s_dmr->getTSCCSlot();
         if (m_tscc != nullptr) {
             if (m_tscc->m_enableTSCC) {
-                m_tscc->m_affiliations->releaseGrant(m_slot->m_netLC->getDstId(), false);
+                m_tscc->s_affiliations->releaseGrant(m_slot->m_netLC->getDstId(), false);
                 m_slot->clearTSCCActivated();
             }
         }
@@ -382,7 +396,7 @@ void Data::processNetwork(const data::NetData& dmrData)
         ::ActivityLog("DMR", false, "Slot %u network end of voice transmission, %.1f seconds, %u%% packet loss, BER: %.1f%%",
             m_slot->m_slotNo, float(m_slot->m_netFrames) / 16.667F, (m_slot->m_netLost * 100U) / m_slot->m_netFrames, float(m_slot->m_netErrs * 100U) / float(m_slot->m_netBits));
 
-        m_slot->m_dmr->tsccClearActivatedSlot(m_slot->m_slotNo);
+        m_slot->s_dmr->tsccClearActivatedSlot(m_slot->m_slotNo);
 
         m_slot->writeEndNet();
     }
@@ -401,7 +415,7 @@ void Data::processNetwork(const data::NetData& dmrData)
         uint32_t srcId = m_netDataHeader.getSrcId();
         uint32_t dstId = m_netDataHeader.getDstId();
 
-        if (!m_slot->m_authoritative && m_slot->m_permittedDstId != dstId) {
+        if (!m_slot->s_authoritative && m_slot->m_permittedDstId != dstId) {
             return;
         }
 
@@ -423,26 +437,26 @@ void Data::processNetwork(const data::NetData& dmrData)
         // did we receive a response header?
         if (m_netDataHeader.getDPF() == DPF::RESPONSE) {
             if (m_verbose) {
-                LogMessage(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, slot = %u, sap = $%02X, rspClass = $%02X, rspType = $%02X, rspStatus = $%02X, dstId = %u, srcId = %u, group = %u",
+                LogInfoEx(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, slot = %u, sap = $%02X, rspClass = $%02X, rspType = $%02X, rspStatus = $%02X, dstId = %u, srcId = %u, group = %u",
                         m_slot->m_slotNo, m_netDataHeader.getSAP(), m_netDataHeader.getResponseClass(), m_netDataHeader.getResponseType(), m_netDataHeader.getResponseStatus(),
                         dstId, srcId, gi);
 
                 if (m_netDataHeader.getResponseClass() == PDUResponseClass::ACK && m_netDataHeader.getResponseType() == PDUResponseType::ACK) {
-                    LogMessage(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP ACK, slot = %u, dstId = %u, srcId = %u, group = %u",
+                    LogInfoEx(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP ACK, slot = %u, dstId = %u, srcId = %u, group = %u",
                         m_slot->m_slotNo, dstId, srcId, gi);
                 } else {
                     if (m_netDataHeader.getResponseClass() == PDUResponseClass::NACK) {
                         switch (m_netDataHeader.getResponseType()) {
                             case PDUResponseType::NACK_ILLEGAL:
-                                LogMessage(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, illegal format, slot = %u, dstId = %u, srcId = %u, group = %u",
+                                LogInfoEx(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, illegal format, slot = %u, dstId = %u, srcId = %u, group = %u",
                                     m_slot->m_slotNo, dstId, srcId, gi);
                                 break;
                             case PDUResponseType::NACK_PACKET_CRC:
-                                LogMessage(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet CRC error, slot = %u, dstId = %u, srcId = %u, group = %u",
+                                LogInfoEx(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet CRC error, slot = %u, dstId = %u, srcId = %u, group = %u",
                                     m_slot->m_slotNo, dstId, srcId, gi);
                                 break;
                             case PDUResponseType::NACK_UNDELIVERABLE:
-                                LogMessage(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet undeliverable, slot = %u, dstId = %u, srcId = %u, group = %u",
+                                LogInfoEx(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP NACK, packet undeliverable, slot = %u, dstId = %u, srcId = %u, group = %u",
                                     m_slot->m_slotNo, dstId, srcId, gi);
                                 break;
 
@@ -450,7 +464,7 @@ void Data::processNetwork(const data::NetData& dmrData)
                                 break;
                             }
                     } else if (m_netDataHeader.getResponseClass() == PDUResponseClass::ACK_RETRY) {
-                        LogMessage(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP ACK RETRY, slot = %u, dstId = %u, srcId = %u, group = %u",
+                        LogInfoEx(LOG_NET, DMR_DT_DATA_HEADER " ISP, response, OSP ACK RETRY, slot = %u, dstId = %u, srcId = %u, group = %u",
                             m_slot->m_slotNo, dstId, srcId, gi);
                     }
                 }
@@ -462,19 +476,19 @@ void Data::processNetwork(const data::NetData& dmrData)
 
         // Regenerate the Slot Type
         SlotType slotType;
-        slotType.setColorCode(m_slot->m_colorCode);
+        slotType.setColorCode(m_slot->s_colorCode);
         slotType.setDataType(DataType::DATA_HEADER);
         slotType.encode(data + 2U);
 
         // Convert the Data Sync to be from the BS or MS as needed
-        Sync::addDMRDataSync(data + 2U, m_slot->m_duplex);
+        Sync::addDMRDataSync(data + 2U, m_slot->s_duplex);
 
         data[0U] = m_slot->m_netFrames == 0U ? modem::TAG_EOT : modem::TAG_DATA;
         data[1U] = 0x00U;
 
         // Put a small delay into starting transmission
-        m_slot->addFrame(m_slot->m_idle, true);
-        m_slot->addFrame(m_slot->m_idle, true);
+        m_slot->addFrame(m_slot->s_idle, true);
+        m_slot->addFrame(m_slot->s_idle, true);
 
         m_slot->addFrame(data, true);
 
@@ -485,13 +499,14 @@ void Data::processNetwork(const data::NetData& dmrData)
         m_slot->setShortLC(m_slot->m_slotNo, dstId, gi ? FLCO::GROUP : FLCO::PRIVATE, Slot::SLCO_ACT_TYPE::DATA);
 
         if (m_verbose) {
-            LogMessage(LOG_NET, DMR_DT_DATA_HEADER ", slot = %u, dpf = $%02X, ack = %u, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, seqNo = %u, dstId = %u, srcId = %u, group = %u",
-                m_slot->m_slotNo, m_netDataHeader.getDPF(), m_netDataHeader.getA(), m_netDataHeader.getSAP(), m_netDataHeader.getFullMesage(), m_netDataHeader.getBlocksToFollow(), m_netDataHeader.getPadLength(), m_netDataHeader.getPacketLength(),
+            LogInfoEx(LOG_NET, DMR_DT_DATA_HEADER ", slot = %u, dpf = $%02X, ack = %u, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, seqNo = %u, dstId = %u, srcId = %u, group = %u",
+                m_slot->m_slotNo, m_netDataHeader.getDPF(), m_netDataHeader.getA(), m_netDataHeader.getSAP(), m_netDataHeader.getFullMesage(), m_netDataHeader.getBlocksToFollow(), m_netDataHeader.getPadLength(), m_netDataHeader.getPacketLength(dataType),
                 m_netDataHeader.getFSN(), dstId, srcId, gi);
         }
 
         ::ActivityLog("DMR", false, "Slot %u network data header from %u to %s%u, %u blocks",
             m_slot->m_slotNo, srcId, gi ? "TG " : "", dstId, m_slot->m_netFrames);
+        LogInfoEx(LOG_NET, "DMR Data Call, slot = %u, srcId = %u, dstId = %u", m_slot->m_slotNo, srcId, dstId);
 
         ::memset(m_pduUserData, 0x00U, MAX_PDU_COUNT * DMR_PDU_UNCODED_LENGTH_BYTES + 2U);
         m_pduDataOffset = 0U;
@@ -521,12 +536,12 @@ void Data::processNetwork(const data::NetData& dmrData)
 
             if (m_verbose) {
                 if (dataType == DataType::RATE_34_DATA) {
-                    LogMessage(LOG_NET, DMR_DT_RATE_34_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_netDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
+                    LogInfoEx(LOG_NET, DMR_DT_RATE_34_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_netDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
                 } else if (dataType == DataType::RATE_12_DATA) {
-                    LogMessage(LOG_NET, DMR_DT_RATE_12_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_netDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
+                    LogInfoEx(LOG_NET, DMR_DT_RATE_12_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_netDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
                 }
                 else {
-                    LogMessage(LOG_NET, DMR_DT_RATE_1_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_netDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
+                    LogInfoEx(LOG_NET, DMR_DT_RATE_1_DATA ", ISP, block %u, dataType = $%02X, dpf = $%02X", m_netDataBlockCnt, dataBlock.getDataType(), dataBlock.getFormat());
                 }
             }
 
@@ -535,7 +550,20 @@ void Data::processNetwork(const data::NetData& dmrData)
         }
 
         if (m_netDataHeader.getBlocksToFollow() > 0U && m_slot->m_netFrames == 0U) {
-            bool crcRet = edac::CRC::checkCRC32(m_pduUserData, m_pduDataOffset);
+            // ooookay -- lets do the insane, and ridiculously stupid, ETSI Big-Endian reversed byte ordering bullshit for the CRC-32
+            uint8_t crcBytes[MAX_PDU_COUNT * DMR_PDU_UNCODED_LENGTH_BYTES + 2U];
+            ::memset(crcBytes, 0x00U, MAX_PDU_COUNT * DMR_PDU_UNCODED_LENGTH_BYTES + 2U);
+            for (uint8_t i = 0U; i < m_pduDataOffset - 4U; i += 2U) {
+                crcBytes[i + 1U] = m_pduUserData[i];
+                crcBytes[i] = m_pduUserData[i + 1U];
+            }
+
+            crcBytes[m_pduDataOffset - 1U] = m_pduUserData[m_pduDataOffset - 4U];
+            crcBytes[m_pduDataOffset - 2U] = m_pduUserData[m_pduDataOffset - 3U];
+            crcBytes[m_pduDataOffset - 3U] = m_pduUserData[m_pduDataOffset - 2U];
+            crcBytes[m_pduDataOffset - 4U] = m_pduUserData[m_pduDataOffset - 1U];
+
+            bool crcRet = edac::CRC::checkInvertedCRC32(crcBytes, m_pduDataOffset);
             if (!crcRet) {
                 LogWarning(LOG_NET, P25_PDU_STR ", failed CRC-32 check, blocks %u, len %u", m_netDataHeader.getBlocksToFollow(), m_pduDataOffset);
             }
@@ -549,11 +577,11 @@ void Data::processNetwork(const data::NetData& dmrData)
             // regenerate the Slot Type
             SlotType slotType;
             slotType.decode(data + 2U);
-            slotType.setColorCode(m_slot->m_colorCode);
+            slotType.setColorCode(m_slot->s_colorCode);
             slotType.encode(data + 2U);
 
             // convert the Data Sync to be from the BS or MS as needed
-            Sync::addDMRDataSync(data + 2U, m_slot->m_duplex);
+            Sync::addDMRDataSync(data + 2U, m_slot->s_duplex);
 
             data[0U] = m_slot->m_netFrames == 0U ? modem::TAG_EOT : modem::TAG_DATA;
             data[1U] = 0x00U;
@@ -562,7 +590,7 @@ void Data::processNetwork(const data::NetData& dmrData)
         }
 
         if (m_slot->m_netFrames == 0U) {
-            LogMessage(LOG_NET, "DMR Slot %u, RATE_12/34_DATA, ended data transmission", m_slot->m_slotNo);
+            LogInfoEx(LOG_NET, "DMR Slot %u, RATE_12/34_DATA, ended data transmission", m_slot->m_slotNo);
             m_slot->writeEndNet();
         }
     }
@@ -627,21 +655,21 @@ void Data::writeRF_PDU(DataType::E dataType, const uint8_t* pdu)
     ::memcpy(data, pdu, DMR_FRAME_LENGTH_BYTES);
 
     SlotType slotType;
-    slotType.setColorCode(m_slot->m_colorCode);
+    slotType.setColorCode(m_slot->s_colorCode);
     slotType.setDataType(dataType);
 
     // Regenerate the Slot Type
     slotType.encode(data + 2U);
 
     // Convert the Data Sync to be from the BS or MS as needed
-    Sync::addDMRDataSync(data + 2U, m_slot->m_duplex);
+    Sync::addDMRDataSync(data + 2U, m_slot->s_duplex);
 
     m_slot->m_rfSeqNo = 0U;
 
     data[0U] = modem::TAG_DATA;
     data[1U] = 0x00U;
 
-    if (m_slot->m_duplex)
+    if (m_slot->s_duplex)
         m_slot->addFrame(data);
 }
 
@@ -674,8 +702,8 @@ void Data::writeRF_PDU_Ack_Response(uint8_t rspClass, uint8_t rspType, uint8_t r
     ::memset(data + 2U, 0x00U, DMR_FRAME_LENGTH_BYTES);
 
     // decode the BPTC (196,96) FEC
-    uint8_t payload[DMR_PDU_UNCONFIRMED_LENGTH_BYTES];
-    ::memset(payload, 0x00U, DMR_PDU_UNCONFIRMED_LENGTH_BYTES);
+    uint8_t payload[DMR_PDU_UNCODED_LENGTH_BYTES];
+    ::memset(payload, 0x00U, DMR_PDU_UNCODED_LENGTH_BYTES);
 
     // encode the BPTC (196,96) FEC
     bptc.encode(payload, data + 2U);

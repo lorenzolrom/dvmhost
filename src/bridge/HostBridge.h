@@ -26,6 +26,7 @@
 #include "common/yaml/Yaml.h"
 #include "common/RingBuffer.h"
 #include "common/Timer.h"
+#include "common/Clock.h"
 #include "vocoder/MBEDecoder.h"
 #include "vocoder/MBEEncoder.h"
 #define MINIAUDIO_IMPLEMENTATION
@@ -33,6 +34,7 @@
 #include "mdc/mdc_decode.h"
 #include "network/PeerNetwork.h"
 #include "RtsPttController.h"
+#include "CtsCorController.h"
 
 #include <string>
 #include <mutex>
@@ -103,13 +105,11 @@ void mdcPacketDetected(int frameCount, mdc_u8_t op, mdc_u8_t arg, mdc_u16_t unit
  * @ingroup bridge
  */
 struct NetPacketRequest {
-    uint32_t srcId;
-    uint32_t dstId;
+    uint32_t srcId;                     //!< Source Address
+    uint32_t dstId;                     //!< Destination Address
 
-    int pcmLength = 0U;                 //! Length of PCM data buffer
-    uint8_t* pcm = nullptr;             //! Raw PCM buffer
-
-    uint64_t pktRxTime;                 //! Packet receive time
+    int pcmLength = 0U;                 //!< Length of PCM data buffer
+    uint8_t* pcm = nullptr;             //!< Raw PCM buffer
 };
 
 // ---------------------------------------------------------------------------
@@ -159,10 +159,8 @@ private:
     bool m_udpUseULaw;
     bool m_udpRTPFrames;
     bool m_udpUsrp;
-    uint8_t m_udpInterFrameDelay;
-    uint16_t m_udpJitter;
-    bool m_udpSilenceDuringHang;
-    uint64_t m_lastUdpFrameTime;
+    bool m_udpFrameTiming;
+    uint32_t m_udpFrameCnt;
 
     uint8_t m_tekAlgoId;
     uint16_t m_tekKeyId;
@@ -190,8 +188,6 @@ private:
     float m_voxSampleLevel;
     uint16_t m_dropTimeMS;
     Timer m_localDropTime;
-    Timer m_udpCallClock;
-    Timer m_udpHangTime;
     Timer m_udpDropTime;
 
     bool m_detectAnalogMDC1200;
@@ -255,6 +251,8 @@ private:
     uint8_t m_detectedSampleCnt;
     bool m_dumpSampleLevel;
 
+    bool m_mtNoSleep;
+
     bool m_running;
     bool m_trace;
     bool m_debug;
@@ -264,14 +262,26 @@ private:
     std::string m_rtsPttPort;
     RtsPttController* m_rtsPttController;
     bool m_rtsPttActive;
+    // Timestamp of last audio written to output and hold-off before clearing PTT
+    system_clock::hrc::hrc_t m_lastAudioOut;
+    uint32_t m_rtsPttHoldoffMs;
+
+    // CTS COR Detection
+    bool m_ctsCorEnable;
+    std::string m_ctsCorPort;
+    CtsCorController* m_ctsCorController;
+    bool m_ctsCorActive;
+    bool m_ctsCorInvert; // if true, COR LOW triggers (instead of HIGH)
+    Timer m_ctsPadTimeout; // drives silence padding while CTS is active
+    uint32_t m_ctsCorHoldoffMs; // hold-off time before clearing COR after it deasserts
 
     uint16_t m_rtpSeqNo;
     uint32_t m_rtpTimestamp;
 
     uint32_t m_usrpSeqNo;
 
-    static std::mutex m_audioMutex;
-    static std::mutex m_networkMutex;
+    static std::mutex s_audioMutex;
+    static std::mutex s_networkMutex;
 
 #if defined(_WIN32)
     void* m_decoderState;
@@ -524,6 +534,11 @@ private:
      */
     bool initializeRtsPtt();
     /**
+     * @brief Helper to initialize CTS COR detection.
+     * @returns bool True, if CTS COR was initialized successfully, otherwise false.
+     */
+    bool initializeCtsCor();
+    /**
      * @brief Helper to assert RTS PTT (start transmission).
      */
     void assertRtsPtt();
@@ -565,7 +580,7 @@ private:
      * @param srcId
      * @param dstId
      */
-    void callEndSilence(uint32_t srcId, uint32_t dstId);
+    void padSilenceAudio(uint32_t srcId, uint32_t dstId);
 
     /**
      * @brief Entry point to call watchdog handler thread.
@@ -573,6 +588,12 @@ private:
      * @returns void* (Ignore)
      */
     static void* threadCallWatchdog(void* arg);
+    /**
+     * @brief Entry point to CTS COR monitor thread.
+     * @param arg Instance of the thread_t structure.
+     * @returns void* (Ignore)
+     */
+    static void* threadCtsCorMonitor(void* arg);
 };
 
 #endif // __HOST_BRIDGE_H__

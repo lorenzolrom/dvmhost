@@ -133,7 +133,7 @@ int findLastChar(const uint8_t* buffer, uint32_t len, char target)
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex CryptoContainer::m_mutex;
+std::mutex CryptoContainer::s_mutex;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -220,24 +220,24 @@ bool CryptoContainer::read()
 
 void CryptoContainer::clear()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     m_keys.clear();
 }
 
 /* Adds a new entry to the lookup table by the specified unique ID. */
 
-void CryptoContainer::addEntry(KeyItem key)
+void CryptoContainer::addEntry(EKCKeyItem key)
 {
     if (key.isInvalid())
         return;
 
-    KeyItem entry = key;
+    EKCKeyItem entry = key;
     uint32_t id = entry.id();
     uint32_t kId = entry.kId();
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     auto it = std::find_if(m_keys.begin(), m_keys.end(),
-        [&](KeyItem x)
+        [&](EKCKeyItem& x)
         {
             return x.id() == id && x.kId() == kId;
         });
@@ -253,8 +253,11 @@ void CryptoContainer::addEntry(KeyItem key)
 
 void CryptoContainer::eraseEntry(uint32_t id)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = std::find_if(m_keys.begin(), m_keys.end(), [&](KeyItem x) { return x.id() == id; });
+    std::lock_guard<std::mutex> lock(s_mutex);
+    auto it = std::find_if(m_keys.begin(), m_keys.end(),
+        [&](EKCKeyItem& x) {
+            return x.id() == id; 
+        });
     if (it != m_keys.end()) {
         m_keys.erase(it);
     }
@@ -262,21 +265,52 @@ void CryptoContainer::eraseEntry(uint32_t id)
 
 /* Finds a table entry in this lookup table. */
 
-KeyItem CryptoContainer::find(uint32_t kId)
+EKCKeyItem CryptoContainer::find(uint32_t kId)
 {
-    KeyItem entry;
+    EKCKeyItem entry;
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     auto it = std::find_if(m_keys.begin(), m_keys.end(),
-        [&](KeyItem x)
-        {
+        [&](EKCKeyItem& x) {
             return x.kId() == kId;
         });
     if (it != m_keys.end()) {
         entry = *it;
     } else {
-        entry = KeyItem();
+        entry = EKCKeyItem();
     }
+
+    return entry;
+}
+
+/* Finds a table entry in this lookup table. */
+
+EKCKeyItem CryptoContainer::findUKEK(uint32_t rsi)
+{
+    EKCKeyItem entry;
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+
+    /*
+    ** TODO TODO TODO
+    */
+    entry = EKCKeyItem();
+
+    return entry;
+}
+
+/* Finds a table entry in this lookup table. */
+
+EKCKeyItem CryptoContainer::findLLA(uint32_t rsi)
+{
+    EKCKeyItem entry;
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+
+    /*
+    ** TODO TODO TODO
+    */
+    entry = EKCKeyItem();
 
     return entry;
 }
@@ -496,14 +530,14 @@ bool CryptoContainer::load()
                 // clear table
                 clear();
 
-                std::lock_guard<std::mutex> lock(m_mutex);
+                std::lock_guard<std::mutex> lock(s_mutex);
 
                 // get keys node
                 rapidxml::xml_node<>* keys = innerRoot->first_node("Keys");
                 if (keys != nullptr) {
                     uint32_t i = 0U;
                     for (rapidxml::xml_node<>* keyNode = keys->first_node("KeyItem"); keyNode; keyNode = keyNode->next_sibling()) {
-                        KeyItem key = KeyItem();
+                        EKCKeyItem key = EKCKeyItem();
                         key.id(i);
 
                         // get name

@@ -14,7 +14,7 @@
 #include "common/StopWatch.h"
 #include "common/Thread.h"
 #include "common/Utils.h"
-#include "fne/network/RESTDefines.h"
+#include "fne/restapi/RESTDefines.h"
 #include "remote/RESTClient.h"
 #include "network/PeerNetwork.h"
 #include "HostWS.h"
@@ -260,7 +260,7 @@ int HostWS::run()
     g_logDisplayLevel = 0U;
 
     std::ostringstream logOutput;
-    __InternalOutputStream(logOutput);
+    log_internal::SetInternalOutputStream(logOutput);
 
     Timer peerListUpdate(1000U, 10U);
     peerListUpdate.start();
@@ -327,7 +327,7 @@ int HostWS::run()
             
                 int ret = RESTClient::send(fneRESTAddress, fneRESTPort, fnePassword,
                     HTTP_GET, FNE_GET_PEER_QUERY, req, rsp, fneSSL, g_debug);
-                if (ret != network::rest::http::HTTPPayload::StatusType::OK) {
+                if (ret != restapi::http::HTTPPayload::StatusType::OK) {
                     ::LogError(LOG_HOST, "[AFFVIEW] failed to query peers for %s:%u", fneRESTAddress.c_str(), fneRESTPort);
                 }
                 else {
@@ -354,7 +354,7 @@ int HostWS::run()
             
                 int ret = RESTClient::send(fneRESTAddress, fneRESTPort, fnePassword,
                     HTTP_GET, FNE_GET_AFF_LIST, req, rsp, fneSSL, g_debug);
-                if (ret != network::rest::http::HTTPPayload::StatusType::OK) {
+                if (ret != restapi::http::HTTPPayload::StatusType::OK) {
                     ::LogError(LOG_HOST, "[AFFVIEW] failed to query peers for %s:%u", fneRESTAddress.c_str(), fneRESTPort);
                 }
                 else {
@@ -533,7 +533,7 @@ void* HostWS::threadWebSocket(void* arg)
             return nullptr;
         }
 
-        LogMessage(LOG_HOST, "[ OK ] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[ OK ] %s", threadName.c_str());
 #ifdef _GNU_SOURCE
         ::pthread_setname_np(th->thread, threadName.c_str());
 #endif // _GNU_SOURCE
@@ -542,7 +542,7 @@ void* HostWS::threadWebSocket(void* arg)
         ws->m_wsServer.start_accept();
         ws->m_wsServer.run();
 
-        LogMessage(LOG_HOST, "[STOP] %s", threadName.c_str());
+        LogInfoEx(LOG_HOST, "[STOP] %s", threadName.c_str());
         delete th;
     }
 

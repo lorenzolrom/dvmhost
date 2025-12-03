@@ -60,7 +60,7 @@ public:
      */
     explicit PeerEdMainWnd(FWidget* widget = nullptr) : FWidget{widget}
     {
-        __InternalOutputStream(m_logWnd);
+        log_internal::SetInternalOutputStream(m_logWnd);
 
         // file menu
         m_fileMenuSeparator1.setSeparator();
@@ -73,7 +73,7 @@ public:
         m_quitItem.addAccelerator(FKey::Meta_x); // Meta/Alt + X
         m_quitItem.addCallback("clicked", getFApplication(), &FApplication::cb_exitApp, this);
         m_keyF3.addCallback("activate", getFApplication(), &FApplication::cb_exitApp, this);
-        m_keyF5.addCallback("activate", this, [&]() { g_pidLookups->reload(); m_wnd->loadListView(); LogMessage(LOG_HOST, "Loaded peer ID file: %s", g_iniFile.c_str()); });
+        m_keyF5.addCallback("activate", this, [&]() { g_pidLookups->reload(); m_wnd->loadListView(); LogInfoEx(LOG_HOST, "Loaded peer ID file: %s", g_iniFile.c_str()); });
 
         m_backupOnSave.setChecked();
 
@@ -123,7 +123,7 @@ private:
     {
         if (m_backupOnSave.isChecked()) {
             std::string bakFile = g_iniFile + ".bak";
-            LogMessage(LOG_HOST, "Backing up existing file %s to %s", g_iniFile.c_str(), bakFile.c_str());
+            LogInfoEx(LOG_HOST, "Backing up existing file %s to %s", g_iniFile.c_str(), bakFile.c_str());
             copyFile(g_iniFile.c_str(), bakFile.c_str());
         }
 

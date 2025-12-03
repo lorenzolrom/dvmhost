@@ -22,8 +22,8 @@ using namespace lookups;
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::mutex TalkgroupRulesLookup::m_mutex;
-bool TalkgroupRulesLookup::m_locked = false;
+std::mutex TalkgroupRulesLookup::s_mutex;
+bool TalkgroupRulesLookup::s_locked = false;
 
 // ---------------------------------------------------------------------------
 //  Macros
@@ -31,16 +31,16 @@ bool TalkgroupRulesLookup::m_locked = false;
 
 // Lock the table.
 #define __LOCK_TABLE()                          \
-    std::lock_guard<std::mutex> lock(m_mutex);  \
-    m_locked = true;
+    std::lock_guard<std::mutex> lock(s_mutex);  \
+    s_locked = true;
 
 // Unlock the table.
-#define __UNLOCK_TABLE() m_locked = false;
+#define __UNLOCK_TABLE() s_locked = false;
 
 // Spinlock wait for table to be read unlocked.
 #define __SPINLOCK()                            \
-    if (m_locked) {                             \
-        while (m_locked)                        \
+    if (s_locked) {                             \
+        while (s_locked)                        \
             Thread::sleep(2U);                  \
     }
 
@@ -143,8 +143,7 @@ void TalkgroupRulesLookup::addEntry(uint32_t id, uint8_t slot, bool enabled, boo
     __LOCK_TABLE();
 
     auto it = std::find_if(m_groupVoice.begin(), m_groupVoice.end(),
-        [&](TalkgroupRuleGroupVoice x)
-        {
+        [&](TalkgroupRuleGroupVoice& x) {
             if (slot != 0U) {
                 return x.source().tgId() == id && x.source().tgSlot() == slot;
             }
@@ -192,8 +191,7 @@ void TalkgroupRulesLookup::addEntry(TalkgroupRuleGroupVoice groupVoice)
     __LOCK_TABLE();
 
     auto it = std::find_if(m_groupVoice.begin(), m_groupVoice.end(),
-        [&](TalkgroupRuleGroupVoice x)
-        {
+        [&](TalkgroupRuleGroupVoice& x) {
             if (slot != 0U) {
                 return x.source().tgId() == id && x.source().tgSlot() == slot;
             }
@@ -216,7 +214,10 @@ void TalkgroupRulesLookup::eraseEntry(uint32_t id, uint8_t slot)
 {
     __LOCK_TABLE();
 
-    auto it = std::find_if(m_groupVoice.begin(), m_groupVoice.end(), [&](TalkgroupRuleGroupVoice x) { return x.source().tgId() == id && x.source().tgSlot() == slot; });
+    auto it = std::find_if(m_groupVoice.begin(), m_groupVoice.end(),
+        [&](TalkgroupRuleGroupVoice& x) {
+            return x.source().tgId() == id && x.source().tgSlot() == slot;
+        });
     if (it != m_groupVoice.end()) {
         m_groupVoice.erase(it);
     }
@@ -232,9 +233,9 @@ TalkgroupRuleGroupVoice TalkgroupRulesLookup::find(uint32_t id, uint8_t slot)
 
     __SPINLOCK();
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     auto it = std::find_if(m_groupVoice.begin(), m_groupVoice.end(),
-        [&](TalkgroupRuleGroupVoice x)
+        [&](TalkgroupRuleGroupVoice& x)
         {
             if (slot != 0U) {
                 return x.source().tgId() == id && x.source().tgSlot() == slot;
@@ -259,17 +260,15 @@ TalkgroupRuleGroupVoice TalkgroupRulesLookup::findByRewrite(uint32_t peerId, uin
 
     __SPINLOCK();
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     auto it = std::find_if(m_groupVoice.begin(), m_groupVoice.end(),
-        [&](TalkgroupRuleGroupVoice x)
-        {
+        [&](TalkgroupRuleGroupVoice& x) {
             if (x.config().rewrite().size() == 0)
                 return false;
 
             std::vector<TalkgroupRuleRewrite> rewrite = x.config().rewrite();
             auto innerIt = std::find_if(rewrite.begin(), rewrite.end(),
-                [&](TalkgroupRuleRewrite y)
-                {
+                [&](TalkgroupRuleRewrite& y) {
                     if (slot != 0U) {
                         return y.peerId() == peerId && y.tgId() == id && y.tgSlot() == slot;
                     }
@@ -292,9 +291,9 @@ TalkgroupRuleGroupVoice TalkgroupRulesLookup::findByRewrite(uint32_t peerId, uin
 
 /* Saves loaded talkgroup rules. */
 
-bool TalkgroupRulesLookup::commit()
+bool TalkgroupRulesLookup::commit(bool quiet)
 {
-    return save();
+    return save(quiet);
 }
 
 /* Flag indicating whether talkgroup ID access control is enabled or not. */
@@ -337,7 +336,7 @@ bool TalkgroupRulesLookup::load()
 
     if (groupVoiceList.size() == 0U) {
         ::LogError(LOG_HOST, "No group voice rules list defined!");
-        m_locked = false;
+        s_locked = false;
         return false;
     }
 
@@ -384,14 +383,14 @@ bool TalkgroupRulesLookup::load()
 
 /* Saves the table to the passed lookup table file. */
 
-bool TalkgroupRulesLookup::save()
+bool TalkgroupRulesLookup::save(bool quiet)
 {
     // Make sure file is valid
     if (m_rulesFile.length() <= 0) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(s_mutex);
     
     // New list for our new group voice rules
     yaml::Node groupVoiceList;
@@ -415,9 +414,9 @@ bool TalkgroupRulesLookup::save()
     }
 
     try {
-        LogMessage(LOG_HOST, "Saving talkgroup rules file to %s", m_rulesFile.c_str());
+        if (!quiet)
+            LogInfoEx(LOG_HOST, "Saving talkgroup rules file to %s", m_rulesFile.c_str());
         yaml::Serialize(newRules, m_rulesFile.c_str());
-        LogDebug(LOG_HOST, "Saved TGID config file to %s", m_rulesFile.c_str());
     }
     catch (yaml::OperationException const& e) {
         LogError(LOG_HOST, "Cannot save the talkgroup rules lookup file - %s (%s)", m_rulesFile.c_str(), e.message());

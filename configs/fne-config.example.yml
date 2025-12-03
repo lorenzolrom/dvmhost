@@ -9,11 +9,10 @@ daemon: true
 # Logging Configuration
 #   Logging Levels:
 #     1 - Debug
-#     2 - Message
-#     3 - Informational
-#     4 - Warning
-#     5 - Error
-#     6 - Fatal
+#     2 - Informational
+#     3 - Warning
+#     4 - Error
+#     5 - Fatal
 #
 log:
     # Console display logging level (used when in foreground).
@@ -31,15 +30,18 @@ log:
 
 #
 # Master
+#   (This is the endpoint that downstream peers connect to for this FNE instance.)
 #
 master:
     # Network Peer ID
+    #   NOTE: This ID is a uniquely identifying number. It *MUST* be a unique number across any networks this FNE
+    #        instance connects to. Failure to use a unique number *WILL* cause network issues.
     peerId: 9000100
     # Hostname/IP address to listen on (blank for all).
     address: 0.0.0.0
     # Port number to listen on.
-    # NOTE: This port number includes itself for traffic, and master port + 1 for diagnostics and activity logging. (For 
-    #   example, a master port of 62031 will use 62032 for diagnostic and activity messages.)
+    #   NOTE: This port number includes itself for traffic, and master port + 1 for diagnostics and activity logging. (For 
+    #     example, a master port of 62031 will use 62032 for diagnostic and activity messages.)
     port: 62031
     # FNE access password.
     password: RPT1234
@@ -48,15 +50,41 @@ master:
     # Flag indicating whether or not verbose debug logging is enabled.
     debug: false
 
+    #
+    # High Availability
+    #
+    ha:
+      # Flag indicating high availability advertisements are enabled.
+      enable: false
+      # WAN IP address of this FNE master.
+      #   This IP address is advertised to the network as a globally WAN accessible IP.
+      advertisedWANAddress: 1.2.3.4
+      # WAN port for this FNE master.
+      #   This port is advertised to the network as a globally WAN accessible port.
+      advertisedWANPort: 62031
+
     # Flag indicating whether or not denied traffic will be logged.
     #   (This is useful for debugging talkgroup rules and other ACL issues, but can be very noisy on a busy system.)
     logDenials: false
+    # Flag indicating whether or not calls start/end events from a upstream peer will be logged.
+    logUpstreamCallStartEnd: true
 
     # Maximum number of concurrent packet processing workers.
     workers: 16
 
     # Maximum permitted connections (hard maximum is 250 peers).
     connectionLimit: 100
+
+    # Flag indicating whether or not the peer spanning tree is enabled.
+    #   NOTE: This should not be disabled. Disabling this can cause network loops
+    #         and other issues in a multi-peer FNE network.
+    enableSpanningTree: true
+    # Flag indicating whether or not spanning tree changes will be logged.
+    logSpanningTreeChanges: false
+    # Flag indicating whether or not the spanning tree allows fast peer reconnects.
+    #   (This is mainly useful for a peer announcing the same master to reconnect rapidly, inbetween
+    #    spanning tree updates.)
+    spanningTreeFastReconnect: true
 
     # Flag indicating whether or not peer pinging will be reported.
     reportPeerPing: true
@@ -91,6 +119,16 @@ master:
     # Flag indicating whether or not a parrot TG call will only be sent to the originating peer.
     parrotOnlyToOrginiatingPeer: false
 
+    # Flag indicating whether or not P25 OTAR KMF services are enabled.
+    kmfServicesEnabled: false
+    # Port number to listen on for P25 OTAR KMF services.
+    kmfOtarPort: 64414
+    # Flag indicating whether or not verbose debug logging for P25 OTAR KMF services is enabled.
+    kmfDebug: false
+
+    # Amount of time in seconds for a call collision to last before switching over the source of a call.
+    callCollisionTimeout: 5
+
     # Flag indicating whether or not a grant responses will only be sent to TGs with affiliations, if the TG is configured for affiliation gating.
     restrictGrantToAffiliatedOnly: false
     # Flag indicating whether or not a private call will only be routed to the network peers the RID registers with.
@@ -103,8 +141,10 @@ master:
     # Flag indicating whether or not a conventional site can override affiliation rules.
     allowConvSiteAffOverride: true
     # Flag indicating whether or not In-Call Control feedback is enabled.
+    disallowInCallCtrl: false
+    # Flag indicating whether or not RID ACL In-Call Control feedback is enabled.
     #   (This will enforce RID ACLs network wide, regardless of local peer RID ACL setting.)
-    enableInCallCtrl: false
+    enableRIDInCallCtrl: false
     # Flag indicating whether or not unknown/undefined RIDs will be rejected by the FNE.
     #   (This is a strict rejection, any unknown or undefined RID not in the RID ACL list will be hard rejected.)
     rejectUnknownRID: false
@@ -147,7 +187,7 @@ master:
     crypto_container:
         # Flag indicating whether or not crypto services are enabled.
         enable: false
-        # Full path to the talkgroup rules file.
+        # Full path to the KFDtool crypto container file.
         file: key_container.ekc
         # Container password.
         password: "PASSWORD"
@@ -173,10 +213,11 @@ master:
         time: 30
 
 #
-# External Peers
+# Upstream FNE Neighbor Peering
+#   (This is the list of connections to upstream FNEs this FNE instance should be connected to.)
 #
 peers:
-    - name: EXAMPLEPEER
+    - name: MASTERFNE
       # Flag indicating whether or not the peer is enabled.
       enable: true
       # Hostname/IP address of the FNE master to connect to.
@@ -185,25 +226,8 @@ peers:
       masterPort: 32090
       # FNE access password.
       password: RPT1234
-      # Textual identity of this peer.
-      identity: EXPEER
-      # Network Peer ID
+      # Network Peer ID of this peer on the upstream FNE master.
       peerId: 9000990
-
-      # List of peer IDs to block traffic to for this peer.
-      #   The purpose of the blockTrafficTo peer ID list is to prevent traffic sourced from a listed peer ID from
-      #   being resent/repeated to this peer. This usually *should* not needed to be configured, and is usually used
-      #   on complex system configurations where traffic loops are possible due to duplicated or redundant peer
-      #   connections.
-      # 
-      #   For example: If we have FNEs: A, B and C, where both B and C are connected to A, and B is also connected to
-      #   C. On FNE B we would have blockTrafficTo entries for each external peer block listing the peer block peer ID's
-      #   for external peer Cs ID on external peer A's entry, and external peer As ID on external peer Cs entry.
-      #
-      #   Additionally, depending on configured talkgroup rules and other criteria, it may be necessary to also have
-      #   FNE Bs peer ID on FNE Cs peer block entry for FNE A.
-      #
-      blockTrafficTo: []
 
       # Flag indicating whether or not peer endpoint networking is encrypted.
       encrypted: false
@@ -212,10 +236,6 @@ peers:
       #    0 - 9, A - F.)
       presharedKey: "000102030405060708090A0B0C0D0E0F000102030405060708090A0B0C0D0E0F"
 
-      # 
-      rxFrequency: 0
-      #
-      txFrequency: 0
       # Latitude.
       latitude: 0.0
       # Longitude.
@@ -230,6 +250,9 @@ peers:
 # System Configuration
 #
 system:
+    # Textual identity of this FNE (this is used when peering with upstream FNEs).
+    identity: MASTERFNE
+
     # Time in seconds between pings to peers.
     pingTime: 5
     # Maximum number of missable pings before a peer is considered disconnected.

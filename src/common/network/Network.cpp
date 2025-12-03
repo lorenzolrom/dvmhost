@@ -9,8 +9,8 @@
  */
 #include "Defines.h"
 #include "common/edac/SHA256.h"
-#include "common/network/json/json.h"
 #include "common/p25/kmm/KMMFactory.h"
+#include "common/json/json.h"
 #include "common/Log.h"
 #include "common/Utils.h"
 #include "network/Network.h"
@@ -25,7 +25,13 @@ using namespace network;
 //  Constants
 // ---------------------------------------------------------------------------
 
+#define DEFAULT_RETRY_TIME 10U // 10 seconds
+#define DUPLICATE_CONN_RETRY_TIME 3600U // 60 minutes
+
 #define MAX_RETRY_BEFORE_RECONNECT 4U
+#define MAX_RETRY_HA_RECONNECT 2U
+#define MAX_RETRY_DUP_RECONNECT 2U
+
 #define MAX_SERVER_DIFF 360ULL // maximum difference in time between a server timestamp and local timestamp in milliseconds
 
 // ---------------------------------------------------------------------------
@@ -41,6 +47,10 @@ Network::Network(const std::string& address, uint16_t port, uint16_t localPort, 
     m_pktLastSeq(0U),
     m_address(address),
     m_port(port),
+    m_configuredAddress(address),
+    m_configuredPort(port),
+    m_haIPs(),
+    m_currentHAIP(0U),
     m_password(password),
     m_enabled(false),
     m_dmrEnabled(dmr),
@@ -52,12 +62,16 @@ Network::Network(const std::string& address, uint16_t port, uint16_t localPort, 
     m_ridLookup(nullptr),
     m_tidLookup(nullptr),
     m_salt(nullptr),
-    m_retryTimer(1000U, 10U),
+    m_retryTimer(1000U, DEFAULT_RETRY_TIME),
     m_retryCount(0U),
+    m_maxRetryCount(MAX_RETRY_BEFORE_RECONNECT),
+    m_flaggedDuplicateConn(false),
     m_timeoutTimer(1000U, MAX_PEER_PING_TIME),
+    m_pingsReceived(0U),
     m_pktSeq(0U),
     m_loginStreamId(0U),
     m_metadata(nullptr),
+    m_mux(nullptr),
     m_remotePeerId(0U),
     m_promiscuousPeer(false),
     m_userHandleProtocol(false),
@@ -84,6 +98,7 @@ Network::Network(const std::string& address, uint16_t port, uint16_t localPort, 
     m_rxAnalogStreamId = 0U;
 
     m_metadata = new PeerMetadata();
+    m_mux = new RTPStreamMultiplex();
 }
 
 /* Finalizes a instance of the Network class. */
@@ -93,6 +108,7 @@ Network::~Network()
     delete[] m_salt;
     delete[] m_rxDMRStreamId;
     delete m_metadata;
+    delete m_mux;
 }
 
 /* Resets the DMR ring buffer for the given slot. */
@@ -187,19 +203,24 @@ void Network::clock(uint32_t ms)
         m_retryTimer.clock(ms);
         if (m_retryTimer.isRunning() && m_retryTimer.hasExpired()) {
             if (m_enabled) {
-                if (m_retryCount > MAX_RETRY_BEFORE_RECONNECT) {
-                    m_retryCount = 0U;
+                if (m_retryCount > m_maxRetryCount) {
+                    if (m_flaggedDuplicateConn) {
+                        LogError(LOG_NET, "PEER %u exceeded maximum duplicate connection retries, increasing delay between connection attempts", m_peerId);
+                    }
+
                     LogError(LOG_NET, "PEER %u connection to the master has timed out, retrying connection, remotePeerId = %u", m_peerId, m_remotePeerId);
 
                     close();
                     open();
 
+                    m_retryCount = 0U;
                     m_retryTimer.start();
                     return;
                 }
 
                 bool ret = m_socket->open(m_addr.ss_family);
                 if (ret) {
+                    m_socket->recvBufSize(262144U); // 256K recv buffer
                     ret = writeLogin();
                     if (!ret) {
                         m_retryTimer.start();
@@ -279,11 +300,6 @@ void Network::clock(uint32_t ms)
         }
 
         m_pktSeq = rtpHeader.getSequence();
-        
-        if (m_pktSeq == RTP_END_OF_CALL_SEQ) {
-            m_pktSeq = 0U;
-            m_pktLastSeq = 0U;
-        }
 
         // process incoming message function opcodes
         switch (fneHeader.getFunction()) {
@@ -296,7 +312,7 @@ void Network::clock(uint32_t ms)
                     break;
                 }
 
-                // process incomfing message subfunction opcodes
+                // process incoming message subfunction opcodes
                 switch (fneHeader.getSubFunction()) {
                 case NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR:                 // Encapsulated DMR data frame
                     {
@@ -311,6 +327,23 @@ void Network::clock(uint32_t ms)
                             if (m_promiscuousPeer) {
                                 m_rxDMRStreamId[slotNo] = streamId;
                                 m_pktLastSeq = m_pktSeq;
+
+                                uint16_t lastRxSeq = 0U;
+
+                                MULTIPLEX_RET_CODE ret = m_mux->verifyStream(streamId, rtpHeader.getSequence(), fneHeader.getFunction(), &lastRxSeq);
+                                if (ret == MUX_LOST_FRAMES) {
+                                    LogError(LOG_NET, "PEER %u stream %u possible lost frames; got %u, expected %u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq, rtpHeader.getSequence());
+                                }
+                                else if (ret == MUX_OUT_OF_ORDER) {
+                                    LogError(LOG_NET, "PEER %u stream %u out-of-order; got %u, expected >%u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq);
+                                }
+#if DEBUG_RTP_MUX
+                                else {
+                                    LogDebugEx(LOG_NET, "Network::clock()", "PEER %u valid mux, seq = %u, streamId = %u", peerId, rtpHeader.getSequence(), streamId);
+                                }
+#endif
                             }
                             else {
                                 if (m_rxDMRStreamId[slotNo] == 0U) {
@@ -325,18 +358,33 @@ void Network::clock(uint32_t ms)
                                 }
                                 else {
                                     if (m_rxDMRStreamId[slotNo] == streamId) {
-                                        if (m_pktSeq != 0U && m_pktLastSeq != 0U) {
-                                            if (m_pktSeq >= 1U && ((m_pktSeq != m_pktLastSeq + 1) && (m_pktSeq - 1 != m_pktLastSeq + 1))) {
-                                                LogWarning(LOG_NET, "DMR Stream %u out-of-sequence; %u != %u", streamId, m_pktSeq, m_pktLastSeq + 1);
-                                            }
+                                        uint16_t lastRxSeq = 0U;
+
+                                        MULTIPLEX_RET_CODE ret = verifyStream(&lastRxSeq);
+                                        if (ret == MUX_LOST_FRAMES) {
+                                            LogWarning(LOG_NET, "DMR Slot %u stream %u possible lost frames; got %u, expected %u", 
+                                                slotNo, streamId, m_pktSeq, lastRxSeq);
                                         }
-
-                                        m_pktLastSeq = m_pktSeq;
+                                        else if (ret == MUX_OUT_OF_ORDER) {
+                                            LogWarning(LOG_NET, "DMR Slot %u stream %u out-of-order; got %u, expected %u", 
+                                                slotNo, streamId, m_pktSeq, lastRxSeq);
+                                        }
+#if DEBUG_RTP_MUX
+                                        else {
+                                            LogDebugEx(LOG_NET, "Network::clock()", "DMR Slot %u valid seq, seq = %u, streamId = %u", slotNo, rtpHeader.getSequence(), streamId);
+                                        }
+#endif
+                                        if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
+                                            m_rxDMRStreamId[slotNo] = 0U;
+                                        }
                                     }
+                                }
 
-                                    if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
-                                        m_rxDMRStreamId[slotNo] = 0U;
-                                    }
+                                // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
+                                // to receiving a specific stream; a zero stream ID means the network is promiscuously
+                                // receiving streams sent to this peer
+                                if (m_rxDMRStreamId[slotNo] != 0U && m_rxDMRStreamId[slotNo] != streamId) {
+                                    break;
                                 }
                             }
 
@@ -363,6 +411,23 @@ void Network::clock(uint32_t ms)
                             if (m_promiscuousPeer) {
                                 m_rxP25StreamId = streamId;
                                 m_pktLastSeq = m_pktSeq;
+
+                                uint16_t lastRxSeq = 0U;
+
+                                MULTIPLEX_RET_CODE ret = m_mux->verifyStream(streamId, rtpHeader.getSequence(), fneHeader.getFunction(), &lastRxSeq);
+                                if (ret == MUX_LOST_FRAMES) {
+                                    LogError(LOG_NET, "PEER %u stream %u possible lost frames; got %u, expected %u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq, rtpHeader.getSequence());
+                                }
+                                else if (ret == MUX_OUT_OF_ORDER) {
+                                    LogError(LOG_NET, "PEER %u stream %u out-of-order; got %u, expected >%u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq);
+                                }
+#if DEBUG_RTP_MUX
+                                else {
+                                    LogDebugEx(LOG_NET, "Network::clock()", "PEER %u valid mux, seq = %u, streamId = %u", peerId, rtpHeader.getSequence(), streamId);
+                                }
+#endif
                             }
                             else {
                                 if (m_rxP25StreamId == 0U) {
@@ -377,20 +442,36 @@ void Network::clock(uint32_t ms)
                                 }
                                 else {
                                     if (m_rxP25StreamId == streamId) {
-                                        if (m_pktSeq != 0U && m_pktLastSeq != 0U) {
-                                            if (m_pktSeq >= 1U && ((m_pktSeq != m_pktLastSeq + 1) && (m_pktSeq - 1 != m_pktLastSeq + 1))) {
-                                                LogWarning(LOG_NET, "P25 Stream %u out-of-sequence; %u != %u", streamId, m_pktSeq, m_pktLastSeq + 1);
-                                            }
+                                        uint16_t lastRxSeq = 0U;
+
+                                        MULTIPLEX_RET_CODE ret = verifyStream(&lastRxSeq);
+                                        if (ret == MUX_LOST_FRAMES) {
+                                            LogWarning(LOG_NET, "P25 stream %u possible lost frames; got %u, expected %u", 
+                                                streamId, m_pktSeq, lastRxSeq);
                                         }
-
-                                        m_pktLastSeq = m_pktSeq;
-                                    }
-
-                                    if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
-                                        m_rxP25StreamId = 0U;
+                                        else if (ret == MUX_OUT_OF_ORDER) {
+                                            LogWarning(LOG_NET, "P25 stream %u out-of-order; got %u, expected %u", 
+                                                streamId, m_pktSeq, lastRxSeq);
+                                        }
+#if DEBUG_RTP_MUX
+                                        else {
+                                            LogDebugEx(LOG_NET, "Network::clock()", "P25 valid seq, seq = %u, streamId = %u", rtpHeader.getSequence(), streamId);
+                                        }
+#endif
+                                        if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
+                                            m_rxP25StreamId = 0U;
+                                        }
                                     }
                                 }
+
+                                // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
+                                // to receiving a specific stream; a zero stream ID means the network is promiscuously
+                                // receiving streams sent to this peer
+                                if (m_rxP25StreamId != 0U && m_rxP25StreamId != streamId) {
+                                    break;
+                                }
                             }
+
 
                             if (m_debug)
                                 Utils::dump(1U, "Network::clock(), Network Rx, P25", buffer.get(), length);
@@ -424,6 +505,23 @@ void Network::clock(uint32_t ms)
                             if (m_promiscuousPeer) {
                                 m_rxNXDNStreamId = streamId;
                                 m_pktLastSeq = m_pktSeq;
+
+                                uint16_t lastRxSeq = 0U;
+
+                                MULTIPLEX_RET_CODE ret = m_mux->verifyStream(streamId, rtpHeader.getSequence(), fneHeader.getFunction(), &lastRxSeq);
+                                if (ret == MUX_LOST_FRAMES) {
+                                    LogError(LOG_NET, "PEER %u stream %u possible lost frames; got %u, expected %u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq, rtpHeader.getSequence());
+                                }
+                                else if (ret == MUX_OUT_OF_ORDER) {
+                                    LogError(LOG_NET, "PEER %u stream %u out-of-order; got %u, expected >%u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq);
+                                }
+#if DEBUG_RTP_MUX
+                                else {
+                                    LogDebugEx(LOG_NET, "Network::clock()", "PEER %u valid mux, seq = %u, streamId = %u", peerId, rtpHeader.getSequence(), streamId);
+                                }
+#endif
                             }
                             else {
                                 if (m_rxNXDNStreamId == 0U) {
@@ -438,18 +536,33 @@ void Network::clock(uint32_t ms)
                                 }
                                 else {
                                     if (m_rxNXDNStreamId == streamId) {
-                                        if (m_pktSeq != 0U && m_pktLastSeq != 0U) {
-                                            if (m_pktSeq >= 1U && ((m_pktSeq != m_pktLastSeq + 1) && (m_pktSeq - 1 != m_pktLastSeq + 1))) {
-                                                LogWarning(LOG_NET, "NXDN Stream %u out-of-sequence; %u != %u", streamId, m_pktSeq, m_pktLastSeq + 1);
-                                            }
+                                        uint16_t lastRxSeq = 0U;
+
+                                        MULTIPLEX_RET_CODE ret = verifyStream(&lastRxSeq);
+                                        if (ret == MUX_LOST_FRAMES) {
+                                            LogWarning(LOG_NET, "NXDN stream %u possible lost frames; got %u, expected %u", 
+                                                streamId, m_pktSeq, lastRxSeq);
                                         }
-
-                                        m_pktLastSeq = m_pktSeq;
+                                        else if (ret == MUX_OUT_OF_ORDER) {
+                                            LogWarning(LOG_NET, "NXDN stream %u out-of-order; got %u, expected %u", 
+                                                streamId, m_pktSeq, lastRxSeq);
+                                        }
+#if DEBUG_RTP_MUX
+                                        else {
+                                            LogDebugEx(LOG_NET, "Network::clock()", "NXDN valid seq, seq = %u, streamId = %u", rtpHeader.getSequence(), streamId);
+                                        }
+#endif
+                                        if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
+                                            m_rxNXDNStreamId = 0U;
+                                        }
                                     }
+                                }
 
-                                    if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
-                                        m_rxNXDNStreamId = 0U;
-                                    }
+                                // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
+                                // to receiving a specific stream; a zero stream ID means the network is promiscuously
+                                // receiving streams sent to this peer
+                                if (m_rxNXDNStreamId != 0U && m_rxNXDNStreamId != streamId) {
+                                    break;
                                 }
                             }
 
@@ -476,6 +589,23 @@ void Network::clock(uint32_t ms)
                             if (m_promiscuousPeer) {
                                 m_rxAnalogStreamId = streamId;
                                 m_pktLastSeq = m_pktSeq;
+
+                                uint16_t lastRxSeq = 0U;
+
+                                MULTIPLEX_RET_CODE ret = m_mux->verifyStream(streamId, rtpHeader.getSequence(), fneHeader.getFunction(), &lastRxSeq);
+                                if (ret == MUX_LOST_FRAMES) {
+                                    LogError(LOG_NET, "PEER %u stream %u possible lost frames; got %u, expected %u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq, rtpHeader.getSequence());
+                                }
+                                else if (ret == MUX_OUT_OF_ORDER) {
+                                    LogError(LOG_NET, "PEER %u stream %u out-of-order; got %u, expected >%u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq);
+                                }
+#if DEBUG_RTP_MUX
+                                else {
+                                    LogDebugEx(LOG_NET, "Network::clock()", "PEER %u valid mux, seq = %u, streamId = %u", peerId, rtpHeader.getSequence(), streamId);
+                                }
+#endif
                             }
                             else {
                                 if (m_rxAnalogStreamId == 0U) {
@@ -490,18 +620,33 @@ void Network::clock(uint32_t ms)
                                 }
                                 else {
                                     if (m_rxAnalogStreamId == streamId) {
-                                        if (m_pktSeq != 0U && m_pktLastSeq != 0U) {
-                                            if (m_pktSeq >= 1U && ((m_pktSeq != m_pktLastSeq + 1) && (m_pktSeq - 1 != m_pktLastSeq + 1))) {
-                                                LogWarning(LOG_NET, "Analog Stream %u out-of-sequence; %u != %u", streamId, m_pktSeq, m_pktLastSeq + 1);
-                                            }
+                                        uint16_t lastRxSeq = 0U;
+
+                                        MULTIPLEX_RET_CODE ret = verifyStream(&lastRxSeq);
+                                        if (ret == MUX_LOST_FRAMES) {
+                                            LogWarning(LOG_NET, "Analog stream %u possible lost frames; got %u, expected %u", 
+                                                streamId, m_pktSeq, lastRxSeq);
                                         }
-
-                                        m_pktLastSeq = m_pktSeq;
+                                        else if (ret == MUX_OUT_OF_ORDER) {
+                                            LogWarning(LOG_NET, "Analog stream %u out-of-order; got %u, expected %u", 
+                                                streamId, m_pktSeq, lastRxSeq);
+                                        }
+#if DEBUG_RTP_MUX
+                                        else {
+                                            LogDebugEx(LOG_NET, "Network::clock()", "Analog valid seq, seq = %u, streamId = %u", rtpHeader.getSequence(), streamId);
+                                        }
+#endif
+                                        if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
+                                            m_rxAnalogStreamId = 0U;
+                                        }
                                     }
+                                }
 
-                                    if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
-                                        m_rxAnalogStreamId = 0U;
-                                    }
+                                // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
+                                // to receiving a specific stream; a zero stream ID means the network is promiscuously
+                                // receiving streams sent to this peer
+                                if (m_rxAnalogStreamId != 0U && m_rxAnalogStreamId != streamId) {
+                                    break;
                                 }
                             }
 
@@ -534,7 +679,7 @@ void Network::clock(uint32_t ms)
 
         case NET_FUNC::MASTER:                                          // Master
             {
-                // process incomfing message subfunction opcodes
+                // process incoming message subfunction opcodes
                 switch (fneHeader.getSubFunction()) {
                 case NET_SUBFUNC::MASTER_SUBFUNC_WL_RID:                // Radio ID Whitelist
                     {
@@ -552,7 +697,7 @@ void Network::clock(uint32_t ms)
                                     offs += 4U;
                                 }
 
-                                LogMessage(LOG_NET, "Network Announced %u whitelisted RIDs", len);
+                                LogInfoEx(LOG_NET, "Network Announced %u whitelisted RIDs", len);
 
                                 // save to file if enabled and we got RIDs
                                 if (m_saveLookup && len > 0) {
@@ -578,7 +723,7 @@ void Network::clock(uint32_t ms)
                                     offs += 4U;
                                 }
 
-                                LogMessage(LOG_NET, "Network Announced %u blacklisted RIDs", len);
+                                LogInfoEx(LOG_NET, "Network Announced %u blacklisted RIDs", len);
 
                                 // save to file if enabled and we got RIDs
                                 if (m_saveLookup && len > 0) {
@@ -621,7 +766,7 @@ void Network::clock(uint32_t ms)
                                             m_tidLookup->eraseEntry(id, slot);
                                         }
 
-                                        LogMessage(LOG_NET, "Activated%s%s TG %u TS %u in TGID table", 
+                                        LogInfoEx(LOG_NET, "Activated%s%s TG %u TS %u in TGID table", 
                                             (nonPreferred) ? " non-preferred" : "", (affiliated) ? " affiliated" : "", id, slot);
                                         m_tidLookup->addEntry(id, slot, true, affiliated, nonPreferred);
                                     }
@@ -629,7 +774,7 @@ void Network::clock(uint32_t ms)
                                     offs += 5U;
                                 }
 
-                                LogMessage(LOG_NET, "Activated %u TGs; loaded %u entries into talkgroup rules table", len, m_tidLookup->groupVoice().size());
+                                LogInfoEx(LOG_NET, "Activated %u TGs; loaded %u entries into talkgroup rules table", len, m_tidLookup->groupVoice().size());
 
                                 // save if saving from network is enabled
                                 if (m_saveLookup && len > 0) {
@@ -655,19 +800,59 @@ void Network::clock(uint32_t ms)
 
                                     lookups::TalkgroupRuleGroupVoice tid = m_tidLookup->find(id, slot);
                                     if (!tid.isInvalid()) {
-                                        LogMessage(LOG_NET, "Deactivated TG %u TS %u in TGID table", id, slot);
+                                        LogInfoEx(LOG_NET, "Deactivated TG %u TS %u in TGID table", id, slot);
                                         m_tidLookup->eraseEntry(id, slot);
                                     }
 
                                     offs += 5U;
                                 }
 
-                                LogMessage(LOG_NET, "Deactivated %u TGs; loaded %u entries into talkgroup rules table", len, m_tidLookup->groupVoice().size());
+                                LogInfoEx(LOG_NET, "Deactivated %u TGs; loaded %u entries into talkgroup rules table", len, m_tidLookup->groupVoice().size());
 
                                 // save if saving from network is enabled
                                 if (m_saveLookup && len > 0) {
                                     m_tidLookup->commit();
                                 }
+                            }
+                        }
+                    }
+                    break;
+
+                case NET_SUBFUNC::MASTER_HA_PARAMS:                     // HA Parameters
+                    {
+                        if (m_enabled) {
+                            if (m_debug)
+                                Utils::dump(1U, "Network::clock(), Network Rx, HA PARAMS", buffer.get(), length);
+
+                            m_haIPs.clear();
+                            m_currentHAIP = 0U;
+                            m_maxRetryCount = MAX_RETRY_HA_RECONNECT;
+
+                            // always add the configured address to the HA IP list
+                            m_haIPs.push_back(PeerHAIPEntry(m_configuredAddress, m_configuredPort));
+
+                            uint32_t len = GET_UINT32(buffer, 6U);
+                            if (len > 0U) {
+                                len /= HA_PARAMS_ENTRY_LEN;
+                            }
+
+                            uint8_t offs = 10U;
+                            for (uint8_t i = 0U; i < len; i++, offs += HA_PARAMS_ENTRY_LEN) {
+                                uint32_t ipAddr = GET_UINT32(buffer, offs + 4U);
+                                uint16_t port = GET_UINT16(buffer, offs + 8U);
+
+                                std::string address = __IP_FROM_UINT(ipAddr);
+
+                                if (m_debug)
+                                    LogDebugEx(LOG_NET, "Network::clock()", "HA PARAMS, %s:%u", address.c_str(), port);
+
+                                m_haIPs.push_back(PeerHAIPEntry(address, port));
+                            }
+
+                            if (m_haIPs.size() > 1U) {
+                                m_currentHAIP = 1U; // because the first entry is our configured entry, set
+                                                    // the current HA IP to the next available
+                                LogInfoEx(LOG_NET, "Loaded %u HA IPs from master", m_haIPs.size() - 1U);
                             }
                         }
                     }
@@ -682,7 +867,13 @@ void Network::clock(uint32_t ms)
 
         case NET_FUNC::INCALL_CTRL:                                     // In-Call Control
             {
-                // process incomfing message subfunction opcodes
+                uint32_t ssrc = rtpHeader.getSSRC();
+                if (!m_promiscuousPeer && ssrc != peerId) {
+                    LogWarning(LOG_NET, "PEER %u, ignoring in-call control not destined for this peer SSRC %u", m_peerId, ssrc);
+                    break;
+                }
+
+                // process incoming message subfunction opcodes
                 switch (fneHeader.getSubFunction()) {
                 case NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR:                 // DMR In-Call Control
                     {
@@ -693,7 +884,7 @@ void Network::clock(uint32_t ms)
 
                             // fire off DMR in-call callback if we have one
                             if (m_dmrInCallCallback != nullptr) {
-                                m_dmrInCallCallback(command, dstId, slot);
+                                m_dmrInCallCallback(command, dstId, slot, peerId, ssrc, streamId);
                             }
                         }
                     }
@@ -706,7 +897,7 @@ void Network::clock(uint32_t ms)
 
                             // fire off P25 in-call callback if we have one
                             if (m_p25InCallCallback != nullptr) {
-                                m_p25InCallCallback(command, dstId);
+                                m_p25InCallCallback(command, dstId, peerId, ssrc, streamId);
                             }
                         }    
                     }
@@ -719,7 +910,7 @@ void Network::clock(uint32_t ms)
 
                             // fire off NXDN in-call callback if we have one
                             if (m_nxdnInCallCallback != nullptr) {
-                                m_nxdnInCallCallback(command, dstId);
+                                m_nxdnInCallCallback(command, dstId, peerId, ssrc, streamId);
                             }
                         }
                     }
@@ -732,7 +923,7 @@ void Network::clock(uint32_t ms)
 
                             // fire off analog in-call callback if we have one
                             if (m_analogInCallCallback != nullptr) {
-                                m_analogInCallCallback(command, dstId);
+                                m_analogInCallCallback(command, dstId, peerId, ssrc, streamId);
                             }
                         }
                     }
@@ -765,7 +956,7 @@ void Network::clock(uint32_t ms)
                                 if (ks.keys().size() > 0U) {
                                     // fetch first key (a master response should never really send back more then one key)
                                     KeyItem ki = ks.keys()[0];
-                                    LogMessage(LOG_NET, "PEER %u, master reported enc. key, algId = $%02X, kID = $%04X", m_peerId,
+                                    LogInfoEx(LOG_NET, "PEER %u, master reported enc. key, algId = $%02X, kID = $%04X", m_peerId,
                                         ks.algId(), ki.kId());
 
                                     // fire off key response callback if we have one
@@ -821,6 +1012,15 @@ void Network::clock(uint32_t ms)
                         }
                         break;
 
+                    case NET_CONN_NAK_FNE_DUPLICATE_CONN:
+                        LogWarning(LOG_NET, "PEER %u master NAK; duplicate connection to FNE, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
+                        m_status = NET_STAT_WAITING_CONNECT;
+                        m_remotePeerId = 0U;
+                        m_flaggedDuplicateConn = true;
+                        m_maxRetryCount = MAX_RETRY_DUP_RECONNECT;
+                        m_retryTimer.start();
+                        return;
+
                     case NET_CONN_NAK_GENERAL_FAILURE:
                     default:
                         LogWarning(LOG_NET, "PEER %u master NAK; general failure, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
@@ -848,7 +1048,7 @@ void Network::clock(uint32_t ms)
             {
                 switch (m_status) {
                     case NET_STAT_WAITING_LOGIN:
-                        LogMessage(LOG_NET, "PEER %u RPTL ACK, performing login exchange, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
+                        LogInfoEx(LOG_NET, "PEER %u RPTL ACK, performing login exchange, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
 
                         ::memcpy(m_salt, buffer.get() + 6U, sizeof(uint32_t));
                         writeAuthorisation();
@@ -858,7 +1058,7 @@ void Network::clock(uint32_t ms)
                         m_retryTimer.start();
                         break;
                     case NET_STAT_WAITING_AUTHORISATION:
-                        LogMessage(LOG_NET, "PEER %u RPTK ACK, performing configuration exchange, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
+                        LogInfoEx(LOG_NET, "PEER %u RPTK ACK, performing configuration exchange, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
 
                         writeConfig();
 
@@ -867,7 +1067,7 @@ void Network::clock(uint32_t ms)
                         m_retryTimer.start();
                         break;
                     case NET_STAT_WAITING_CONFIG:
-                        LogMessage(LOG_NET, "PEER %u RPTC ACK, logged into the master successfully, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
+                        LogInfoEx(LOG_NET, "PEER %u RPTC ACK, logged into the master successfully, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
                         m_loginStreamId = 0U;
                         m_remotePeerId = rtpHeader.getSSRC();
 
@@ -880,12 +1080,13 @@ void Network::clock(uint32_t ms)
 
                         m_status = NET_STAT_RUNNING;
                         m_timeoutTimer.start();
+                        m_retryTimer.setTimeout(DEFAULT_RETRY_TIME);
                         m_retryTimer.start();
 
                         if (length > 6) {
                             m_useAlternatePortForDiagnostics = (buffer[6U] & 0x80U) == 0x80U;
                             if (m_useAlternatePortForDiagnostics) {
-                                LogMessage(LOG_NET, "PEER %u RPTC ACK, master commanded alternate port for diagnostics and activity logging, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
+                                LogInfoEx(LOG_NET, "PEER %u RPTC ACK, master commanded alternate port for diagnostics and activity logging, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
                             } else {
                                 // disable diagnostic and activity logging automatically if the master doesn't utilize the alternate port
                                 m_allowDiagnosticTransfer = false;
@@ -935,6 +1136,13 @@ void Network::clock(uint32_t ms)
                 uint64_t dt = (uint64_t)fabs((double)now - (double)serverNow);
                 if (dt > MAX_SERVER_DIFF)
                     LogWarning(LOG_NET, "PEER %u pong, time delay greater than %llums, now = %llu, server = %llu, dt = %llu", m_peerId, MAX_SERVER_DIFF, now, serverNow, dt);
+
+                ++m_pingsReceived;
+
+                // if we've been connected for at least 10 PING/PONG cycles and we're flagged duplicate connection, clear the flag
+                if (m_pingsReceived > 10U && m_flaggedDuplicateConn) {
+                    m_flaggedDuplicateConn = false;
+                }
             }
             break;
         default:
@@ -988,15 +1196,35 @@ bool Network::open()
     if (!m_enabled)
         return false;
     if (m_debug)
-        LogMessage(LOG_NET, "PEER %u opening network", m_peerId);
+        LogInfoEx(LOG_NET, "PEER %u opening network", m_peerId);
 
     m_status = NET_STAT_WAITING_CONNECT;
+
+    // are we rotating IPs for HA reconnect?
+    if ((m_haIPs.size() - 1) > 1 && m_retryCount > 0U && !m_flaggedDuplicateConn &&
+        m_maxRetryCount == MAX_RETRY_HA_RECONNECT) {
+
+        if (m_currentHAIP > (m_haIPs.size() - 1)) {
+            m_currentHAIP = 0U;
+        }
+
+        PeerHAIPEntry entry = m_haIPs[m_currentHAIP];
+        m_currentHAIP++;
+
+        LogInfoEx(LOG_NET, "PEER %u connection to the master has timed out, %s:%u is non-responsive, trying next HA %s:%u", m_peerId,
+            m_address.c_str(), m_port, entry.masterAddress.c_str(), entry.masterPort);
+        m_address = entry.masterAddress;
+        m_port = entry.masterPort;
+    }
+
     m_timeoutTimer.start();
     m_retryTimer.start();
     m_retryCount = 0U;
 
+    m_pingsReceived = 0U;
+
     if (udp::Socket::lookup(m_address, m_port, m_addr, m_addrLen) != 0) {
-        LogMessage(LOG_NET, "!!! Could not lookup the address of the master!");
+        LogInfoEx(LOG_NET, "!!! Could not lookup the address of the master!");
         return false;
     }
 
@@ -1008,7 +1236,7 @@ bool Network::open()
 void Network::close()
 {
     if (m_debug)
-        LogMessage(LOG_NET, "PEER %u closing Network", m_peerId);
+        LogInfoEx(LOG_NET, "PEER %u closing Network", m_peerId);
 
     if (m_status == NET_STAT_RUNNING) {
         uint8_t buffer[1U];
@@ -1020,9 +1248,17 @@ void Network::close()
     m_socket->close();
 
     m_retryTimer.stop();
+    if (m_flaggedDuplicateConn) {
+        // if we were flagged a duplicate connection, increase the retry time to avoid rapid reconnect attempts
+        m_retryTimer.setTimeout(DUPLICATE_CONN_RETRY_TIME);
+    }
+    else {
+        m_retryTimer.setTimeout(DEFAULT_RETRY_TIME);
+    }
     m_timeoutTimer.stop();
 
     m_status = NET_STAT_WAITING_CONNECT;
+    m_remotePeerId = 0U;
 }
 
 /* Sets flag enabling network communication. */
@@ -1035,6 +1271,38 @@ void Network::enable(bool enabled)
 // ---------------------------------------------------------------------------
 //  Protected Class Members
 // ---------------------------------------------------------------------------
+
+/* Helper to verify the given RTP sequence for the given RTP stream. */
+
+MULTIPLEX_RET_CODE Network::verifyStream(uint16_t* lastRxSeq)
+{
+    MULTIPLEX_RET_CODE ret = MUX_VALID_SUCCESS;
+    if (m_pktSeq == RTP_END_OF_CALL_SEQ) {
+        // reset the received sequence back to 0
+        m_pktLastSeq = 0U;
+    }
+    else {
+        *lastRxSeq = m_pktLastSeq;
+
+        if ((m_pktSeq >= m_pktLastSeq) || (m_pktSeq == 0U)) {
+            // if the sequence isn't 0, and is greater then the last received sequence + 1 frame
+            // assume a packet was lost
+            if ((m_pktSeq != 0U) && m_pktSeq > m_pktLastSeq + 1U) {
+                ret = MUX_LOST_FRAMES;
+            }
+
+            m_pktLastSeq = m_pktSeq;
+        }
+        else {
+            if (m_pktSeq < m_pktLastSeq) {
+                ret = MUX_OUT_OF_ORDER;
+            }
+        }
+    }
+
+    m_pktLastSeq = m_pktSeq;
+    return ret;
+}
 
 /* User overrideable handler that allows user code to process network packets not handled by this class. */
 
@@ -1051,6 +1319,11 @@ bool Network::writeLogin()
     if (!m_enabled) {
         return false;
     }
+
+    // reset retry timer default timeout
+    if (m_retryTimer.isRunning())
+        m_retryTimer.stop();
+    m_retryTimer.setTimeout(DEFAULT_RETRY_TIME);
 
     uint8_t buffer[8U];
     ::memcpy(buffer + 0U, TAG_REPEATER_LOGIN, 4U);

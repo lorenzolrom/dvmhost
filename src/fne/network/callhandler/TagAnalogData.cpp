@@ -28,12 +28,6 @@ using namespace analog::defines;
 #include <chrono>
 
 // ---------------------------------------------------------------------------
-//  Constants
-// ---------------------------------------------------------------------------
-
-const uint32_t CALL_COLL_TIMEOUT = 10U;
-
-// ---------------------------------------------------------------------------
 //  Public Class Members
 // ---------------------------------------------------------------------------
 
@@ -43,6 +37,10 @@ TagAnalogData::TagAnalogData(FNENetwork* network, bool debug) :
     m_network(network),
     m_parrotFrames(),
     m_parrotFramesReady(false),
+    m_parrotPlayback(false),
+    m_lastParrotPeerId(0U),
+    m_lastParrotSrcId(0U),
+    m_lastParrotDstId(0U),
     m_status(),
     m_debug(debug)
 {
@@ -55,7 +53,7 @@ TagAnalogData::~TagAnalogData() = default;
 
 /* Process a data frame from the network. */
 
-bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId, uint32_t ssrc, uint16_t pktSeq, uint32_t streamId, bool external)
+bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId, uint32_t ssrc, uint16_t pktSeq, uint32_t streamId, bool fromUpstream)
 {
     hrc::hrc_t pktTime = hrc::now();
 
@@ -89,21 +87,21 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
     // is the stream valid?
     if (validate(peerId, analogData, streamId)) {
         // is this peer ignored?
-        if (!isPeerPermitted(peerId, analogData, streamId, external)) {
+        if (!isPeerPermitted(peerId, analogData, streamId, fromUpstream)) {
             return false;
         }
 
         // is this the end of the call stream?
         if (frameType == AudioFrameType::TERMINATOR) {
             if (srcId == 0U && dstId == 0U) {
-                LogWarning(LOG_NET, "Analog, invalid TERMINATOR, peer = %u, ssrc = %u, srcId = %u, dstId = %u, slot = %u, streamId = %u, external = %u", peerId, ssrc, srcId, dstId, streamId, external);
+                LogWarning(LOG_NET, "Analog, invalid TERMINATOR, peer = %u, ssrc = %u, srcId = %u, dstId = %u, slot = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, streamId, fromUpstream);
                 return false;
             }
 
             RxStatus status = m_status[dstId];
             uint64_t duration = hrc::diff(pktTime, status.callStartTime);
 
-            auto it = std::find_if(m_status.begin(), m_status.end(), [&](StatusMapPair x) {
+            auto it = std::find_if(m_status.begin(), m_status.end(), [&](StatusMapPair& x) {
                 if (x.second.dstId == dstId) {
                     if (x.second.activeCall)
                         return true;
@@ -115,16 +113,19 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
 
                 // is this a parrot talkgroup? if so, clear any remaining frames from the buffer
                 lookups::TalkgroupRuleGroupVoice tg = m_network->m_tidLookup->find(dstId);
-                if (tg.config().parrot()) {
+                if (tg.config().parrot() && !m_parrotPlayback) {
                     if (m_parrotFrames.size() > 0) {
                         m_parrotFramesReady = true;
-                        LogMessage(LOG_NET, "Analog, Parrot Playback will Start, peer = %u, ssrc = %u, srcId = %u", peerId, ssrc, srcId);
+                        LogInfoEx(LOG_NET, "Analog, Parrot Playback will Start, peer = %u, ssrc = %u, srcId = %u", peerId, ssrc, srcId);
                         m_network->m_parrotDelayTimer.start();
                     }
                 }
 
-                LogMessage(LOG_NET, "Analog, Call End, peer = %u, ssrc = %u, srcId = %u, dstId = %u, duration = %u, streamId = %u, external = %u",
-                            peerId, ssrc, srcId, dstId, duration / 1000, streamId, external);
+                #define CALL_END_LOG "Analog, Call End, peer = %u, ssrc = %u, srcId = %u, dstId = %u, duration = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, duration / 1000, streamId, fromUpstream
+                if (m_network->m_logUpstreamCallStartEnd && fromUpstream)
+                    LogInfoEx(LOG_PEER, CALL_END_LOG);
+                else if (!fromUpstream)
+                    LogInfoEx(LOG_MASTER, CALL_END_LOG);
 
                 // report call event to InfluxDB
                 if (m_network->m_enableInfluxDB) {
@@ -141,18 +142,17 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                 }
 
                 m_network->eraseStreamPktSeq(peerId, streamId);
-                m_network->m_callInProgress = false;
             }
         }
 
         // is this a new call stream?
         if (frameType == AudioFrameType::VOICE_START) {
             if (srcId == 0U && dstId == 0U) {
-                LogWarning(LOG_NET, "Analog, invalid call, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, external = %u", peerId, ssrc, srcId, dstId, streamId, external);
+                LogWarning(LOG_NET, "Analog, invalid call, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, streamId, fromUpstream);
                 return false;
             }
 
-            auto it = std::find_if(m_status.begin(), m_status.end(), [&](StatusMapPair x) {
+            auto it = std::find_if(m_status.begin(), m_status.end(), [&](StatusMapPair& x) {
                 if (x.second.dstId == dstId) {
                     if (x.second.activeCall)
                         return true;
@@ -161,48 +161,115 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
             });
             if (it != m_status.end()) {
                 RxStatus status = it->second;
+
+                // is the call being taken over?
+                if (status.callTakeover) {
+                    LogInfoEx((fromUpstream) ? LOG_PEER : LOG_MASTER, "Analog, Call Source Switched (Takeover), peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, rxPeer = %u, rxSrcId = %u, rxDstId = %u, rxStreamId = %u, fromUpstream = %u",
+                        peerId, ssrc, srcId, dstId, streamId, status.peerId, status.srcId, status.dstId, status.streamId, fromUpstream);
+
+                    m_status.lock(false);
+                    m_status[dstId].streamId = streamId;
+                    m_status[dstId].srcId = srcId;
+                    m_status[dstId].ssrc = ssrc;
+                    m_status[dstId].callTakeover = false; // reset takeover flag
+                    m_status.unlock();
+
+                    status = m_status[dstId];
+                }
+
                 if (streamId != status.streamId) {
                     if (status.srcId != 0U && status.srcId != srcId) {
-                        uint64_t lastPktDuration = hrc::diff(hrc::now(), status.lastPacket);
-                        if ((lastPktDuration / 1000) > CALL_COLL_TIMEOUT) {
-                            LogWarning(LOG_NET, "Analog, Call Collision, lasted more then %us with no further updates, forcibly ending call");
-                            m_status[dstId].reset();
-                            m_network->m_callInProgress = false;
+                        bool hasCallPriority = false;
+
+                        // determine if the peer trying to transmit has call priority
+                        if (m_network->m_callCollisionTimeout > 0U) {
+                            m_network->m_peers.shared_lock();
+                            for (auto peer : m_network->m_peers) {
+                                if (peerId == peer.first) {
+                                    FNEPeerConnection* conn = peer.second;
+                                    if (conn != nullptr) {
+                                        hasCallPriority = conn->hasCallPriority();
+                                        break;
+                                    }
+                                }
+                            }
+                            m_network->m_peers.shared_unlock();
                         }
 
-                        LogWarning(LOG_NET, "Analog, Call Collision, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, rxPeer = %u, rxSrcId = %u, rxDstId = %u, rxStreamId = %u, external = %u",
-                            peerId, ssrc, srcId, dstId, streamId, status.peerId, status.srcId, status.dstId, status.streamId, external);
-                        return false;
+                        // perform standard call collision if the call collision timeout is set *and*
+                        //  the peer doesn't have call priority
+                        if (m_network->m_callCollisionTimeout > 0U && !hasCallPriority) {
+                            uint64_t lastPktDuration = hrc::diff(hrc::now(), status.lastPacket);
+                            if ((lastPktDuration / 1000) > m_network->m_callCollisionTimeout) {
+                                LogWarning((fromUpstream) ? LOG_PEER : LOG_MASTER, "Analog, Call Collision, lasted more then %us with no further updates, resetting call source", m_network->m_callCollisionTimeout);
+
+                                m_status.lock(false);
+                                m_status[dstId].streamId = streamId;
+                                m_status[dstId].srcId = srcId;
+                                m_status[dstId].ssrc = ssrc;
+                                m_status.unlock();
+                            }
+                            else {
+                                LogWarning((fromUpstream) ? LOG_PEER : LOG_MASTER, "Analog, Call Collision, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, rxPeer = %u, rxSrcId = %u, rxDstId = %u, rxStreamId = %u, fromUpstream = %u",
+                                    peerId, ssrc, srcId, dstId, streamId, status.peerId, status.srcId, status.dstId, status.streamId, fromUpstream);
+                                return false;
+                            }
+                        } else {
+                            if (hasCallPriority && !m_network->m_disallowInCallCtrl) {
+                                LogInfoEx((fromUpstream) ? LOG_PEER : LOG_MASTER, "Analog, Call Source Switched (Priority), peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, rxPeer = %u, rxSrcId = %u, rxDstId = %u, rxStreamId = %u, fromUpstream = %u",
+                                    peerId, ssrc, srcId, dstId, streamId, status.peerId, status.srcId, status.dstId, status.streamId, fromUpstream);
+
+                                // since we're gonna switch over the stream and interrupt the current call inprogress lets try to ICC the transmitting peer
+                                if (m_network->isPeerLocal(m_status[dstId].ssrc))
+                                    m_network->writePeerICC(m_status[dstId].peerId, m_status[dstId].streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, dstId, 0U, true, false,
+                                        m_status[dstId].ssrc);
+                                else
+                                    m_network->writePeerICC(m_status[dstId].peerId, m_status[dstId].streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, dstId, 0U, true, true,
+                                        m_status[dstId].ssrc);
+                            }
+
+                            m_status.lock(false);
+                            m_status[dstId].streamId = streamId;
+                            m_status[dstId].srcId = srcId;
+                            m_status[dstId].ssrc = ssrc;
+                            m_status.unlock();
+                        }
                     }
                 }
             }
             else {
                 // is this a parrot talkgroup? if so, clear any remaining frames from the buffer
                 lookups::TalkgroupRuleGroupVoice tg = m_network->m_tidLookup->find(dstId);
-                if (tg.config().parrot()) {
+                if (tg.config().parrot() && !m_parrotPlayback) {
                     m_parrotFramesReady = false;
                     if (m_parrotFrames.size() > 0) {
+                        m_parrotFrames.lock(false);
                         for (auto& pkt : m_parrotFrames) {
                             if (pkt.buffer != nullptr) {
                                 delete[] pkt.buffer;
                             }
                         }
+                        m_parrotFrames.unlock();
                         m_parrotFrames.clear();
                     }
                 }
 
                 // this is a new call stream
-                // bryanb: this could be problematic and is naive, if a dstId appears on both slots (which shouldn't happen)
+                m_status.lock(false);
                 m_status[dstId].callStartTime = pktTime;
                 m_status[dstId].srcId = srcId;
                 m_status[dstId].dstId = dstId;
                 m_status[dstId].streamId = streamId;
                 m_status[dstId].peerId = peerId;
+                m_status[dstId].ssrc = ssrc;
                 m_status[dstId].activeCall = true;
+                m_status.unlock();
 
-                LogMessage(LOG_NET, "Analog, Call Start, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, external = %u", peerId, ssrc, srcId, dstId, streamId, external);
-
-                m_network->m_callInProgress = true;
+                #define CALL_START_LOG "Analog, Call Start, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, streamId, fromUpstream
+                if (m_network->m_logUpstreamCallStartEnd && fromUpstream)
+                    LogInfoEx(LOG_PEER, CALL_START_LOG);
+                else if (!fromUpstream)
+                    LogInfoEx(LOG_MASTER, CALL_START_LOG);
             }
         }
 
@@ -230,12 +297,23 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
             }
         }
 
+        m_status.lock(false);
         m_status[dstId].lastPacket = hrc::now();
+        m_status.unlock();
 
-        // repeat traffic to the connected peers
+        /*
+        ** MASTER TRAFFIC
+        */
+
+        // repeat traffic to nodes peered to us as master
         if (m_network->m_peers.size() > 0U) {
             uint32_t i = 0U;
+            udp::BufferQueue queue = udp::BufferQueue();
+
+            m_network->m_peers.shared_lock();
             for (auto peer : m_network->m_peers) {
+                if (peer.second == nullptr)
+                    continue;
                 if (peerId != peer.first) {
                     if (ssrc == peer.first) {
                         // skip the peer if it is the source peer
@@ -247,9 +325,9 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                         continue;
                     }
 
-                    // every 5 peers flush the queue
-                    if (i % 5U == 0U) {
-                        m_network->m_frameQueue->flushQueue();
+                    // every MAX_QUEUED_PEER_MSGS peers flush the queue
+                    if (i % MAX_QUEUED_PEER_MSGS == 0U) {
+                        m_network->m_frameQueue->flushQueue(&queue);
                     }
 
                     DECLARE_UINT8_ARRAY(outboundPeerBuffer, len);
@@ -258,45 +336,43 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                     // perform TGID route rewrites if configured
                     routeRewrite(outboundPeerBuffer, peer.first, dstId);
 
-                    m_network->writePeer(peer.first, ssrc, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, outboundPeerBuffer, len, pktSeq, streamId, true);
+                    m_network->writePeerQueue(&queue, peer.first, ssrc, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, outboundPeerBuffer, len, pktSeq, streamId);
                     if (m_network->m_debug) {
-                        LogDebug(LOG_NET, "Analog, ssrc = %u, srcPeer = %u, dstPeer = %u, seqNo = %u, srcId = %u, dstId = %u, len = %u, pktSeq = %u, stream = %u, external = %u", 
-                            ssrc, peerId, peer.first, seqNo, srcId, dstId, len, pktSeq, streamId, external);
+                        LogDebugEx(LOG_ANALOG, "TagAnalogData::processFrame()", "Master, ssrc = %u, srcPeer = %u, dstPeer = %u, seqNo = %u, srcId = %u, dstId = %u, len = %u, pktSeq = %u, stream = %u, fromUpstream = %u", 
+                            ssrc, peerId, peer.first, seqNo, srcId, dstId, len, pktSeq, streamId, fromUpstream);
                     }
 
-                    if (!m_network->m_callInProgress)
-                        m_network->m_callInProgress = true;
                     i++;
                 }
             }
-            m_network->m_frameQueue->flushQueue();
+            m_network->m_frameQueue->flushQueue(&queue);
+            m_network->m_peers.shared_unlock();
         }
 
-        // repeat traffic to external peers
+        /*
+        ** PEER TRAFFIC (e.g. upstream networks this FNE is peered to)
+        */
+
+        // repeat traffic to master nodes we have connected to as a peer
         if (m_network->m_host->m_peerNetworks.size() > 0U && !tg.config().parrot()) {
             for (auto peer : m_network->m_host->m_peerNetworks) {
                 uint32_t dstPeerId = peer.second->getPeerId();
 
                 // don't try to repeat traffic to the source peer...if this traffic
-                // is coming from a external peer
+                // is coming from a neighbor FNE peer
                 if (dstPeerId != peerId) {
                     if (ssrc == dstPeerId) {
                         // skip the peer if it is the source peer
                         continue;
                     }
 
-                    // is this peer ignored?
-                    if (!isPeerPermitted(dstPeerId, analogData, streamId, true)) {
-                        continue;
-                    }
-
-                    // check if the source peer is blocked from sending to this peer
-                    if (peer.second->checkBlockedPeer(peerId)) {
-                        continue;
-                    }
-
                     // skip peer if it isn't enabled
                     if (!peer.second->isEnabled()) {
+                        continue;
+                    }
+
+                    // is this peer ignored?
+                    if (!isPeerPermitted(dstPeerId, analogData, streamId, true)) {
                         continue;
                     }
 
@@ -306,18 +382,15 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                     // perform TGID route rewrites if configured
                     routeRewrite(outboundPeerBuffer, dstPeerId, dstId);
 
-                    // are we a peer link?
-                    if (peer.second->isPeerLink())
-                        peer.second->writeMaster({ NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, outboundPeerBuffer, len, pktSeq, streamId, false, false, 0U, ssrc);
+                    // are we a replica peer?
+                    if (peer.second->isReplica())
+                        peer.second->writeMaster({ NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, outboundPeerBuffer, len, pktSeq, streamId, false, 0U, ssrc);
                     else
                         peer.second->writeMaster({ NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, outboundPeerBuffer, len, pktSeq, streamId);
                     if (m_network->m_debug) {
-                        LogDebug(LOG_NET, "Analog, ssrc = %u, srcPeer = %u, dstPeer = %u, seqNo = %u, srcId = %u, dstId = %u, len = %u, pktSeq = %u, stream = %u, external = %u", 
-                            ssrc, peerId, dstPeerId, seqNo, srcId, dstId, len, pktSeq, streamId, external);
+                        LogDebugEx(LOG_ANALOG, "TagAnalogData::processFrame()", "Peers, ssrc = %u, srcPeer = %u, dstPeer = %u, seqNo = %u, srcId = %u, dstId = %u, len = %u, pktSeq = %u, stream = %u, fromUpstream = %u", 
+                            ssrc, peerId, dstPeerId, seqNo, srcId, dstId, len, pktSeq, streamId, fromUpstream);
                     }
-
-                    if (!m_network->m_callInProgress)
-                        m_network->m_callInProgress = true;
                 }
             }
         }
@@ -328,38 +401,78 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
     return false;
 }
 
+/* Helper to trigger a call takeover from a In-Call control event. */
+
+void TagAnalogData::triggerCallTakeover(uint32_t dstId)
+{
+    auto it = std::find_if(m_status.begin(), m_status.end(), [&](StatusMapPair& x) {
+        if (x.second.dstId == dstId) {
+            if (x.second.activeCall)
+                return true;
+        }
+        return false;
+    });
+    if (it != m_status.end()) {
+        m_status.lock(false);
+        m_status[dstId].callTakeover = true;
+        m_status.unlock();
+    }
+}
+
 /* Helper to playback a parrot frame to the network. */
 
 void TagAnalogData::playbackParrot()
 {
     if (m_parrotFrames.size() == 0) {
         m_parrotFramesReady = false;
+        m_parrotPlayback = false;
         return;
     }
 
+    m_parrotPlayback = true;
+
     auto& pkt = m_parrotFrames[0];
+    m_parrotFrames.lock();
     if (pkt.buffer != nullptr) {
+        m_lastParrotPeerId = pkt.peerId;
+        m_lastParrotSrcId = pkt.srcId;
+        m_lastParrotDstId = pkt.dstId;
+
         if (m_network->m_parrotOnlyOriginating) {
-            m_network->writePeer(pkt.peerId, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, pkt.buffer, pkt.bufferLen, pkt.pktSeq, pkt.streamId, false);
+            m_network->writePeer(pkt.peerId, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, pkt.buffer, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
             if (m_network->m_debug) {
-                LogDebug(LOG_NET, "Analog, parrot, dstPeer = %u, len = %u, pktSeq = %u, streamId = %u", 
+                LogDebugEx(LOG_ANALOG, "TagAnalogData::playbackParrot()", "Parrot, dstPeer = %u, len = %u, pktSeq = %u, streamId = %u", 
                     pkt.peerId, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
             }
         }
         else {
             // repeat traffic to the connected peers
+            uint32_t i = 0U;
+            udp::BufferQueue queue = udp::BufferQueue();
+
+            m_network->m_peers.shared_lock();
             for (auto peer : m_network->m_peers) {
-                m_network->writePeer(peer.first, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, pkt.buffer, pkt.bufferLen, pkt.pktSeq, pkt.streamId, false);
+                // every MAX_QUEUED_PEER_MSGS peers flush the queue
+                if (i % MAX_QUEUED_PEER_MSGS == 0U) {
+                    m_network->m_frameQueue->flushQueue(&queue);
+                }
+
+                m_network->writePeerQueue(&queue, peer.first, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG }, pkt.buffer, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
                 if (m_network->m_debug) {
-                    LogDebug(LOG_NET, "Analog, parrot, dstPeer = %u, len = %u, pktSeq = %u, streamId = %u", 
+                    LogDebugEx(LOG_ANALOG, "TagAnalogData::playbackParrot()", "Parrot, dstPeer = %u, len = %u, pktSeq = %u, streamId = %u", 
                         peer.first, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
                 }
+
+                i++;
             }
+            m_network->m_frameQueue->flushQueue(&queue);
+            m_network->m_peers.shared_unlock();
         }
 
         delete[] pkt.buffer;
     }
     Thread::sleep(60);
+    m_parrotFrames.unlock();
     m_parrotFrames.pop_front();
 }
 
@@ -414,7 +527,7 @@ bool TagAnalogData::peerRewrite(uint32_t peerId, uint32_t& dstId, bool outbound)
 
 /* Helper to determine if the peer is permitted for traffic. */
 
-bool TagAnalogData::isPeerPermitted(uint32_t peerId, data::NetData& data, uint32_t streamId, bool external)
+bool TagAnalogData::isPeerPermitted(uint32_t peerId, data::NetData& data, uint32_t streamId, bool fromUpstream)
 {
     if (!data.getGroup()) {
         if (m_network->m_disallowU2U)
@@ -431,10 +544,10 @@ bool TagAnalogData::isPeerPermitted(uint32_t peerId, data::NetData& data, uint32
         connection = m_network->m_peers[peerId];
     }
 
-    // is this peer a Peer-Link peer?
+    // is this peer a replica peer?
     if (connection != nullptr) {
-        if (connection->isPeerLink()) {
-            return true; // Peer Link peers are *always* allowed to receive traffic and no other rules may filter
+        if (connection->isReplica()) {
+            return true; // replica peers are *always* allowed to receive traffic and no other rules may filter
                          // these peers
         }
     }
@@ -475,8 +588,8 @@ bool TagAnalogData::isPeerPermitted(uint32_t peerId, data::NetData& data, uint32
         if (m_network->m_allowConvSiteAffOverride) {
             if (connection != nullptr) {
                 if (connection->isConventionalPeer()) {
-                    external = true; // we'll just set the external flag to disable the affiliation check
-                                     // for conventional peers
+                    fromUpstream = true; // we'll just set the fromUpstream flag to disable the affiliation check
+                                         // for conventional peers
                 }
             }
         }
@@ -484,14 +597,14 @@ bool TagAnalogData::isPeerPermitted(uint32_t peerId, data::NetData& data, uint32
         // is this peer a SysView peer?
         if (connection != nullptr) {
             if (connection->isSysView()) {
-                external = true; // we'll just set the external flag to disable the affiliation check
-                                 // for SysView peers
+                fromUpstream = true; // we'll just set the fromUpstream flag to disable the affiliation check
+                                     // for SysView peers
             }
         }
 
         // is this a TG that requires affiliations to repeat?
-        // NOTE: external peers *always* repeat traffic regardless of affiliation
-        if (tg.config().affiliated() && !external) {
+        // NOTE: neighbor FNE peers *always* repeat traffic regardless of affiliation
+        if (tg.config().affiliated() && !fromUpstream) {
             uint32_t lookupPeerId = peerId;
             if (connection != nullptr) {
                 if (connection->ccPeerId() > 0U)
@@ -538,6 +651,9 @@ bool TagAnalogData::validate(uint32_t peerId, data::NetData& data, uint32_t stre
                     .requestAsync(m_network->m_influxServer);
             }
 
+            if (m_network->m_logDenials)
+                LogError(LOG_ANALOG, INFLUXDB_ERRSTR_DISABLED_SRC_RID ", peer = %u, srcId = %u, dstId = %u", peerId, data.getSrcId(), data.getDstId());
+
             // report In-Call Control to the peer sending traffic
             m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, data.getDstId());
             return false;
@@ -574,6 +690,9 @@ bool TagAnalogData::validate(uint32_t peerId, data::NetData& data, uint32_t stre
                         .requestAsync(m_network->m_influxServer);
                 }
 
+                if (m_network->m_logDenials)
+                    LogError(LOG_ANALOG, INFLUXDB_ERRSTR_DISABLED_DST_RID ", peer = %u, srcId = %u, dstId = %u", peerId, data.getSrcId(), data.getDstId());
+
                 return false;
             }
         }
@@ -589,12 +708,13 @@ bool TagAnalogData::validate(uint32_t peerId, data::NetData& data, uint32_t stre
                             .tag("streamId", std::to_string(streamId))
                             .tag("srcId", std::to_string(data.getSrcId()))
                             .tag("dstId", std::to_string(data.getDstId()))
-                                .field("message", std::string(INFLUXDB_ERRSTR_DISABLED_SRC_RID))
+                                .field("message", std::string(INFLUXDB_ERRSTR_ILLEGAL_RID_ACCESS))
                             .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
                         .requestAsync(m_network->m_influxServer);
                 }
 
-                LogWarning(LOG_NET, "Analog, illegal/unknown RID attempted access, srcId = %u, dstId = %u", data.getSrcId(), data.getDstId());
+                if (m_network->m_logDenials)
+                    LogWarning(LOG_ANALOG, INFLUXDB_ERRSTR_ILLEGAL_RID_ACCESS ", srcId = %u, dstId = %u", data.getSrcId(), data.getDstId());
 
                 // report In-Call Control to the peer sending traffic
                 m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, data.getDstId());
@@ -619,6 +739,9 @@ bool TagAnalogData::validate(uint32_t peerId, data::NetData& data, uint32_t stre
                         .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
                     .requestAsync(m_network->m_influxServer);
             }
+
+            if (m_network->m_logDenials)
+                LogError(LOG_ANALOG, INFLUXDB_ERRSTR_INV_TALKGROUP ", peer = %u, srcId = %u, dstId = %u", peerId, data.getSrcId(), data.getDstId());
 
             // report In-Call Control to the peer sending traffic
             m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, data.getDstId());
@@ -646,12 +769,13 @@ bool TagAnalogData::validate(uint32_t peerId, data::NetData& data, uint32_t stre
                         .tag("streamId", std::to_string(streamId))
                         .tag("srcId", std::to_string(data.getSrcId()))
                         .tag("dstId", std::to_string(data.getDstId()))
-                            .field("message", std::string(INFLUXDB_ERRSTR_DISABLED_SRC_RID))
+                            .field("message", std::string(INFLUXDB_ERRSTR_ILLEGAL_RID_ACCESS))
                         .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
                     .requestAsync(m_network->m_influxServer);
             }
 
-            LogWarning(LOG_NET, "Analog, illegal/unknown RID attempted access, srcId = %u, dstId = %u", data.getSrcId(), data.getDstId());
+            if (m_network->m_logDenials)
+                LogWarning(LOG_ANALOG, INFLUXDB_ERRSTR_ILLEGAL_RID_ACCESS ", srcId = %u, dstId = %u", data.getSrcId(), data.getDstId());
 
             // report In-Call Control to the peer sending traffic
             m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, data.getDstId());
@@ -672,6 +796,9 @@ bool TagAnalogData::validate(uint32_t peerId, data::NetData& data, uint32_t stre
                         .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
                     .requestAsync(m_network->m_influxServer);
             }
+
+            if (m_network->m_logDenials)
+                LogError(LOG_ANALOG, INFLUXDB_ERRSTR_DISABLED_TALKGROUP ", peer = %u, srcId = %u, dstId = %u", peerId, data.getSrcId(), data.getDstId());
 
             // report In-Call Control to the peer sending traffic
             m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, data.getDstId());
@@ -697,6 +824,9 @@ bool TagAnalogData::validate(uint32_t peerId, data::NetData& data, uint32_t stre
                                 .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
                             .requestAsync(m_network->m_influxServer);
                     }
+
+                    if (m_network->m_logDenials)
+                        LogError(LOG_ANALOG, INFLUXDB_ERRSTR_RID_NOT_PERMITTED ", peer = %u, srcId = %u, dstId = %u", peerId, data.getSrcId(), data.getDstId());
 
                     // report In-Call Control to the peer sending traffic
                     m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG, NET_ICC::REJECT_TRAFFIC, data.getDstId());

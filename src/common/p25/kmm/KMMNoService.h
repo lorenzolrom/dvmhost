@@ -28,19 +28,6 @@ namespace p25
     namespace kmm
     {
         // ---------------------------------------------------------------------------
-        //  Constants
-        // ---------------------------------------------------------------------------
-
-        /**
-         * @addtogroup p25_kmm
-         * @{
-         */
-
-         const uint32_t KMM_NO_SERVICE_LENGTH = KMM_FRAME_LENGTH;
-
-         /** @} */
- 
-        // ---------------------------------------------------------------------------
         //  Class Declaration
         // ---------------------------------------------------------------------------
 
@@ -66,6 +53,12 @@ namespace p25
              * @param[out] data Buffer to encode KMM frame data to.
              */
             void encode(uint8_t* data) override;
+
+            /**
+             * @brief Returns a string that represents the current KMM frame.
+             * @returns std::string String representation of the KMM frame.
+             */
+            std::string toString() override;
 
         public:
             DECLARE_COPY(KMMNoService);

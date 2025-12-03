@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2023,2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2023,2024,2025 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -44,35 +44,36 @@ namespace network
      */
     namespace NET_FUNC {
         enum ENUM : uint8_t {
-            ILLEGAL = 0xFFU,                        //! Illegal Function
+            ILLEGAL = 0xFFU,                        //!< Illegal Function
 
-            PROTOCOL = 0x00U,                       //! Digital Protocol Function
+            PROTOCOL = 0x00U,                       //!< Digital Protocol Function
 
-            MASTER = 0x01U,                         //! Network Master Function
+            MASTER = 0x01U,                         //!< Network Master Function
 
-            RPTL = 0x60U,                           //! Repeater Login
-            RPTK = 0x61U,                           //! Repeater Authorisation
-            RPTC = 0x62U,                           //! Repeater Configuration
+            RPTL = 0x60U,                           //!< Repeater Login
+            RPTK = 0x61U,                           //!< Repeater Authorisation
+            RPTC = 0x62U,                           //!< Repeater Configuration
 
-            RPT_DISC = 0x70U,                       //! Repeater Disconnect
-            MST_DISC = 0x71U,                       //! Master Disconnect
+            RPT_DISC = 0x70U,                       //!< Repeater Disconnect
+            MST_DISC = 0x71U,                       //!< Master Disconnect
 
-            PING = 0x74U,                           //! Ping
-            PONG = 0x75U,                           //! Pong
+            PING = 0x74U,                           //!< Ping
+            PONG = 0x75U,                           //!< Pong
 
-            GRANT_REQ = 0x7AU,                      //! Grant Request
-            INCALL_CTRL = 0x7BU,                    //! In-Call Control
-            KEY_REQ = 0x7CU,                        //! Encryption Key Request
-            KEY_RSP = 0x7DU,                        //! Encryption Key Response
+            GRANT_REQ = 0x7AU,                      //!< Grant Request
+            INCALL_CTRL = 0x7BU,                    //!< In-Call Control
+            KEY_REQ = 0x7CU,                        //!< Encryption Key Request
+            KEY_RSP = 0x7DU,                        //!< Encryption Key Response
 
-            ACK = 0x7EU,                            //! Packet Acknowledge
-            NAK = 0x7FU,                            //! Packet Negative Acknowledge
+            ACK = 0x7EU,                            //!< Packet Acknowledge
+            NAK = 0x7FU,                            //!< Packet Negative Acknowledge
 
-            TRANSFER = 0x90U,                       //! Network Transfer Function
+            TRANSFER = 0x90U,                       //!< Network Transfer Function
 
-            ANNOUNCE = 0x91U,                       //! Network Announce Function
+            ANNOUNCE = 0x91U,                       //!< Network Announce Function
 
-            PEER_LINK = 0x92U                       //! FNE Peer-Link Function
+            REPL = 0x92U,                           //!< FNE Replication Function
+            NET_TREE = 0x93U                        //!< FNE Network Tree Function
         };
     };
 
@@ -82,34 +83,40 @@ namespace network
      */
     namespace NET_SUBFUNC {
         enum ENUM : uint8_t {
-            NOP = 0xFFU,                            //! No Operation Sub-Function
+            NOP = 0xFFU,                            //!< No Operation Sub-Function
 
-            PROTOCOL_SUBFUNC_DMR = 0x00U,           //! DMR
-            PROTOCOL_SUBFUNC_P25 = 0x01U,           //! P25
-            PROTOCOL_SUBFUNC_NXDN = 0x02U,          //! NXDN
-            PROTOCOL_SUBFUNC_ANALOG = 0x0FU,        //! Analog
+            PROTOCOL_SUBFUNC_DMR = 0x00U,           //!< DMR
+            PROTOCOL_SUBFUNC_P25 = 0x01U,           //!< P25
+            PROTOCOL_SUBFUNC_NXDN = 0x02U,          //!< NXDN
+            PROTOCOL_SUBFUNC_P25_P2 = 0x03U,        //!< P25 Phase 2
+            PROTOCOL_SUBFUNC_ANALOG = 0x0FU,        //!< Analog
 
-            MASTER_SUBFUNC_WL_RID = 0x00U,          //! Whitelist RIDs
-            MASTER_SUBFUNC_BL_RID = 0x01U,          //! Blacklist RIDs
-            MASTER_SUBFUNC_ACTIVE_TGS = 0x02U,      //! Active TGIDs
-            MASTER_SUBFUNC_DEACTIVE_TGS = 0x03U,    //! Deactive TGIDs
+            MASTER_SUBFUNC_WL_RID = 0x00U,          //!< Whitelist RIDs
+            MASTER_SUBFUNC_BL_RID = 0x01U,          //!< Blacklist RIDs
+            MASTER_SUBFUNC_ACTIVE_TGS = 0x02U,      //!< Active TGIDs
+            MASTER_SUBFUNC_DEACTIVE_TGS = 0x03U,    //!< Deactive TGIDs
+            MASTER_HA_PARAMS = 0xA3U,               //!< HA Parameters
 
-            TRANSFER_SUBFUNC_ACTIVITY = 0x01U,      //! Activity Log Transfer
-            TRANSFER_SUBFUNC_DIAG = 0x02U,          //! Diagnostic Log Transfer
-            TRANSFER_SUBFUNC_STATUS = 0x03U,        //! Status Transfer
+            TRANSFER_SUBFUNC_ACTIVITY = 0x01U,      //!< Activity Log Transfer
+            TRANSFER_SUBFUNC_DIAG = 0x02U,          //!< Diagnostic Log Transfer
+            TRANSFER_SUBFUNC_STATUS = 0x03U,        //!< Status Transfer
 
-            ANNC_SUBFUNC_GRP_AFFIL = 0x00U,         //! Announce Group Affiliation
-            ANNC_SUBFUNC_UNIT_REG = 0x01U,          //! Announce Unit Registration
-            ANNC_SUBFUNC_UNIT_DEREG = 0x02U,        //! Announce Unit Deregistration
-            ANNC_SUBFUNC_GRP_UNAFFIL = 0x03U,       //! Announce Group Affiliation Removal
-            ANNC_SUBFUNC_AFFILS = 0x90U,            //! Update All Affiliations
-            ANNC_SUBFUNC_SITE_VC = 0x9AU,           //! Announce Site VCs
+            ANNC_SUBFUNC_GRP_AFFIL = 0x00U,         //!< Announce Group Affiliation
+            ANNC_SUBFUNC_UNIT_REG = 0x01U,          //!< Announce Unit Registration
+            ANNC_SUBFUNC_UNIT_DEREG = 0x02U,        //!< Announce Unit Deregistration
+            ANNC_SUBFUNC_GRP_UNAFFIL = 0x03U,       //!< Announce Group Affiliation Removal
+            ANNC_SUBFUNC_AFFILS = 0x90U,            //!< Update All Affiliations
+            ANNC_SUBFUNC_SITE_VC = 0x9AU,           //!< Announce Site VCs
 
-            PL_TALKGROUP_LIST = 0x00U,              //! FNE Peer-Link Talkgroup Transfer
-            PL_RID_LIST = 0x01U,                    //! FNE Peer-Link Radio ID Transfer
-            PL_PEER_LIST = 0x02U,                   //! FNE Peer-Link Peer List Transfer
+            REPL_TALKGROUP_LIST = 0x00U,            //!< FNE Replication Talkgroup Transfer
+            REPL_RID_LIST = 0x01U,                  //!< FNE Replication Radio ID Transfer
+            REPL_PEER_LIST = 0x02U,                 //!< FNE Replication Peer List Transfer
 
-            PL_ACT_PEER_LIST = 0xA2U,               //! FNE Peer-Link Active Peer List Transfer
+            REPL_ACT_PEER_LIST = 0xA2U,             //!< FNE Replication Active Peer List Transfer
+            REPL_HA_PARAMS = 0xA3U,                 //!< FNE Replication HA Parameters
+
+            NET_TREE_LIST = 0x00U,                  //!< FNE Network Tree List
+            NET_TREE_DISC = 0x01U                   //!< FNE Network Tree Disconnect
         };
     };
 
@@ -119,10 +126,10 @@ namespace network
      */
     namespace NET_ICC {
         enum ENUM : uint8_t {
-            NOP = 0xFFU,                            //! No Operation Sub-Function
+            NOP = 0xFFU,                            //!< No Operation Sub-Function
 
-            BUSY_DENY = 0x00U,                      //! Busy Deny
-            REJECT_TRAFFIC = 0x01U,                 //! Reject Active Traffic
+            BUSY_DENY = 0x00U,                      //!< Busy Deny
+            REJECT_TRAFFIC = 0x01U,                 //!< Reject Active Traffic
         };
     };
 

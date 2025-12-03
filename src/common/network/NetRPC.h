@@ -21,9 +21,9 @@
 #endif // defined(_WIN32)
 
 #include "common/Defines.h"
+#include "common/json/json.h"
 #include "common/network/udp/Socket.h"
 #include "common/network/RawFrameQueue.h"
-#include "common/network/json/json.h"
 
 #include <string>
 #include <cstdint>
@@ -63,12 +63,16 @@ namespace network
          * @brief Status/Response Codes
          */
         enum StatusType {
-            OK = 200,                       //! OK 200
+            OK = 200,                       //!< OK 200
 
-            BAD_REQUEST = 400,              //! Bad Request 400
-            INVALID_ARGS = 401,             //! Invalid Arguments 401
-            UNHANDLED_REQUEST = 402,        //! Unhandled Request 402
+            BAD_REQUEST = 400,              //!< Bad Request 400
+            INVALID_ARGS = 401,             //!< Invalid Arguments 401
+            UNHANDLED_REQUEST = 402,        //!< Unhandled Request 402
         } status;
+
+        auto operator=(NetRPC&) -> NetRPC& = delete;
+        auto operator=(NetRPC&&) -> NetRPC& = delete;
+        NetRPC(NetRPC&) = delete;
 
         /**
          * @brief Initializes a new instance of the NetRPC class.
@@ -137,13 +141,15 @@ namespace network
          * @brief Helper to register an RPC handler.
          * @param func Function opcode.
          * @param handler Function handler.
+         * @returns bool True, if handler is registered, otherwise false.
          */
-        void registerHandler(uint16_t func, RPCType handler) { m_handlers[func] = handler; }
+        bool registerHandler(uint16_t func, RPCType handler);
         /**
          * @brief Helper to unregister an RPC handler.
          * @param func Function opcode.
+         * @returns bool True, if handler is unregistered, otherwise false.
          */
-        void unregisterHandler(uint16_t func) { m_handlers.erase(func); }
+        bool unregisterHandler(uint16_t func);
 
     private:
         std::string m_address;
@@ -156,6 +162,7 @@ namespace network
 
         std::string m_password;
 
+        typedef std::pair<const uint16_t, RPCType> RPCHandlerMapPair;
         std::map<uint16_t, RPCType> m_handlers;
         std::map<uint16_t, bool> m_handlerReplied;
 

@@ -21,6 +21,7 @@
 #include "common/p25/data/DataBlock.h"
 #include "common/p25/data/DataHeader.h"
 #include "common/p25/data/LowSpeedData.h"
+#include "common/p25/data/Assembler.h"
 #include "common/p25/lc/LC.h"
 #include "common/Timer.h"
 #include "p25/Control.h"
@@ -67,10 +68,11 @@ namespace p25
              * @brief Process a data frame from the network.
              * @param data Buffer containing data frame.
              * @param len Length of data frame.
+             * @param currentBlock 
              * @param blockLength 
              * @returns bool True, if data frame is processed, otherwise false.
              */
-            bool processNetwork(uint8_t* data, uint32_t len, uint32_t blockLength);
+            bool processNetwork(uint8_t* data, uint32_t len, uint8_t currentBlock, uint32_t blockLength);
             /** @} */
 
             /**
@@ -83,18 +85,20 @@ namespace p25
             /**
              * @brief Helper to write user data as a P25 PDU packet.
              * @param dataHeader Instance of a PDU data header.
-             * @param extendedAddress Flag indicating whether or not to extended addressing is in use.
+             * @param extendedAddress Flag indicating whether or not extended addressing is in use.
+             * @param auxiliaryES Flag indicating whether or not an auxiliary ES is included.
              * @param pduUserData Buffer containing user data to transmit.
              * @param imm Flag indicating the PDU should be written to the immediate queue.
              */
-            void writeRF_PDU_User(data::DataHeader& dataHeader, bool extendedAddress, uint8_t* pduUserData, bool imm = false);
+            void writeRF_PDU_User(data::DataHeader& dataHeader, bool extendedAddress, bool auxiliaryES, uint8_t* pduUserData, bool imm = false);
             /**
              * @brief Helper to write user data as a P25 PDU packet.
              * @param dataHeader Instance of a PDU data header.
              * @param extendedAddress Flag indicating whether or not to extended addressing is in use.
+             * @param auxiliaryES Flag indicating whether or not an auxiliary ES is included.
              * @param pduUserData Buffer containing user data to transmit.
              */
-            void writeNet_PDU_User(data::DataHeader& dataHeader, bool extendedAddress, uint8_t* pduUserData);
+            void writeNet_PDU_User(data::DataHeader& dataHeader, bool extendedAddress, bool auxiliaryES, uint8_t* pduUserData);
 
             /**
              * @brief Updates the processor by the passed number of milliseconds.
@@ -127,21 +131,11 @@ namespace p25
 
             RPT_RF_STATE m_prevRfState;
 
-            data::DataBlock* m_rfData;
-            data::DataHeader m_rfDataHeader;
-            bool m_rfExtendedAddress;
-            uint8_t m_rfDataBlockCnt;
+            data::Assembler* m_rfAssembler;
             uint8_t* m_rfPDU;
             uint32_t m_rfPDUCount;
             uint32_t m_rfPDUBits;
-
-            data::DataBlock* m_netData;
-            data::DataHeader m_netDataHeader;
-            bool m_netExtendedAddress;
-            uint32_t m_netDataOffset;
-            uint8_t m_netDataBlockCnt;
-            uint8_t* m_netPDU;
-            uint32_t m_netPDUCount;
+            data::Assembler* m_netAssembler;
 
             uint8_t* m_retryPDUData;
             uint32_t m_retryPDUBitLength;
