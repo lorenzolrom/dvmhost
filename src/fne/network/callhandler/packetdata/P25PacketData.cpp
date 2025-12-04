@@ -624,6 +624,12 @@ void P25PacketData::dispatch(uint32_t peerId)
 
         uint32_t fneIPv4 = __IP_FROM_STR(m_network->m_host->m_tun->getIPv4());
 
+        if (status->pduUserDataLength < P25_PDU_ARP_PCKT_LENGTH) {
+            LogError(LOG_P25, P25_PDU_STR ", ARP packet too small, %u bytes (need %u)",
+                status->pduUserDataLength, P25_PDU_ARP_PCKT_LENGTH);
+            break;
+        }
+
         uint8_t arpPacket[P25_PDU_ARP_PCKT_LENGTH];
         ::memset(arpPacket, 0x00U, P25_PDU_ARP_PCKT_LENGTH);
         ::memcpy(arpPacket, status->pduUserData, P25_PDU_ARP_PCKT_LENGTH);
@@ -678,7 +684,27 @@ void P25PacketData::dispatch(uint32_t peerId)
         if (!status->assembler.getExtendedAddress())
             dstLlId = WUID_FNE;
 
+        // validate minimum IP header size
+        if (status->pduUserDataLength < sizeof(struct ip)) {
+            LogError(LOG_P25, P25_PDU_STR ", PACKET_DATA too small, %u bytes", 
+                status->pduUserDataLength);
+            break;
+        }
+
         struct ip* ipHeader = (struct ip*)(status->pduUserData);
+
+        // verify IPv4 version
+        if ((status->pduUserData[0] & 0xF0) != 0x40) {
+            LogWarning(LOG_P25, P25_PDU_STR ", PACKET_DATA non-IPv4 packet");
+            break;
+        }
+
+        // validate IP header length
+        uint8_t ihl = (status->pduUserData[0] & 0x0F) * 4;
+        if (ihl < sizeof(struct ip) || ihl > status->pduUserDataLength) {
+            LogError(LOG_P25, P25_PDU_STR ", PACKET_DATA invalid IHL, ihl = %u", ihl);
+            break;
+        }
 
         char srcIp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(ipHeader->ip_src), srcIp, INET_ADDRSTRLEN);
