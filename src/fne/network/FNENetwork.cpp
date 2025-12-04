@@ -134,6 +134,10 @@ FNENetwork::FNENetwork(HostFNE* host, const std::string& address, uint16_t port,
     m_influxOrg("dvm"),
     m_influxBucket("dvm"),
     m_influxLogRawData(false),
+    m_jitterBufferEnabled(false),
+    m_jitterMaxSize(4U),
+    m_jitterMaxWait(40000U),
+    m_peerJitterOverrides(),
     m_threadPool(workerCnt, "fne"),
     m_disablePacketData(false),
     m_dumpPacketData(false),
@@ -235,6 +239,50 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
     }
 
     m_parrotOnlyOriginating = conf["parrotOnlyToOrginiatingPeer"].as<bool>(false);
+
+    // jitter buffer configuration
+    yaml::Node jitterConf = conf["jitterBuffer"];
+    m_jitterBufferEnabled = jitterConf["enabled"].as<bool>(false);
+    m_jitterMaxSize = (uint16_t)jitterConf["defaultMaxSize"].as<uint32_t>(4U);
+    m_jitterMaxWait = jitterConf["defaultMaxWait"].as<uint32_t>(40000U);
+
+    // clamp jitter buffer parameters
+    if (m_jitterMaxSize < 2U)
+        m_jitterMaxSize = 2U;
+    if (m_jitterMaxSize > 8U)
+        m_jitterMaxSize = 8U;
+    if (m_jitterMaxWait < 10000U)
+        m_jitterMaxWait = 10000U;
+    if (m_jitterMaxWait > 200000U)
+        m_jitterMaxWait = 200000U;
+
+    // parse per-peer jitter buffer overrides
+    m_peerJitterOverrides.clear();
+    yaml::Node peerOverrides = jitterConf["peerOverrides"];
+    if (peerOverrides.size() > 0U) {
+        for (size_t i = 0; i < peerOverrides.size(); i++) {
+            yaml::Node peerConf = peerOverrides[i];
+            uint32_t peerId = peerConf["peerId"].as<uint32_t>(0U);
+            if (peerId != 0U) {
+                JitterBufferConfig jbConfig;
+                jbConfig.enabled = peerConf["enabled"].as<bool>(m_jitterBufferEnabled);
+                jbConfig.maxSize = (uint16_t)peerConf["maxSize"].as<uint32_t>(m_jitterMaxSize);
+                jbConfig.maxWait = peerConf["maxWait"].as<uint32_t>(m_jitterMaxWait);
+
+                // clamp per-peer parameters
+                if (jbConfig.maxSize < 2U)
+                    jbConfig.maxSize = 2U;
+                if (jbConfig.maxSize > 8U)
+                    jbConfig.maxSize = 8U;
+                if (jbConfig.maxWait < 10000U)
+                    jbConfig.maxWait = 10000U;
+                if (jbConfig.maxWait > 200000U)
+                    jbConfig.maxWait = 200000U;
+
+                m_peerJitterOverrides[peerId] = jbConfig;
+            }
+        }
+    }
 
 #if defined(ENABLE_SSL)
     m_kmfServicesEnabled = conf["kmfServicesEnabled"].as<bool>(false);
@@ -351,6 +399,14 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
             LogInfo("    InfluxDB Bucket: %s", m_influxBucket.c_str());
             LogInfo("    InfluxDB Log Raw TSBK/CSBK/RCCH: %s", m_influxLogRawData ? "yes" : "no");
         }
+        LogInfo("    Jitter Buffer Enabled: %s", m_jitterBufferEnabled ? "yes" : "no");
+        if (m_jitterBufferEnabled) {
+            LogInfo("    Jitter Buffer Default Max Size: %u frames", m_jitterMaxSize);
+            LogInfo("    Jitter Buffer Default Max Wait: %u microseconds", m_jitterMaxWait);
+            if (!m_peerJitterOverrides.empty()) {
+                LogInfo("    Jitter Buffer Peer Overrides: %zu peer(s) configured", m_peerJitterOverrides.size());
+            }
+        }
         LogInfo("    Parrot Repeat to Only Originating Peer: %s", m_parrotOnlyOriginating ? "yes" : "no");
         LogInfo("    P25 OTAR KMF Services Enabled: %s", m_kmfServicesEnabled ? "yes" : "no");
         LogInfo("    P25 OTAR KMF Listening Address: %s", m_address.c_str());
@@ -373,6 +429,33 @@ void FNENetwork::setLookups(lookups::RadioIdLookup* ridLookup, lookups::Talkgrou
     m_peerListLookup = peerListLookup;
     m_cryptoLookup = cryptoLookup;
     m_adjSiteMapLookup = adjSiteMapLookup;
+}
+
+/* Applies jitter buffer configuration to a peer connection. */
+
+void FNENetwork::applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* connection)
+{
+    if (connection == nullptr) {
+        return;
+    }
+
+    // check if there's a per-peer override
+    auto it = m_peerJitterOverrides.find(peerId);
+    if (it != m_peerJitterOverrides.end()) {
+        const JitterBufferConfig& config = it->second;
+        connection->setJitterBufferParams(config.enabled, config.maxSize, config.maxWait);
+        if (m_verbose) {
+            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (override): enabled=%s, maxSize=%u, maxWait=%u",
+                peerId, config.enabled ? "yes" : "no", config.maxSize, config.maxWait);
+        }
+    } else {
+        // use default settings
+        connection->setJitterBufferParams(m_jitterBufferEnabled, m_jitterMaxSize, m_jitterMaxWait);
+        if (m_verbose && m_jitterBufferEnabled) {
+            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (default): enabled=%s, maxSize=%u, maxWait=%u",
+                peerId, m_jitterBufferEnabled ? "yes" : "no", m_jitterMaxSize, m_jitterMaxWait);
+        }
+    }
 }
 
 /* Sets endpoint preshared encryption key. */
@@ -495,6 +578,16 @@ void FNENetwork::clock(uint32_t ms)
     }
 
     uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+    // check jitter buffer timeouts for all peers
+    m_peers.shared_lock();
+    for (auto& peer : m_peers) {
+        FNEPeerConnection* connection = peer.second;
+        if (connection != nullptr && connection->jitterBufferEnabled()) {
+            connection->checkJitterTimeouts();
+        }
+    }
+    m_peers.unlock();
 
     if (m_forceListUpdate) {
         for (auto peer : m_peers) {
@@ -932,7 +1025,22 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                     if (connection->connected() && connection->address() == ip) {
                                         if (network->m_dmrEnabled) {
                                             if (network->m_tagDMR != nullptr) {
-                                                network->m_tagDMR->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                // check if jitter buffer is enabled for this peer
+                                                if (connection->jitterBufferEnabled()) {
+                                                    AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
+                                                    std::vector<BufferedFrame*> readyFrames;
+
+                                                    buffer->processFrame(req->rtpHeader.getSequence(), req->buffer, req->length, readyFrames);
+
+                                                    // process all frames that are now ready (in sequence order)
+                                                    for (BufferedFrame* frame : readyFrames) {
+                                                        network->m_tagDMR->processFrame(frame->data, frame->length, peerId, ssrc, frame->seq, streamId);
+                                                        delete frame;
+                                                    }
+                                                } else {
+                                                    // zero-latency fast path: no jitter buffer
+                                                    network->m_tagDMR->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                }
                                             }
                                         } else {
                                             network->writePeerNAK(peerId, streamId, TAG_DMR_DATA, NET_CONN_NAK_MODE_NOT_ENABLED);
@@ -958,7 +1066,22 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                     if (connection->connected() && connection->address() == ip) {
                                         if (network->m_p25Enabled) {
                                             if (network->m_tagP25 != nullptr) {
-                                                network->m_tagP25->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                // check if jitter buffer is enabled for this peer
+                                                if (connection->jitterBufferEnabled()) {
+                                                    AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
+                                                    std::vector<BufferedFrame*> readyFrames;
+
+                                                    buffer->processFrame(req->rtpHeader.getSequence(), req->buffer, req->length, readyFrames);
+
+                                                    // process all frames that are now ready (in sequence order)
+                                                    for (BufferedFrame* frame : readyFrames) {
+                                                        network->m_tagP25->processFrame(frame->data, frame->length, peerId, ssrc, frame->seq, streamId);
+                                                        delete frame;
+                                                    }
+                                                } else {
+                                                    // zero-latency fast path: no jitter buffer
+                                                    network->m_tagP25->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                }
                                             }
                                         } else {
                                             network->writePeerNAK(peerId, streamId, TAG_P25_DATA, NET_CONN_NAK_MODE_NOT_ENABLED);
@@ -984,7 +1107,22 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                     if (connection->connected() && connection->address() == ip) {
                                         if (network->m_nxdnEnabled) {
                                             if (network->m_tagNXDN != nullptr) {
-                                                network->m_tagNXDN->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                // check if jitter buffer is enabled for this peer
+                                                if (connection->jitterBufferEnabled()) {
+                                                    AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
+                                                    std::vector<BufferedFrame*> readyFrames;
+
+                                                    buffer->processFrame(req->rtpHeader.getSequence(), req->buffer, req->length, readyFrames);
+
+                                                    // process all frames that are now ready (in sequence order)
+                                                    for (BufferedFrame* frame : readyFrames) {
+                                                        network->m_tagNXDN->processFrame(frame->data, frame->length, peerId, ssrc, frame->seq, streamId);
+                                                        delete frame;
+                                                    }
+                                                } else {
+                                                    // zero-latency fast path: no jitter buffer
+                                                    network->m_tagNXDN->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                }
                                             }
                                         } else {
                                             network->writePeerNAK(peerId, streamId, TAG_NXDN_DATA, NET_CONN_NAK_MODE_NOT_ENABLED);
@@ -1010,7 +1148,22 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                     if (connection->connected() && connection->address() == ip) {
                                         if (network->m_analogEnabled) {
                                             if (network->m_tagAnalog != nullptr) {
-                                                network->m_tagAnalog->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                // check if jitter buffer is enabled for this peer
+                                                if (connection->jitterBufferEnabled()) {
+                                                    AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
+                                                    std::vector<BufferedFrame*> readyFrames;
+
+                                                    buffer->processFrame(req->rtpHeader.getSequence(), req->buffer, req->length, readyFrames);
+
+                                                    // process all frames that are now ready (in sequence order)
+                                                    for (BufferedFrame* frame : readyFrames) {
+                                                        network->m_tagAnalog->processFrame(frame->data, frame->length, peerId, ssrc, frame->seq, streamId);
+                                                        delete frame;
+                                                    }
+                                                } else {
+                                                    // zero-latency fast path: no jitter buffer
+                                                    network->m_tagAnalog->processFrame(req->buffer, req->length, peerId, ssrc, req->rtpHeader.getSequence(), streamId);
+                                                }
                                             }
                                         } else {
                                             network->writePeerNAK(peerId, streamId, TAG_ANALOG_DATA, NET_CONN_NAK_MODE_NOT_ENABLED);
@@ -1049,6 +1202,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                         FNEPeerConnection* connection = new FNEPeerConnection(peerId, req->address, req->addrLen);
                         connection->lastPing(now);
 
+                        network->applyJitterBufferConfig(peerId, connection);
                         network->setupRepeaterLogin(peerId, streamId, connection);
 
                         // check if the peer is in the peer ACL list
@@ -1079,6 +1233,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                     connection = new FNEPeerConnection(peerId, req->address, req->addrLen);
                                     connection->lastPing(now);
 
+                                    network->applyJitterBufferConfig(peerId, connection);
                                     network->erasePeerAffiliations(peerId);
                                     network->setupRepeaterLogin(peerId, streamId, connection);
 

@@ -393,6 +393,20 @@ namespace network
         bool m_influxLogRawData;
         influxdb::ServerInfo m_influxServer;
 
+        /**
+         * @brief Structure containing jitter buffer configuration for a peer.
+         */
+        struct JitterBufferConfig {
+            bool enabled;           //!< Jitter buffer enabled flag
+            uint16_t maxSize;       //!< Maximum buffer size in frames
+            uint32_t maxWait;       //!< Maximum wait time in microseconds
+        };
+
+        bool m_jitterBufferEnabled;
+        uint16_t m_jitterMaxSize;
+        uint32_t m_jitterMaxWait;
+        std::unordered_map<uint32_t, JitterBufferConfig> m_peerJitterOverrides;
+
         ThreadPool m_threadPool;
 
         bool m_disablePacketData;
@@ -431,6 +445,13 @@ namespace network
          * @param connection Instance of the FNEPeerConnection class.
          */
         void logSpanningTree(FNEPeerConnection* connection = nullptr);
+
+        /**
+         * @brief Applies jitter buffer configuration to a peer connection.
+         * @param peerId Peer ID.
+         * @param connection Instance of the FNEPeerConnection class.
+         */
+        void applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* connection);
 
         /**
          * @brief Erases a stream ID from the given peer ID connection.
