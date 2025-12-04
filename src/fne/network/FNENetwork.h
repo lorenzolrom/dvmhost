@@ -393,19 +393,9 @@ namespace network
         bool m_influxLogRawData;
         influxdb::ServerInfo m_influxServer;
 
-        /**
-         * @brief Structure containing jitter buffer configuration for a peer.
-         */
-        struct JitterBufferConfig {
-            bool enabled;           //!< Jitter buffer enabled flag
-            uint16_t maxSize;       //!< Maximum buffer size in frames
-            uint32_t maxWait;       //!< Maximum wait time in microseconds
-        };
-
         bool m_jitterBufferEnabled;
         uint16_t m_jitterMaxSize;
         uint32_t m_jitterMaxWait;
-        std::unordered_map<uint32_t, JitterBufferConfig> m_peerJitterOverrides;
 
         ThreadPool m_threadPool;
 

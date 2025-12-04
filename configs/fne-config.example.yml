@@ -82,22 +82,6 @@ master:
         #   Recommended: 40000 us (40ms) for terrestrial, 80000 us (80ms) for satellite.
         defaultMaxWait: 40000
 
-        # Per-peer jitter buffer overrides for specific peers with problematic network conditions.
-        peerOverrides: []
-            # Example: Satellite link peer with high latency and jitter
-            # - peerId: 31003
-            #   enabled: true
-            #   maxSize: 6
-            #   maxWait: 80000
-            # Example: Cellular peer with variable jitter
-            # - peerId: 31004
-            #   enabled: true
-            #   maxSize: 5
-            #   maxWait: 60000
-            # Example: Fiber peer with low latency - disable jitter buffer
-            # - peerId: 31005
-            #   enabled: false
-
     # Flag indicating whether or not denied traffic will be logged.
     #   (This is useful for debugging talkgroup rules and other ACL issues, but can be very noisy on a busy system.)
     logDenials: false

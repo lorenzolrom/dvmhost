@@ -137,7 +137,6 @@ FNENetwork::FNENetwork(HostFNE* host, const std::string& address, uint16_t port,
     m_jitterBufferEnabled(false),
     m_jitterMaxSize(4U),
     m_jitterMaxWait(40000U),
-    m_peerJitterOverrides(),
     m_threadPool(workerCnt, "fne"),
     m_disablePacketData(false),
     m_dumpPacketData(false),
@@ -243,46 +242,18 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
     // jitter buffer configuration
     yaml::Node jitterConf = conf["jitterBuffer"];
     m_jitterBufferEnabled = jitterConf["enabled"].as<bool>(false);
-    m_jitterMaxSize = (uint16_t)jitterConf["defaultMaxSize"].as<uint32_t>(4U);
-    m_jitterMaxWait = jitterConf["defaultMaxWait"].as<uint32_t>(40000U);
+    m_jitterMaxSize = (uint16_t)jitterConf["defaultMaxSize"].as<uint32_t>(DEFAULT_JITTER_MAX_SIZE);
+    m_jitterMaxWait = jitterConf["defaultMaxWait"].as<uint32_t>(DEFAULT_JITTER_MAX_WAIT);
 
     // clamp jitter buffer parameters
-    if (m_jitterMaxSize < 2U)
-        m_jitterMaxSize = 2U;
-    if (m_jitterMaxSize > 8U)
-        m_jitterMaxSize = 8U;
-    if (m_jitterMaxWait < 10000U)
-        m_jitterMaxWait = 10000U;
-    if (m_jitterMaxWait > 200000U)
-        m_jitterMaxWait = 200000U;
-
-    // parse per-peer jitter buffer overrides
-    m_peerJitterOverrides.clear();
-    yaml::Node peerOverrides = jitterConf["peerOverrides"];
-    if (peerOverrides.size() > 0U) {
-        for (size_t i = 0; i < peerOverrides.size(); i++) {
-            yaml::Node peerConf = peerOverrides[i];
-            uint32_t peerId = peerConf["peerId"].as<uint32_t>(0U);
-            if (peerId != 0U) {
-                JitterBufferConfig jbConfig;
-                jbConfig.enabled = peerConf["enabled"].as<bool>(m_jitterBufferEnabled);
-                jbConfig.maxSize = (uint16_t)peerConf["maxSize"].as<uint32_t>(m_jitterMaxSize);
-                jbConfig.maxWait = peerConf["maxWait"].as<uint32_t>(m_jitterMaxWait);
-
-                // clamp per-peer parameters
-                if (jbConfig.maxSize < 2U)
-                    jbConfig.maxSize = 2U;
-                if (jbConfig.maxSize > 8U)
-                    jbConfig.maxSize = 8U;
-                if (jbConfig.maxWait < 10000U)
-                    jbConfig.maxWait = 10000U;
-                if (jbConfig.maxWait > 200000U)
-                    jbConfig.maxWait = 200000U;
-
-                m_peerJitterOverrides[peerId] = jbConfig;
-            }
-        }
-    }
+    if (m_jitterMaxSize < MIN_JITTER_MAX_SIZE)
+        m_jitterMaxSize = MIN_JITTER_MAX_SIZE;
+    if (m_jitterMaxSize > MAX_JITTER_MAX_SIZE)
+        m_jitterMaxSize = MAX_JITTER_MAX_SIZE;
+    if (m_jitterMaxWait < MIN_JITTER_MAX_WAIT)
+        m_jitterMaxWait = MIN_JITTER_MAX_WAIT;
+    if (m_jitterMaxWait > MAX_JITTER_MAX_WAIT)
+        m_jitterMaxWait = MAX_JITTER_MAX_WAIT;
 
 #if defined(ENABLE_SSL)
     m_kmfServicesEnabled = conf["kmfServicesEnabled"].as<bool>(false);
@@ -399,13 +370,10 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
             LogInfo("    InfluxDB Bucket: %s", m_influxBucket.c_str());
             LogInfo("    InfluxDB Log Raw TSBK/CSBK/RCCH: %s", m_influxLogRawData ? "yes" : "no");
         }
-        LogInfo("    Jitter Buffer Enabled: %s", m_jitterBufferEnabled ? "yes" : "no");
+        LogInfo("    Global Jitter Buffer Enabled: %s", m_jitterBufferEnabled ? "yes" : "no");
         if (m_jitterBufferEnabled) {
-            LogInfo("    Jitter Buffer Default Max Size: %u frames", m_jitterMaxSize);
-            LogInfo("    Jitter Buffer Default Max Wait: %u microseconds", m_jitterMaxWait);
-            if (!m_peerJitterOverrides.empty()) {
-                LogInfo("    Jitter Buffer Peer Overrides: %zu peer(s) configured", m_peerJitterOverrides.size());
-            }
+            LogInfo("    Global Jitter Buffer Default Max Size: %u frames", m_jitterMaxSize);
+            LogInfo("    Global Jitter Buffer Default Max Wait: %u microseconds", m_jitterMaxWait);
         }
         LogInfo("    Parrot Repeat to Only Originating Peer: %s", m_parrotOnlyOriginating ? "yes" : "no");
         LogInfo("    P25 OTAR KMF Services Enabled: %s", m_kmfServicesEnabled ? "yes" : "no");
@@ -429,33 +397,6 @@ void FNENetwork::setLookups(lookups::RadioIdLookup* ridLookup, lookups::Talkgrou
     m_peerListLookup = peerListLookup;
     m_cryptoLookup = cryptoLookup;
     m_adjSiteMapLookup = adjSiteMapLookup;
-}
-
-/* Applies jitter buffer configuration to a peer connection. */
-
-void FNENetwork::applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* connection)
-{
-    if (connection == nullptr) {
-        return;
-    }
-
-    // check if there's a per-peer override
-    auto it = m_peerJitterOverrides.find(peerId);
-    if (it != m_peerJitterOverrides.end()) {
-        const JitterBufferConfig& config = it->second;
-        connection->setJitterBufferParams(config.enabled, config.maxSize, config.maxWait);
-        if (m_verbose && config.enabled) {
-            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (per-peer), maxSize = %u, maxWait = %u",
-                peerId, config.maxSize, config.maxWait);
-        }
-    } else {
-        // use default settings
-        connection->setJitterBufferParams(m_jitterBufferEnabled, m_jitterMaxSize, m_jitterMaxWait);
-        if (m_verbose && m_jitterBufferEnabled) {
-            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (global), maxSize = %u, maxWait = %u",
-                peerId, m_jitterMaxSize, m_jitterMaxWait);
-        }
-    }
 }
 
 /* Sets endpoint preshared encryption key. */
@@ -2135,6 +2076,34 @@ void FNENetwork::logSpanningTree(FNEPeerConnection* connection)
         else
             LogInfoEx(LOG_STP, "PEER %u Network Tree, Tree Display, Current Tree", m_peerId);
         SpanningTree::visualizeTreeToLog(m_treeRoot);
+    }
+}
+
+/* Applies jitter buffer configuration to a peer connection. */
+
+void FNENetwork::applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* connection)
+{
+    if (connection == nullptr) {
+        return;
+    }
+
+    if (m_jitterBufferEnabled) {
+        // use global settings
+        connection->setJitterBufferParams(m_jitterBufferEnabled, m_jitterMaxSize, m_jitterMaxWait);
+        if (m_verbose && m_jitterBufferEnabled) {
+            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (global), maxSize = %u, maxWait = %u",
+                peerId, m_jitterMaxSize, m_jitterMaxWait);
+        }
+    } else {
+        lookups::PeerId peerEntry = m_peerListLookup->find(peerId);
+        if (!peerEntry.peerDefault()) {
+            connection->setJitterBufferParams(peerEntry.jitterBufferEnabled(),
+                peerEntry.jitterBufferMaxSize(), peerEntry.jitterBufferMaxWait());
+            if (m_verbose && peerEntry.jitterBufferEnabled()) {
+                LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (per-peer), maxSize = %u, maxWait = %u",
+                    peerId, peerEntry.jitterBufferMaxSize(), peerEntry.jitterBufferMaxWait());
+            }
+        }
     }
 }
 

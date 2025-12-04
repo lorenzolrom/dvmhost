@@ -28,6 +28,19 @@
 namespace network
 {
     // ---------------------------------------------------------------------------
+    //  Constants
+    // ---------------------------------------------------------------------------
+
+    #define DEFAULT_JITTER_MAX_SIZE 4U
+    #define DEFAULT_JITTER_MAX_WAIT 40000U
+
+    #define MIN_JITTER_MAX_SIZE 2U
+    #define MAX_JITTER_MAX_SIZE 8U
+
+    #define MIN_JITTER_MAX_WAIT 10000U
+    #define MAX_JITTER_MAX_WAIT 200000U
+
+    // ---------------------------------------------------------------------------
     //  Structure Declaration
     // ---------------------------------------------------------------------------
 
