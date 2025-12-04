@@ -42,11 +42,6 @@ master:
         enabled: false
         defaultMaxSize: 4
         defaultMaxWait: 40000
-        peerOverrides:
-            - peerId: 31003
-              enabled: true
-              maxSize: 6
-              maxWait: 80000
 ```
 
 ### Parameters
@@ -74,34 +69,8 @@ master:
     - `60000` (60ms) - Cellular networks
     - `80000` (80ms) - Satellite links
 
-#### Per-Peer Overrides
-
-The `peerOverrides` array allows you to customize jitter buffer behavior for specific peers:
-
-```yaml
-peerOverrides:
-    # Satellite link - high latency, requires larger buffer
-    - peerId: 31003
-      enabled: true
-      maxSize: 6
-      maxWait: 80000
-    
-    # Cellular peer - variable jitter
-    - peerId: 31004
-      enabled: true
-      maxSize: 5
-      maxWait: 60000
-    
-    # Local fiber peer - disable jitter buffer for minimal latency
-    - peerId: 31005
-      enabled: false
-```
-
-Each override entry supports:
-- **peerId** (integer) - The peer ID to configure
-- **enabled** (boolean) - Enable/disable for this specific peer
-- **maxSize** (integer, range: 2-8) - Buffer size override
-- **maxWait** (integer, range: 10000-200000) - Timeout override
+Per-Peer overrides occur with the jitter buffer parameters within the peer ACL file. The same global parameters, apply
+there but on a per-peer basis. Global jitter buffer parameters take precedence over per-peer.
 
 ## Configuration Examples
 
@@ -138,58 +107,6 @@ Good starting point for:
 - Mixed network environments
 - Networks with occasional jitter
 - General purpose deployments
-
-### Example 3: Selective Peer Configuration
-
-Enable only for problematic peers:
-
-```yaml
-master:
-    jitterBuffer:
-        enabled: false  # Disabled by default
-        defaultMaxSize: 4
-        defaultMaxWait: 40000
-        peerOverrides:
-            # Enable only for satellite peer
-            - peerId: 31003
-              enabled: true
-              maxSize: 8
-              maxWait: 80000
-            
-            # Enable for cellular peer
-            - peerId: 31004
-              enabled: true
-              maxSize: 6
-              maxWait: 60000
-```
-
-Recommended approach for:
-- Mostly stable networks with a few problem peers
-- Minimizing overall system latency
-- Targeted optimization
-
-### Example 4: High-Jitter Network
-
-For challenging network environments:
-
-```yaml
-master:
-    jitterBuffer:
-        enabled: true
-        defaultMaxSize: 6
-        defaultMaxWait: 60000
-        peerOverrides:
-            # Satellite link needs even more buffering
-            - peerId: 31003
-              enabled: true
-              maxSize: 8
-              maxWait: 100000
-```
-
-Suitable for:
-- Wide area networks with variable quality
-- Networks with frequent reordering
-- Deployments with multiple satellite/cellular links
 
 ## Performance Characteristics
 
@@ -270,9 +187,4 @@ jitterBuffer:
     enabled: <boolean>          # false
     defaultMaxSize: <2-8>       # 4
     defaultMaxWait: <10000-200000>  # 40000
-    peerOverrides:
-        - peerId: <integer>     # Required
-          enabled: <boolean>    # Optional, defaults to global enabled
-          maxSize: <2-8>        # Optional, defaults to defaultMaxSize
-          maxWait: <10000-200000>  # Optional, defaults to defaultMaxWait
 ```
