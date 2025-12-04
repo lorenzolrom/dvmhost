@@ -286,6 +286,25 @@ void P25PacketData::processPacketFrame(const uint8_t* data, uint32_t len, bool a
     uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 #if !defined(_WIN32)
+    // validate minimum IPv4 header size
+    if (len < sizeof(struct ip)) {
+        LogError(LOG_P25, "VTUN packet too small: %u bytes (need minimum %u for IPv4 header)", len, (uint32_t)sizeof(struct ip));
+        return;
+    }
+
+    // check IP version (must be IPv4)
+    if ((data[0] & 0xF0) != 0x40) {
+        LogWarning(LOG_P25, "VTUN non-IPv4 packet received, version = %u", (data[0] >> 4));
+        return;
+    }
+
+    // validate Internet Header Length
+    uint8_t ihl = (data[0] & 0x0F) * 4;  // IHL in 32-bit words, convert to bytes
+    if (len < ihl || ihl < 20U) {
+        LogError(LOG_P25, "VTUN packet has invalid or truncated IP header: len=%u, IHL=%u", len, ihl);
+        return;
+    }
+
     struct ip* ipHeader = (struct ip*)data;
 
     char srcIp[INET_ADDRSTRLEN];
@@ -296,6 +315,17 @@ void P25PacketData::processPacketFrame(const uint8_t* data, uint32_t len, bool a
 
     uint8_t proto = ipHeader->ip_p;
     uint16_t pktLen = Utils::reverseEndian(ipHeader->ip_len); // bryanb: this could be problematic on different endianness
+
+    // validate IP total length field against actual received length
+    if (pktLen > len) {
+        LogError(LOG_P25, "VTUN IP total length field (%u) exceeds actual packet size (%u)", pktLen, len);
+        return;
+    }
+
+    if (pktLen < ihl) {
+        LogError(LOG_P25, "VTUN IP total length (%u) is less than header length (%u)", pktLen, ihl);
+        return;
+    }
 
 #if DEBUG_P25_PDU_DATA
     Utils::dump(1U, "P25, P25PacketData::processPacketFrame() packet", data, pktLen);

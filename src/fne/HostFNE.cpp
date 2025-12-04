@@ -1009,7 +1009,7 @@ void* HostFNE::threadVirtualNetworking(void* arg)
                         break;
 
                     case PacketDataMode::PROJECT25:
-                        fne->m_network->p25TrafficHandler()->packetData()->processPacketFrame(packet, DEFAULT_MTU_SIZE);
+                        fne->m_network->p25TrafficHandler()->packetData()->processPacketFrame(packet, (uint32_t)len);
                         break;
                     }
                 }
