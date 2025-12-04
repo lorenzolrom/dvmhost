@@ -263,11 +263,6 @@ Based on the adaptive jitter buffer design:
 
 ## Reference
 
-### Related Documentation
-- `ADAPTIVE_JITTER_BUFFER.md` - Technical implementation details
-- `AdaptiveJitterBuffer.example.cpp` - Code examples
-- `fne-config.example.yml` - Full configuration example
-
 ### Configuration Schema
 
 ```yaml
