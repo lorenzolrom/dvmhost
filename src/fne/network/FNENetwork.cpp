@@ -444,16 +444,16 @@ void FNENetwork::applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* con
     if (it != m_peerJitterOverrides.end()) {
         const JitterBufferConfig& config = it->second;
         connection->setJitterBufferParams(config.enabled, config.maxSize, config.maxWait);
-        if (m_verbose) {
-            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (override): enabled=%s, maxSize=%u, maxWait=%u",
-                peerId, config.enabled ? "yes" : "no", config.maxSize, config.maxWait);
+        if (m_verbose && config.enabled) {
+            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (per-peer), maxSize = %u, maxWait = %u",
+                peerId, config.maxSize, config.maxWait);
         }
     } else {
         // use default settings
         connection->setJitterBufferParams(m_jitterBufferEnabled, m_jitterMaxSize, m_jitterMaxWait);
         if (m_verbose && m_jitterBufferEnabled) {
-            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (default): enabled=%s, maxSize=%u, maxWait=%u",
-                peerId, m_jitterBufferEnabled ? "yes" : "no", m_jitterMaxSize, m_jitterMaxWait);
+            LogInfoEx(LOG_MASTER, "PEER %u jitter buffer configured (global), maxSize = %u, maxWait = %u",
+                peerId, m_jitterMaxSize, m_jitterMaxWait);
         }
     }
 }
@@ -543,7 +543,7 @@ void FNENetwork::processNetworkTreeDisconnect(uint32_t peerId, uint32_t offendin
     } else {
         // is this perhaps a peer connection of ours?
         if (m_host->m_peerNetworks.size() > 0) {
-            for (auto peer : m_host->m_peerNetworks) {
+            for (auto& peer : m_host->m_peerNetworks) {
                 if (peer.second != nullptr) {
                     if (peer.second->getPeerId() == peerId) {
                         LogWarning(LOG_STP, "PEER %u, upstream master requested disconnect for our peer connection, duplicate connection dropped", peerId);
@@ -590,7 +590,7 @@ void FNENetwork::clock(uint32_t ms)
     m_peers.unlock();
 
     if (m_forceListUpdate) {
-        for (auto peer : m_peers) {
+        for (auto& peer : m_peers) {
             peerMetadataUpdate(peer.first);
         }
         m_forceListUpdate = false;
@@ -601,7 +601,7 @@ void FNENetwork::clock(uint32_t ms)
         // check to see if any peers have been quiet (no ping) longer than allowed
         std::vector<uint32_t> peersToRemove = std::vector<uint32_t>();
         m_peers.shared_lock();
-        for (auto peer : m_peers) {
+        for (auto& peer : m_peers) {
             uint32_t id = peer.first;
             FNEPeerConnection* connection = peer.second;
             if (connection != nullptr) {
@@ -633,7 +633,7 @@ void FNENetwork::clock(uint32_t ms)
 
         // send peer updates to neighbor FNE peers
         if (m_host->m_peerNetworks.size() > 0) {
-            for (auto peer : m_host->m_peerNetworks) {
+            for (auto& peer : m_host->m_peerNetworks) {
                 if (peer.second != nullptr) {
                     // perform master tree maintainence tasks
                     if (peer.second->isEnabled() && peer.second->getRemotePeerId() > 0U &&
@@ -685,7 +685,7 @@ void FNENetwork::clock(uint32_t ms)
     if (m_updateLookupTimer.isRunning() && m_updateLookupTimer.hasExpired()) {
         // send network metadata updates to peers
         m_peers.shared_lock();
-        for (auto peer : m_peers) {
+        for (auto& peer : m_peers) {
             uint32_t id = peer.first;
             FNEPeerConnection* connection = peer.second;
             if (connection != nullptr) {
@@ -724,7 +724,7 @@ void FNENetwork::clock(uint32_t ms)
         if (m_haUpdateTimer.isRunning() && m_haUpdateTimer.hasExpired()) {
             // send peer updates to replica peers
             if (m_host->m_peerNetworks.size() > 0) {
-                for (auto peer : m_host->m_peerNetworks) {
+                for (auto& peer : m_host->m_peerNetworks) {
                     if (peer.second != nullptr) {
                         if (peer.second->isEnabled() && peer.second->isReplica()) {
                             std::vector<HAParameters> haParams;
@@ -801,7 +801,7 @@ void FNENetwork::close()
         ::memset(buffer, 0x00U, 1U);
 
         uint32_t streamId = createStreamId();
-        for (auto peer : m_peers) {
+        for (auto& peer : m_peers) {
             writePeer(peer.first, m_peerId, { NET_FUNC::MST_DISC, NET_SUBFUNC::NOP }, buffer, 1U, RTP_END_OF_CALL_SEQ, 
                 streamId);
         }
@@ -1799,7 +1799,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                             } else {
                                                 // attempt to forward KMM key request to replica masters
                                                 if (network->m_host->m_peerNetworks.size() > 0) {
-                                                    for (auto peer : network->m_host->m_peerNetworks) {
+                                                    for (auto& peer : network->m_host->m_peerNetworks) {
                                                         if (peer.second != nullptr) {
                                                             if (peer.second->isEnabled() && peer.second->isReplica()) {
                                                                 LogInfoEx(LOG_PEER, "PEER %u (%s) no local key or container, requesting key from upstream master, algId = $%02X, kID = $%04X", peerId, connection->identWithQualifier().c_str(),
@@ -1863,7 +1863,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         // attempt to repeat traffic to replica masters
                                         if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto peer : network->m_host->m_peerNetworks) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
                                                 if (peer.second != nullptr) {
                                                     if (peer.second->isEnabled() && peer.second->isReplica()) {
                                                         peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_AFFIL }, 
@@ -1900,7 +1900,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         // attempt to repeat traffic to replica masters
                                         if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto peer : network->m_host->m_peerNetworks) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
                                                 if (peer.second != nullptr) {
                                                     if (peer.second->isEnabled() && peer.second->isReplica()) {
                                                         peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REG }, 
@@ -1936,7 +1936,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         // attempt to repeat traffic to replica masters
                                         if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto peer : network->m_host->m_peerNetworks) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
                                                 if (peer.second != nullptr) {
                                                     if (peer.second->isEnabled() && peer.second->isReplica()) {
                                                         peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_DEREG }, 
@@ -1973,7 +1973,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         // attempt to repeat traffic to replica masters
                                         if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto peer : network->m_host->m_peerNetworks) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
                                                 if (peer.second != nullptr) {
                                                     if (peer.second->isEnabled() && peer.second->isReplica()) {
                                                         peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_UNAFFIL }, 
@@ -2023,7 +2023,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
 
                                             // attempt to repeat traffic to replica masters
                                             if (network->m_host->m_peerNetworks.size() > 0) {
-                                                for (auto peer : network->m_host->m_peerNetworks) {
+                                                for (auto& peer : network->m_host->m_peerNetworks) {
                                                     if (peer.second != nullptr) {
                                                         if (peer.second->isEnabled() && peer.second->isReplica()) {
                                                             peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_AFFILS }, 
@@ -2072,7 +2072,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         // attempt to repeat traffic to replica masters
                                         if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto peer : network->m_host->m_peerNetworks) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
                                                 if (peer.second != nullptr) {
                                                     if (peer.second->isEnabled() && peer.second->isReplica()) {
                                                         peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_SITE_VC }, 
@@ -2472,7 +2472,7 @@ void FNENetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::NET_
 
                 // send ICC request to any peers connected to us that are neighbor FNEs
                 m_peers.shared_lock();
-                for (auto peer : m_peers) {
+                for (auto& peer : m_peers) {
                     if (peer.second == nullptr)
                         continue;
                     if (peerId != peer.first) {
@@ -3153,7 +3153,7 @@ bool FNENetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUNC::E
     // are we sending this ICC request upstream?
     if (toUpstream && systemReq) {
         if (m_host->m_peerNetworks.size() > 0U) {
-            for (auto peer : m_host->m_peerNetworks) {
+            for (auto& peer : m_host->m_peerNetworks) {
                 if (peer.second != nullptr) {
                     if (peer.second->isEnabled()) {
                         peer.second->writeMaster({ NET_FUNC::INCALL_CTRL, subFunc }, buffer, 15U, RTP_END_OF_CALL_SEQ, streamId, false, 0U, ssrc);
@@ -3414,7 +3414,7 @@ void FNENetwork::processTEKResponse(p25::kmm::KeyItem* rspKi, uint8_t algId, uin
     }
 
     // remove peers who were sent keys
-    for (auto peerId : peersToRemove)
+    for (auto& peerId : peersToRemove)
         m_peerReplicaKeyQueue.erase(peerId);
 
     s_keyQueueMutex.unlock();

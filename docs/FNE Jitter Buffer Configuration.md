@@ -191,36 +191,6 @@ Suitable for:
 - Networks with frequent reordering
 - Deployments with multiple satellite/cellular links
 
-## Monitoring and Tuning
-
-### Startup Logging
-
-When the FNE starts, jitter buffer configuration is displayed in the logs:
-
-```
-I: 2025-12-03 22:07:11.374     Jitter Buffer Enabled: yes
-I: 2025-12-03 22:07:11.374     Jitter Buffer Default Max Size: 6 frames
-I: 2025-12-03 22:07:11.374     Jitter Buffer Default Max Wait: 50000 microseconds
-I: 2025-12-03 22:07:11.374     Jitter Buffer Peer Overrides: 3 peer(s) configured
-```
-
-### Per-Peer Configuration Logging
-
-When a peer connects and jitter buffering is enabled, you'll see (with verbose logging):
-
-```
-I: 2025-12-03 22:10:15.234 PEER 31003 jitter buffer configured (override): enabled=yes, maxSize=8, maxWait=80000
-I: 2025-12-03 22:10:16.456 PEER 31004 jitter buffer configured (default): enabled=yes, maxSize=4, maxWait=40000
-```
-
-### Future Monitoring (To Be Implemented)
-
-Planned monitoring capabilities:
-- Per-peer jitter buffer statistics (reordered frames, dropped frames, timeouts)
-- InfluxDB metrics for trend analysis
-- REST API endpoints for runtime statistics
-- Automatic tuning recommendations based on observed behavior
-
 ## Performance Characteristics
 
 ### CPU Impact
@@ -282,29 +252,6 @@ Based on the adaptive jitter buffer design:
 - Check FNE logs for peer-specific configuration messages
 - Enable verbose and debug logging to trace packet flow
 
-## Technical Details
-
-### RTP Sequence Number Handling
-
-The jitter buffer correctly handles RTP sequence number wraparound (RFC 3550):
-- Sequence numbers are 16-bit unsigned integers (0-65535)
-- After 65535, sequence resets to 0
-- Buffer correctly calculates sequence differences across wraparound
-- No special configuration needed
-
-### Thread Safety
-
-- Each peer's jitter buffer map is protected by a mutex
-- Per-stream buffers operate independently
-- Safe for concurrent access from multiple worker threads
-
-### Memory Management
-
-- Buffered frames use RAII for automatic cleanup
-- Timed-out frames are automatically freed
-- Stream buffers cleaned up when streams end
-- No memory leaks under normal operation
-
 ## Best Practices
 
 1. **Start Disabled**: Begin with jitter buffering disabled and enable only as needed
@@ -334,11 +281,3 @@ jitterBuffer:
           maxSize: <2-8>        # Optional, defaults to defaultMaxSize
           maxWait: <10000-200000>  # Optional, defaults to defaultMaxWait
 ```
-
-## Version History
-
-- **December 2025** - Initial implementation
-  - Zero-latency fast path
-  - Per-peer, per-stream adaptive buffering
-  - Configuration parsing and validation
-  - Sequence wraparound support
