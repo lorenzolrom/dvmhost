@@ -347,12 +347,10 @@ void DMRPacketData::processPacketFrame(const uint8_t* data, uint32_t len, bool a
     pktHeader->setSrcId(DMRDEF::WUID_IPI);
     pktHeader->setDstId(dstId);
     pktHeader->setGI(false);
+    pktHeader->setFullMesage(true);
 
-    // calculate blocks needed based on data rate
-    // using Rate 1 (24 bytes per block) for simplicity
-    uint32_t blocksNeeded = (pktLen + 23U) / 24U;
-    pktHeader->setBlocksToFollow(blocksNeeded);
-    pktHeader->setFullMesage(true); // Full message
+    // bryanb: we are always sending data as 3/4 rate?
+    pktHeader->calculateLength(DataType::RATE_34_DATA, pktLen);
 
     uint32_t pduLength = pktLen;
 
@@ -716,14 +714,21 @@ void DMRPacketData::dispatchUserFrameToFNE(dmr::data::DataHeader& dataHeader, ui
         if (data == nullptr)
             return;
 
+        /*
+        ** bryanb: dev notes for myself...
+        **  - this implementation makes some dangerous naive assumptions about which slot to use
+        **  - we always send data as PRIVATE; PDUs are essentially never group operations
+        **  - we always start sequence numbers at 0 for each PDU -- this is possibly wrong, the host may misinterpret this
+        */
+
         dmr::data::NetData dmrData;
-        dmrData.setSlotNo(1U); // PDU data is slot-agnostic for VTUN
+        dmrData.setSlotNo(1U);
         dmrData.setSrcId(srcId);
         dmrData.setDstId(dstId);
         dmrData.setFLCO(FLCO::PRIVATE);
         dmrData.setN(0U);
         dmrData.setSeqNo(0U);
-        dmrData.setDataType(DataType::DATA_HEADER);
+        dmrData.setDataType((currentBlock == 0U) ? DataType::DATA_HEADER : DataType::RATE_34_DATA);
 
         // create DMR network message
         uint32_t messageLength = 0U;
@@ -745,7 +750,7 @@ void DMRPacketData::dispatchUserFrameToFNE(dmr::data::DataHeader& dataHeader, ui
     };
 
     // determine data type based on header
-    DataType::E dataType = DataType::RATE_1_DATA; // Rate 1 for most data
+    DataType::E dataType = DataType::RATE_34_DATA;
 
     // assemble and transmit the PDU
     dmr::data::Assembler assembler;
