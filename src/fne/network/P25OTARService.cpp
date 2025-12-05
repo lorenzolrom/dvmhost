@@ -36,7 +36,7 @@ using namespace p25::kmm;
 // Macro helper to verbose log a generic KMM.
 #define VERBOSE_LOG_KMM(_PCKT_STR, __LLID)                                              \
     if (m_verbose) {                                                                    \
-        LogInfoEx(LOG_P25, "KMM, %s, llId = %u", _PCKT_STR.c_str(), __LLID);           \
+        LogInfoEx(LOG_P25, "KMM, %s, llId = %u", _PCKT_STR.c_str(), __LLID);            \
     }
 
 // ---------------------------------------------------------------------------
@@ -383,8 +383,24 @@ UInt8Array P25OTARService::processKMM(const uint8_t* data, uint32_t len, uint32_
             }
 
             // respond with No-Service if KMF services are disabled
-//            if (!m_network->m_kmfServicesEnabled)
+            if (!m_network->m_kmfServicesEnabled)
                 return write_KMM_NoService(llId, kmm->getSrcLLId(), payloadSize);
+            else {
+                if (kmm->getFlag() == KMM_HelloFlag::REKEY_REQUEST_UKEK ||
+                    (kmm->getFlag() == KMM_HelloFlag::REKEY_REQUEST_NO_UKEK && m_allowNoUKEKRekey)) {
+                    // send rekey-command
+                    EKCKeyItem keyItem = m_network->m_cryptoLookup->findUKEK(llId);
+                    if (keyItem.isInvalid()) {
+                        LogInfoEx(LOG_P25, P25_KMM_STR ", %s, no UKEK found for rekey request, llId = %u", kmm->toString().c_str(), llId);
+                        return write_KMM_NoService(llId, kmm->getSrcLLId(), payloadSize);
+                    } else {
+                        return write_KMM_Rekey_Command(llId, kmm->getSrcLLId(), kmm->getFlag(), payloadSize);
+                    }
+                } else {
+                    LogInfoEx(LOG_P25, P25_KMM_STR ", %s, rekey request denied, llId = %u", kmm->toString().c_str(), llId);
+                    return write_KMM_NoService(llId, kmm->getSrcLLId(), payloadSize);
+                }
+            }
         }
         break;
 
