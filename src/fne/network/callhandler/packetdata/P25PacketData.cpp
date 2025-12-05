@@ -339,8 +339,9 @@ void P25PacketData::processPacketFrame(const uint8_t* data, uint32_t len, bool a
     std::string srcIpStr = __IP_FROM_UINT(srcProtoAddr);
     std::string tgtIpStr = __IP_FROM_UINT(tgtProtoAddr);
 
-    LogInfoEx(LOG_P25, "VTUN -> PDU IP Data, srcIp = %s (%u), dstIp = %s (%u), pktLen = %u, proto = %02X", 
-        srcIpStr.c_str(), WUID_FNE, tgtIpStr.c_str(), llId, pktLen, proto);
+    LogInfoEx(LOG_P25, "VTUN -> PDU IP Data, srcIp = %s (%u), dstIp = %s (%u), pktLen = %u, proto = %02X%s, llId = %u%s", 
+        srcIpStr.c_str(), WUID_FNE, tgtIpStr.c_str(), llId, pktLen, proto, (proto == 0x01) ? " (ICMP)" : "",
+        llId, (llId == 0U) ? " (UNRESOLVED - will retry with ARP)" : "");
 
     // assemble a P25 PDU frame header for transport...
     data::DataHeader* pktHeader = new data::DataHeader();
@@ -465,8 +466,16 @@ void P25PacketData::clock(uint32_t ms)
             }
 
             std::string tgtIpStr = __IP_FROM_UINT(frame->tgtProtoAddr);
-            LogInfoEx(LOG_P25, "VTUN -> PDU IP Data, dstIp = %s (%u), userDataLen = %u, retries = %u", 
-                tgtIpStr.c_str(), frame->llId, frame->userDataLen, frame->retryCnt);
+
+            // extract protocol for logging
+            uint8_t proto = 0x00;
+            if (frame->userDataLen >= 20) {
+                struct ip* ipHeader = (struct ip*)(frame->userData);
+                proto = ipHeader->ip_p;
+            }
+
+            LogInfoEx(LOG_P25, "VTUN -> PDU IP Data (queued), dstIp = %s (%u), userDataLen = %u, proto = %02X%s, retries = %u", 
+                tgtIpStr.c_str(), frame->llId, frame->userDataLen, proto, (proto == 0x01) ? " (ICMP)" : "", frame->retryCnt);
 
             // do we have a valid target address?
             if (frame->llId == 0U) {
@@ -489,7 +498,8 @@ void P25PacketData::clock(uint32_t ms)
             auto ready = std::find_if(m_readyForNextPkt.begin(), m_readyForNextPkt.end(), [=](ReadyForNextPktPair x) { return x.first == frame->llId; });
             if (ready != m_readyForNextPkt.end()) {
                 if (!ready->second) {
-                    LogWarning(LOG_P25, P25_PDU_STR ", subscriber not ready, dstIp = %s", tgtIpStr.c_str());
+                    LogWarning(LOG_P25, P25_PDU_STR ", subscriber not ready, dstIp = %s (%u), proto = %02X%s, will retry in %ums", 
+                        tgtIpStr.c_str(), frame->llId, proto, (proto == 0x01) ? " (ICMP)" : "", SUBSCRIBER_READY_RETRY_MS);
                     processed = false;
                     frame->timestamp = now + SUBSCRIBER_READY_RETRY_MS;
                     frame->extendRetry = true;
@@ -499,6 +509,7 @@ void P25PacketData::clock(uint32_t ms)
             }
 
             m_readyForNextPkt[frame->llId] = false;
+            //LogDebugEx(LOG_P25, "P25PacketData::clock()", "dispatching queued PDU to llId %u (proto = %02X)", frame->llId, proto);
             dispatchUserFrameToFNE(*frame->header, false, false, frame->userData);
         }
     }
@@ -754,8 +765,8 @@ void P25PacketData::dispatch(uint32_t peerId)
         }
 
         // transmit packet to IP network
-        LogInfoEx(LOG_P25, "PDU -> VTUN, IP Data, srcIp = %s (%u), dstIp = %s (%u), pktLen = %u, proto = %02X", 
-            srcIp, srcLlId, dstIp, dstLlId, pktLen, proto);
+        LogInfoEx(LOG_P25, "PDU -> VTUN, IP Data, srcIp = %s (%u), dstIp = %s (%u), pktLen = %u, proto = %02X%s", 
+            srcIp, srcLlId, dstIp, dstLlId, pktLen, proto, (proto == 0x01) ? " (ICMP)" : "");
 
         DECLARE_UINT8_ARRAY(ipFrame, pktLen);
         ::memcpy(ipFrame, status->pduUserData, pktLen);
@@ -768,6 +779,7 @@ void P25PacketData::dispatch(uint32_t peerId)
 
         // if the packet is unhandled and sent off to VTUN; ack the packet so the sender knows we received it
         if (!handled) {
+            //LogDebugEx(LOG_P25, "P25PacketData::dispatch()", "marking llId %u ready for next packet (proto = %02X)", srcLlId, proto);
             if (status->assembler.getExtendedAddress()) {
                 m_readyForNextPkt[srcLlId] = true;
                 write_PDU_Ack_Response(PDUAckClass::ACK, PDUAckType::ACK, status->assembler.dataHeader.getNs(), srcLlId,
