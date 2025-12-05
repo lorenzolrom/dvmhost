@@ -49,6 +49,7 @@ using namespace lookups;
 
 #define IDLE_WARMUP_MS 5U
 #define DEFAULT_MTU_SIZE 496
+#define MAX_MTU_SIZE 65535
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -258,7 +259,7 @@ int HostFNE::run()
         if (m_vtunEnabled) {
             switch (m_packetDataMode) {
             case PacketDataMode::DMR:
-                // TODO: not supported yet
+                m_network->dmrTrafficHandler()->packetData()->clock(ms);
                 break;
 
             case PacketDataMode::PROJECT25:
@@ -998,14 +999,14 @@ void* HostFNE::threadVirtualNetworking(void* arg)
                 uint32_t ms = stopWatch.elapsed();
                 stopWatch.start();
 
-                uint8_t packet[DEFAULT_MTU_SIZE];
-                ::memset(packet, 0x00U, DEFAULT_MTU_SIZE);
+                uint8_t packet[MAX_MTU_SIZE];
+                ::memset(packet, 0x00U, MAX_MTU_SIZE);
 
                 ssize_t len = fne->m_tun->read(packet);
                 if (len > 0) {
                     switch (fne->m_packetDataMode) {
                     case PacketDataMode::DMR:
-                        // TODO: not supported yet
+                        fne->m_network->dmrTrafficHandler()->packetData()->processPacketFrame(packet, (uint32_t)len);
                         break;
 
                     case PacketDataMode::PROJECT25:

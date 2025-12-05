@@ -69,6 +69,30 @@ namespace network
                 bool processFrame(const uint8_t* data, uint32_t len, uint32_t peerId, uint16_t pktSeq, uint32_t streamId, bool fromUpstream = false);
 
                 /**
+                 * @brief Process a data frame from the virtual IP network.
+                 * @param data Network data buffer.
+                 * @param len Length of data.
+                 * @param alreadyQueued Flag indicating the data frame being processed is already queued.
+                 */
+                void processPacketFrame(const uint8_t* data, uint32_t len, bool alreadyQueued = false);
+
+                /**
+                 * @brief Helper to write a PDU acknowledge response.
+                 * @param ackClass Acknowledgement Class.
+                 * @param ackType Acknowledgement Type.
+                 * @param ackStatus Acknowledgement Status.
+                 * @param srcId Source Radio ID.
+                 * @param dstId Destination Radio ID.
+                 */
+                void write_PDU_Ack_Response(uint8_t ackClass, uint8_t ackType, uint8_t ackStatus, uint32_t srcId, uint32_t dstId);
+
+                /**
+                 * @brief Updates the timer by the passed number of milliseconds.
+                 * @param ms Number of milliseconds.
+                 */
+                void clock(uint32_t ms);
+
+                /**
                  * @brief Helper to cleanup any call's left in a dangling state without any further updates.
                  */
                 void cleanupStale();
@@ -76,6 +100,24 @@ namespace network
             private:
                 FNENetwork* m_network;
                 TagDMRData *m_tag;
+
+                /**
+                 * @brief Represents a queued data frame from the VTUN.
+                 */
+                class QueuedDataFrame {
+                public:
+                    dmr::data::DataHeader* header;  //!< Instance of a PDU data header.
+                    uint32_t dstId;                 //!< Destination Radio ID
+                    uint32_t tgtProtoAddr;          //!< Target Protocol Address
+
+                    uint8_t* userData;              //!< Raw data buffer
+                    uint32_t userDataLen;           //!< Length of raw data buffer
+
+                    uint64_t timestamp;             //!< Timestamp in milliseconds
+                    uint8_t retryCnt;               //!< Packet Retry Counter
+                    bool extendRetry;               //!< Flag indicating whether or not to extend the retry count for this packet.
+                };
+                concurrent::deque<QueuedDataFrame*> m_queuedFrames;
 
                 /**
                  * @brief Represents the receive status of a call.
@@ -131,6 +173,12 @@ namespace network
                 typedef std::pair<const uint32_t, RxStatus*> StatusMapPair;
                 concurrent::unordered_map<uint32_t, RxStatus*> m_status;
 
+                typedef std::pair<const uint32_t, uint32_t> ArpTablePair;
+                std::unordered_map<uint32_t, uint32_t> m_arpTable;
+                typedef std::pair<const uint32_t, bool> ReadyForNextPktPair;
+                std::unordered_map<uint32_t, bool> m_readyForNextPkt;
+                std::unordered_map<uint32_t, uint8_t> m_suSendSeq;
+
                 bool m_debug;
 
                 /**
@@ -152,6 +200,45 @@ namespace network
                  * @param streamId Stream ID.
                  */
                 void dispatchToFNE(uint32_t peerId, dmr::data::NetData& dmrData, const uint8_t* data, uint32_t len, uint8_t seqNo, uint16_t pktSeq, uint32_t streamId);
+                /**
+                 * @brief Helper to dispatch PDU user data back to the local FNE network. (Will not transmit to neighbor FNE peers.)
+                 * @param dataHeader Instance of a PDU data header.
+                 * @param pduUserData Buffer containing user data to transmit.
+                 */
+                void dispatchUserFrameToFNE(dmr::data::DataHeader& dataHeader, uint8_t* pduUserData);
+
+                /**
+                 * @brief Helper write ARP request to the network.
+                 * @param addr IP Address.
+                 */
+                void write_PDU_ARP(uint32_t addr);
+                /**
+                 * @brief Helper write ARP reply to the network.
+                 * @param targetAddr Target IP Address.
+                 * @param requestorId Requestor Radio ID.
+                 * @param requestorAddr Requestor IP Address.
+                 * @param targetId Target Radio ID.
+                 */
+                void write_PDU_ARP_Reply(uint32_t targetAddr, uint32_t requestorId, uint32_t requestorAddr, uint32_t targetId = 0U);
+
+                /**
+                 * @brief Helper to determine if the radio ID has an ARP entry.
+                 * @param id Radio ID.
+                 * @returns bool True, if ARP entry exists, otherwise false.
+                 */
+                bool hasARPEntry(uint32_t id) const;
+                /**
+                 * @brief Helper to get the IP address for the given radio ID.
+                 * @param id Radio ID.
+                 * @returns uint32_t IP address.
+                 */
+                uint32_t getIPAddress(uint32_t id);
+                /**
+                 * @brief Helper to get the radio ID for the given IP address.
+                 * @param addr IP Address.
+                 * @returns uint32_t Radio ID.
+                 */
+                uint32_t getRadioIdAddress(uint32_t addr);
             };
         } // namespace packetdata
     } // namespace callhandler
