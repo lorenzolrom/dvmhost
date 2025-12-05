@@ -64,6 +64,7 @@ P25PacketData::P25PacketData(FNENetwork* network, TagP25Data* tag, bool debug) :
     m_arpTable(),
     m_readyForNextPkt(),
     m_suSendSeq(),
+    m_suRecvSeq(),
     m_debug(debug)
 {
     assert(network != nullptr);
@@ -764,6 +765,49 @@ void P25PacketData::dispatch(uint32_t peerId)
             }
         }
 
+        // sequence validation - check N(S) against V(R)
+        uint8_t receivedNs = status->assembler.dataHeader.getNs();
+        bool synchronize = status->assembler.dataHeader.getSynchronize();
+
+        // Initialize V(R) if first packet from this LLId
+        auto recvSeqIt = m_suRecvSeq.find(srcLlId);
+        if (recvSeqIt == m_suRecvSeq.end()) {
+            m_suRecvSeq[srcLlId] = 0U;
+        }
+
+        uint8_t expectedNs = m_suRecvSeq[srcLlId];
+        bool sequenceValid = false;
+
+        // handle synchronize flag - resets receive window per TIA-102
+        if (synchronize) {
+            //LogDebugEx(LOG_P25, "P25PacketData::dispatch()", "synchronize flag set by llId %u, resetting V(R) from %u to %u", 
+            //    srcLlId, expectedNs, (receivedNs + 1) % 8);
+            m_suRecvSeq[srcLlId] = (receivedNs + 1) % 8;
+            sequenceValid = true;
+        }
+        else if (receivedNs == expectedNs || receivedNs == (expectedNs + 1) % 8) {
+            // accept if N(S) == V(R) or V(R)+1 (allows one-ahead windowing)
+            m_suRecvSeq[srcLlId] = (receivedNs + 1) % 8;
+            sequenceValid = true;
+            //LogDebugEx(LOG_P25, "P25PacketData::dispatch()", "sequence valid, llId %u, N(S) = %u, V(R) now = %u", 
+            //    srcLlId, receivedNs, m_suRecvSeq[srcLlId]);
+        }
+        else {
+            // out of sequence - send NACK_OUT_OF_SEQ
+            LogWarning(LOG_P25, P25_PDU_STR ", NACK_OUT_OF_SEQ, llId %u, expected N(S) %u or %u, received N(S) = %u", 
+                srcLlId, expectedNs, (expectedNs + 1) % 8, receivedNs);
+            if (status->assembler.getExtendedAddress()) {
+                write_PDU_Ack_Response(PDUAckClass::NACK, PDUAckType::NACK_OUT_OF_SEQ, expectedNs, srcLlId, true, dstLlId);
+            } else {
+                write_PDU_Ack_Response(PDUAckClass::NACK, PDUAckType::NACK_OUT_OF_SEQ, expectedNs, srcLlId, false);
+            }
+            break; // don't process out-of-sequence packet
+        }
+
+        if (!sequenceValid) {
+            break; // should never reach here due to logic above, but safety check
+        }
+
         // transmit packet to IP network
         LogInfoEx(LOG_P25, "PDU -> VTUN, IP Data, srcIp = %s (%u), dstIp = %s (%u), pktLen = %u, proto = %02X%s", 
             srcIp, srcLlId, dstIp, dstLlId, pktLen, proto, (proto == 0x01) ? " (ICMP)" : "");
@@ -782,11 +826,10 @@ void P25PacketData::dispatch(uint32_t peerId)
             //LogDebugEx(LOG_P25, "P25PacketData::dispatch()", "marking llId %u ready for next packet (proto = %02X)", srcLlId, proto);
             if (status->assembler.getExtendedAddress()) {
                 m_readyForNextPkt[srcLlId] = true;
-                write_PDU_Ack_Response(PDUAckClass::ACK, PDUAckType::ACK, status->assembler.dataHeader.getNs(), srcLlId,
-                    true, dstLlId);
+                write_PDU_Ack_Response(PDUAckClass::ACK, PDUAckType::ACK, receivedNs, srcLlId, true, dstLlId);
             } else {
                 m_readyForNextPkt[srcLlId] = true;
-                write_PDU_Ack_Response(PDUAckClass::ACK, PDUAckType::ACK, status->assembler.dataHeader.getNs(), srcLlId, false);
+                write_PDU_Ack_Response(PDUAckClass::ACK, PDUAckType::ACK, receivedNs, srcLlId, false);
             }
         }
 #endif // !defined(_WIN32)

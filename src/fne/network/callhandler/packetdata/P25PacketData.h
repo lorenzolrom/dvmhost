@@ -199,7 +199,8 @@ namespace network
                 std::unordered_map<uint32_t, uint32_t> m_arpTable;
                 typedef std::pair<const uint32_t, bool> ReadyForNextPktPair;
                 std::unordered_map<uint32_t, bool> m_readyForNextPkt;
-                std::unordered_map<uint32_t, uint8_t> m_suSendSeq;
+                std::unordered_map<uint32_t, uint8_t> m_suSendSeq;      // V(S) send state variable per LLId
+                std::unordered_map<uint32_t, uint8_t> m_suRecvSeq;      // V(R) receive state variable per LLId
 
                 bool m_debug;
 
