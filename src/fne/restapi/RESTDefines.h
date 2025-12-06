@@ -54,7 +54,10 @@
 
 #define FNE_GET_RELOAD_TGS              "/reload-tgs"
 #define FNE_GET_RELOAD_RIDS             "/reload-rids"
+#define FNE_GET_RELOAD_PEERLIST         "/reload-peers"
+#define FNE_GET_RELOAD_CRYPTO           "/reload-crypto"
 
+#define FNE_GET_STATS                   "/stats"
 #define FNE_GET_AFF_LIST                "/report-affiliations"
 
 #define FNE_GET_SPANNING_TREE           "/spanning-tree"

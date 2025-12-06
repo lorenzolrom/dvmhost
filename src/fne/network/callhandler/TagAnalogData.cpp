@@ -265,6 +265,8 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                 m_status[dstId].activeCall = true;
                 m_status.unlock();
 
+                m_network->m_totalCallsProcessed++;
+
                 #define CALL_START_LOG "Analog, Call Start, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, streamId, fromUpstream
                 if (m_network->m_logUpstreamCallStartEnd && fromUpstream)
                     LogInfoEx(LOG_PEER, CALL_START_LOG);

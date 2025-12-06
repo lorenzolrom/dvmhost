@@ -402,6 +402,8 @@ bool TagNXDNData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerI
                     m_status[dstId].activeCall = true;
                     m_status.unlock();
 
+                    m_network->m_totalCallsProcessed++;
+
                     // is this a private call?
                     if (!group) {
                         m_statusPVCall.lock(false);

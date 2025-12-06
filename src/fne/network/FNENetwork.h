@@ -406,6 +406,8 @@ namespace network
         uint32_t m_sndcpStartAddr;
         uint32_t m_sndcpEndAddr;
 
+        uint64_t m_totalCallsProcessed;
+
         bool m_logDenials;
         bool m_logUpstreamCallStartEnd;
         bool m_reportPeerPing;

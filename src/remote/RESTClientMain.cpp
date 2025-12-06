@@ -44,6 +44,8 @@
 #define RCD_FNE_GET_AFFLIST             "fne-affs"
 #define RCD_FNE_GET_RELOADTGS           "fne-reload-tgs"
 #define RCD_FNE_GET_RELOADRIDS          "fne-reload-rids"
+#define RCD_FNE_GET_RELOADPEERLIST      "fne-reload-peerlist"
+#define RCD_FNE_GET_RELOADCRYPTO        "fne-reload-crypto"
 
 #define RCD_FNE_PUT_RESETPEER           "fne-reset-peer"
 #define RCD_FNE_PUT_PEER_ACL_ADD        "fne-peer-acl-add"
@@ -53,6 +55,8 @@
 #define RCD_FNE_SAVE_RID_ACL            "fne-rid-commit"
 #define RCD_FNE_SAVE_TGID_ACL           "fne-tgid-commit"
 #define RCD_FNE_SAVE_PEER_ACL           "fne-peer-commit"
+
+#define RCD_FNE_GET_STATS               "fne-stats"
 
 #define RCD_FNE_GET_SPANNINGTREE        "fne-spanning-tree"
 
@@ -214,6 +218,8 @@ void usage(const char* message, const char* arg)
     reply += "  fne-affs                    Retrieves the list of currently affiliated SUs (Converged FNE only)\r\n";
     reply += "  fne-reload-tgs              Forces the FNE to reload its TGID list from disk (Converged FNE only)\r\n";
     reply += "  fne-reload-rids             Forces the FNE to reload its RID list from disk (Converged FNE only)\r\n";
+    reply += "  fne-reload-peerlist         Forces the FNE to reload its peer list from disk (Converged FNE only)\r\n";
+    reply += "  fne-reload-crypto           Forces the FNE to reload its crypto containers from disk (Converged FNE only)\r\n";
     reply += "\r\n";
     reply += "  fne-reset-peer <pid>        Forces the FNE to reset the connection of the given peer ID (Converged FNE only)\r\n";
     reply += "  fne-peer-acl-add <pid>      Adds the specified peer ID to the FNE ACL tables (Converged FNE only)\r\n";
@@ -223,6 +229,8 @@ void usage(const char* message, const char* arg)
     reply += "  fne-rid-commit              Saves the current RID ACL to permenant storage (Converged FNE only)\r\n";
     reply += "  fne-tgid-commit             Saves the current TGID ACL to permenant storage (Converged FNE only)\r\n";
     reply += "  fne-peer-commit             Saves the current peer ACL to permenant storage (Converged FNE only)\r\n";
+    reply += "\r\n";
+    reply += "  fne-stats                   Retrieves current FNE statistics (Converged FNE only)\r\n";
     reply += "\r\n";
     reply += "  fne-spanning-tree           Retrieves the current FNE spanning tree (Converged FNE only)\r\n";
     reply += "\r\n";
@@ -892,6 +900,12 @@ int main(int argc, char** argv)
         else if (rcom == RCD_FNE_GET_RELOADRIDS) {
             retCode = client->send(HTTP_GET, FNE_GET_RELOAD_RIDS, json::object(), response);
         }
+        else if (rcom == RCD_FNE_GET_RELOADPEERLIST) {
+            retCode = client->send(HTTP_GET, FNE_GET_RELOAD_PEERLIST, json::object(), response);
+        }
+        else if (rcom == RCD_FNE_GET_RELOADCRYPTO) {
+            retCode = client->send(HTTP_GET, FNE_GET_RELOAD_CRYPTO, json::object(), response);
+        }
         else if (rcom == RCD_FNE_PUT_RESETPEER && argCnt >= 1U) {
             uint32_t peerId = getArgUInt32(args, 0U);
             json::object req = json::object();
@@ -928,6 +942,9 @@ int main(int argc, char** argv)
         }
         else if (rcom == RCD_FNE_SAVE_PEER_ACL) {
             retCode = client->send(HTTP_GET, FNE_GET_PEER_COMMIT, json::object(), response);
+        }
+        else if (rcom == RCD_FNE_GET_STATS) {
+            retCode = client->send(HTTP_GET, FNE_GET_STATS, json::object(), response);
         }
         else if (rcom == RCD_FNE_GET_SPANNINGTREE) {
             retCode = client->send(HTTP_GET, FNE_GET_SPANNING_TREE, json::object(), response);

@@ -506,6 +506,7 @@ RESTAPI::RESTAPI(const std::string& address, uint16_t port, const std::string& p
     m_tidLookup(nullptr),
     m_peerListLookup(nullptr),
     m_adjSiteMapLookup(nullptr),
+    m_cryptoLookup(nullptr),
     m_authTokens()
 {
     assert(!address.empty());
@@ -556,12 +557,14 @@ RESTAPI::~RESTAPI()
 /* Sets the instances of the Radio ID and Talkgroup ID lookup tables. */
 
 void RESTAPI::setLookups(lookups::RadioIdLookup* ridLookup, lookups::TalkgroupRulesLookup* tidLookup, 
-    ::lookups::PeerListLookup* peerListLookup, ::lookups::AdjSiteMapLookup* adjMapLookup)
+    ::lookups::PeerListLookup* peerListLookup, ::lookups::AdjSiteMapLookup* adjMapLookup,
+    CryptoContainer* cryptoLookup)
 {
     m_ridLookup = ridLookup;
     m_tidLookup = tidLookup;
     m_peerListLookup = peerListLookup;
     m_adjSiteMapLookup = adjMapLookup;
+    m_cryptoLookup = cryptoLookup;
 }
 
 /* Sets the instance of the FNE network. */
@@ -664,7 +667,10 @@ void RESTAPI::initializeEndpoints()
 
     m_dispatcher.match(FNE_GET_RELOAD_TGS).get(REST_API_BIND(RESTAPI::restAPI_GetReloadTGs, this));
     m_dispatcher.match(FNE_GET_RELOAD_RIDS).get(REST_API_BIND(RESTAPI::restAPI_GetReloadRIDs, this));
+    m_dispatcher.match(FNE_GET_RELOAD_PEERLIST).get(REST_API_BIND(RESTAPI::restAPI_GetReloadPeerList, this));
+    m_dispatcher.match(FNE_GET_RELOAD_CRYPTO).get(REST_API_BIND(RESTAPI::restAPI_GetReloadCrypto, this));
 
+    m_dispatcher.match(FNE_GET_STATS).get(REST_API_BIND(RESTAPI::restAPI_GetStats, this));
     m_dispatcher.match(FNE_GET_AFF_LIST).get(REST_API_BIND(RESTAPI::restAPI_GetAffList, this));
 
     m_dispatcher.match(FNE_GET_SPANNING_TREE).get(REST_API_BIND(RESTAPI::restAPI_GetSpanningTree, this));
@@ -1610,6 +1616,211 @@ void RESTAPI::restAPI_GetReloadRIDs(const HTTPPayload& request, HTTPPayload& rep
 
     if (m_network != nullptr) {
         m_network->m_ridLookup->reload();
+    }
+
+    reply.payload(response);
+}
+
+/* REST API endpoint; implements get reload peer list request. */
+
+void RESTAPI::restAPI_GetReloadPeerList(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object response = json::object();
+    setResponseDefaultStatus(response);
+
+    if (m_network != nullptr) {
+        m_network->m_peerListLookup->reload();
+    }
+
+    reply.payload(response);
+}
+
+/* REST API endpoint; implements get reload crypto container request. */
+
+void RESTAPI::restAPI_GetReloadCrypto(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object response = json::object();
+    setResponseDefaultStatus(response);
+
+    if (m_network != nullptr) {
+        m_network->m_cryptoLookup->reload();
+    }
+
+    reply.payload(response);
+}
+
+/* REST API endpoint; implements get statistics request. */
+
+void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object response = json::object();
+    setResponseDefaultStatus(response);
+
+    if (m_network != nullptr) {
+        // peer statistics (right now this is just a list of connected peers)
+        json::array peerStats = json::array();
+        if (m_network->m_peers.size() > 0) {
+            for (auto entry : m_network->m_peers) {
+                uint32_t peerId = entry.first;
+                network::FNEPeerConnection* peer = entry.second;
+                if (peer != nullptr) {
+                    json::object peerObj = json::object();
+                    peerObj["peerId"].set<uint32_t>(peerId);
+                    uint32_t masterId = peer->masterId();
+                    peerObj["masterId"].set<uint32_t>(masterId);
+
+                    peerObj["address"].set<std::string>(peer->address());
+                    uint16_t port = peer->port();
+                    peerObj["port"].set<uint16_t>(port);
+
+                    // format last ping into human readable form
+                    {
+                        std::chrono::milliseconds lastPing(peer->lastPing());
+                        std::chrono::system_clock::time_point tp = std::chrono::system_clock::time_point() + lastPing;
+                        std::time_t lastPingTime = std::chrono::system_clock::to_time_t(tp);
+
+                        char timeBuf[26];
+                        ::memset(timeBuf, 0x00U, 26);
+                        ::ctime_r(&lastPingTime, timeBuf);
+
+                        // remove newline character from ctime_r output
+                        std::string timeStr = std::string(timeBuf);
+                        timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
+                        peerObj["lastPing"].set<std::string>(timeStr);
+                    }
+
+                    uint32_t pingsReceived = peer->pingsReceived();
+                    peerObj["pingsReceived"].set<uint32_t>(pingsReceived);
+                    uint32_t missedMetadataUpdates = peer->missedMetadataUpdates();
+                    peerObj["missedMetadataUpdates"].set<uint32_t>(missedMetadataUpdates);
+
+                    bool isNeighbor = peer->isNeighborFNEPeer();
+                    bool isReplica = peer->isReplica();
+                    peerObj["isNeighbor"].set<bool>(isNeighbor);
+                    peerObj["isReplica"].set<bool>(isReplica);
+
+                    peerStats.push_back(json::value(peerObj));
+                }
+            }
+        }
+        response["peerStats"].set<json::array>(peerStats);
+
+        // table load statistics
+        json::object tableLastLoad = json::object();
+
+        // RID table load time
+        {
+            // format last load time into human readable form
+            std::chrono::milliseconds lastLoad(m_network->m_ridLookup->lastLoadTime());
+            std::chrono::system_clock::time_point tp = std::chrono::system_clock::time_point() + lastLoad;
+            std::time_t lastLoadTime = std::chrono::system_clock::to_time_t(tp);
+
+            char timeBuf[26];
+            ::memset(timeBuf, 0x00U, 26);
+            ::ctime_r(&lastLoadTime, timeBuf);
+
+            // remove newline character from ctime_r output
+            std::string timeStr = std::string(timeBuf);
+            timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
+            tableLastLoad["ridLastLoadTime"].set<std::string>(timeStr);
+        }
+
+        // talkgroup table load time
+        {
+            // format last load time into human readable form
+            std::chrono::milliseconds lastLoad(m_network->m_tidLookup->lastLoadTime());
+            std::chrono::system_clock::time_point tp = std::chrono::system_clock::time_point() + lastLoad;
+            std::time_t lastLoadTime = std::chrono::system_clock::to_time_t(tp);
+
+            char timeBuf[26];
+            ::memset(timeBuf, 0x00U, 26);
+            ::ctime_r(&lastLoadTime, timeBuf);
+
+            // remove newline character from ctime_r output
+            std::string timeStr = std::string(timeBuf);
+            timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
+            tableLastLoad["tgLastLoadTime"].set<std::string>(timeStr);
+        }
+
+        // peer list table load time
+        {
+            // format last load time into human readable form
+            std::chrono::milliseconds lastLoad(m_peerListLookup->lastLoadTime());
+            std::chrono::system_clock::time_point tp = std::chrono::system_clock::time_point() + lastLoad;
+            std::time_t lastLoadTime = std::chrono::system_clock::to_time_t(tp);
+
+            char timeBuf[26];
+            ::memset(timeBuf, 0x00U, 26);
+            ::ctime_r(&lastLoadTime, timeBuf);
+
+            // remove newline character from ctime_r output
+            std::string timeStr = std::string(timeBuf);
+            timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
+            tableLastLoad["peerListLastLoadTime"].set<std::string>(timeStr);
+        }
+
+        // adjacent site map table load time
+        {
+            // format last load time into human readable form
+            std::chrono::milliseconds lastLoad(m_adjSiteMapLookup->lastLoadTime());
+            std::chrono::system_clock::time_point tp = std::chrono::system_clock::time_point() + lastLoad;
+            std::time_t lastLoadTime = std::chrono::system_clock::to_time_t(tp);
+
+            char timeBuf[26];
+            ::memset(timeBuf, 0x00U, 26);
+            ::ctime_r(&lastLoadTime, timeBuf);
+
+            // remove newline character from ctime_r output
+            std::string timeStr = std::string(timeBuf);
+            timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
+            tableLastLoad["adjSiteMapLastLoadTime"].set<std::string>(timeStr);
+        }
+
+        // crypto key table load time
+        {
+            // format last load time into human readable form
+            std::chrono::milliseconds lastLoad(m_cryptoLookup->lastLoadTime());
+            std::chrono::system_clock::time_point tp = std::chrono::system_clock::time_point() + lastLoad;
+            std::time_t lastLoadTime = std::chrono::system_clock::to_time_t(tp);
+
+            char timeBuf[26];
+            ::memset(timeBuf, 0x00U, 26);
+            ::ctime_r(&lastLoadTime, timeBuf);
+
+            // remove newline character from ctime_r output
+            std::string timeStr = std::string(timeBuf);
+            timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
+            tableLastLoad["cryptoKeyLastLoadTime"].set<std::string>(timeStr);
+        }
+        response["tableLastLoad"].set<json::object>(tableLastLoad);
+
+        // total calls processed
+        uint32_t totalCallsProcessed = m_network->m_totalCallsProcessed;
+        response["totalCallsProcessed"].set<uint32_t>(totalCallsProcessed);
+
+        // table totals
+        uint32_t ridTotalEntries = m_network->m_ridLookup->table().size();
+        response["ridTotalEntries"].set<uint32_t>(ridTotalEntries);
+        uint32_t tgTotalEntries = m_network->m_tidLookup->groupVoice().size();
+        response["tgTotalEntries"].set<uint32_t>(tgTotalEntries);
+        uint32_t peerListTotalEntries = m_peerListLookup->table().size();
+        response["peerListTotalEntries"].set<uint32_t>(peerListTotalEntries);
+        uint32_t adjSiteMapTotalEntries = m_adjSiteMapLookup->adjPeerMap().size();
+        response["adjSiteMapTotalEntries"].set<uint32_t>(adjSiteMapTotalEntries);
+        uint32_t cryptoKeyTotalEntries = m_cryptoLookup->keys().size();
+        response["cryptoKeyTotalEntries"].set<uint32_t>(cryptoKeyTotalEntries);
     }
 
     reply.payload(response);

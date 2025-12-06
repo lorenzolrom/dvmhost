@@ -521,7 +521,7 @@ bool HostFNE::initializeRESTAPI()
     // initialize network remote command
     if (restApiEnable) {
         m_RESTAPI = new RESTAPI(restApiAddress, restApiPort, restApiPassword, restApiSSLKey, restApiSSLCert, restApiEnableSSL, this, restApiDebug);
-        m_RESTAPI->setLookups(m_ridLookup, m_tidLookup, m_peerListLookup, m_adjSiteMapLookup);
+        m_RESTAPI->setLookups(m_ridLookup, m_tidLookup, m_peerListLookup, m_adjSiteMapLookup, m_cryptoLookup);
         bool ret = m_RESTAPI->open();
         if (!ret) {
             delete m_RESTAPI;

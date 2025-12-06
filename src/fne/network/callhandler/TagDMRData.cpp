@@ -366,6 +366,8 @@ bool TagDMRData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
                 m_status[dstId].activeCall = true;
                 m_status.unlock();
 
+                m_network->m_totalCallsProcessed++;
+
                 // is this a private call?
                 if (flco == FLCO::PRIVATE) {
                     m_statusPVCall.lock(false);
