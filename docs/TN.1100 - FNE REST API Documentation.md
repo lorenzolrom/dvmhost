@@ -1,7 +1,7 @@
 # DVM FNE REST API Technical Documentation
 
-**Version:** 1.0  
-**Date:** December 3, 2025  
+**Version:** 1.1  
+**Date:** December 6, 2025  
 **Author:** AI Assistant (based on source code analysis)
 
 AI WARNING: This document was mainly generated using AI assistance. As such, there is the possibility of some error or inconsistency. Examples in Section 14 and Appendix C are *strictly* examples only for how the API *could* be used.
@@ -1213,7 +1213,138 @@ X-DVM-Auth-Token: {token}
 
 ---
 
-### 9.4 Endpoint: GET /report-affiliations
+### 9.4 Endpoint: GET /reload-peers
+
+**Method:** `GET`
+
+**Description:** Reload authorized peer list from disk.
+
+**Request Headers:**
+```
+X-DVM-Auth-Token: {token}
+```
+
+**Response:**
+```json
+{
+  "status": 200
+}
+```
+
+**Notes:**
+- Discards in-memory changes to peer list
+- Reloads from configured peer list file
+- Useful for reverting uncommitted changes to authorized peers
+
+---
+
+### 9.5 Endpoint: GET /reload-crypto
+
+**Method:** `GET`
+
+**Description:** Reload cryptographic keys from disk.
+
+**Request Headers:**
+```
+X-DVM-Auth-Token: {token}
+```
+
+**Response:**
+```json
+{
+  "status": 200
+}
+```
+
+**Notes:**
+- Reloads encryption keys from configured crypto key file
+- Used to update encryption keys without restarting the FNE
+- Applies to DMR, P25, and NXDN encryption key tables
+
+---
+
+### 9.6 Endpoint: GET /stats
+
+**Method:** `GET`
+
+**Description:** Get FNE statistics and metrics including peer status, table load times, and call counts.
+
+**Request Headers:**
+```
+X-DVM-Auth-Token: {token}
+```
+
+**Response:**
+```json
+{
+  "status": 200,
+  "peerStats": [
+    {
+      "peerId": 10001,
+      "masterId": 10001,
+      "address": "192.168.1.100",
+      "port": 54321,
+      "lastPing": "Fri Dec  6 10:30:45 2025",
+      "pingsReceived": 1234,
+      "missedMetadataUpdates": 0,
+      "isNeighbor": false,
+      "isReplica": false
+    }
+  ],
+  "tableLastLoad": {
+    "ridLastLoadTime": "Fri Dec  6 08:15:30 2025",
+    "tgLastLoadTime": "Fri Dec  6 08:15:30 2025",
+    "peerListLastLoadTime": "Fri Dec  6 08:15:30 2025",
+    "adjSiteMapLastLoadTime": "Fri Dec  6 08:15:30 2025",
+    "cryptoKeyLastLoadTime": "Fri Dec  6 08:15:30 2025"
+  },
+  "totalCallsProcessed": 5678,
+  "ridTotalEntries": 150,
+  "tgTotalEntries": 45,
+  "peerListTotalEntries": 8,
+  "adjSiteMapTotalEntries": 6,
+  "cryptoKeyTotalEntries": 12
+}
+```
+
+**Response Fields:**
+
+**peerStats[]** - Array of peer statistics:
+- `peerId`: Unique peer identifier
+- `masterId`: Master peer ID
+- `address`: IP address of peer
+- `port`: Network port of peer
+- `lastPing`: Last ping timestamp (human-readable format)
+- `pingsReceived`: Total pings received from this peer
+- `missedMetadataUpdates`: Number of missed metadata updates
+- `isNeighbor`: Whether this is a neighbor FNE peer
+- `isReplica`: Whether this peer participates in replication
+
+**tableLastLoad** - Lookup table load timestamps:
+- `ridLastLoadTime`: Radio ID table last load time (human-readable format)
+- `tgLastLoadTime`: Talkgroup table last load time (human-readable format)
+- `peerListLastLoadTime`: Peer list table last load time (human-readable format)
+- `adjSiteMapLastLoadTime`: Adjacent site map table last load time (human-readable format)
+- `cryptoKeyLastLoadTime`: Crypto key table last load time (human-readable format)
+
+**Statistics Totals:**
+- `totalCallsProcessed`: Total number of calls processed since FNE startup
+- `ridTotalEntries`: Total entries in radio ID lookup table
+- `tgTotalEntries`: Total entries in talkgroup rules table
+- `peerListTotalEntries`: Total entries in authorized peer list
+- `adjSiteMapTotalEntries`: Total entries in adjacent site map
+- `cryptoKeyTotalEntries`: Total encryption keys loaded
+
+**Notes:**
+- Statistics are reset on FNE restart
+- Timestamp fields use `ctime` format (e.g., "Fri Dec  6 10:30:45 2025")
+- Useful for monitoring FNE health, performance, and peer connectivity
+- `peerStats` array contains one entry per connected peer
+- Table load times help identify when configuration files were last reloaded
+
+---
+
+### 9.7 Endpoint: GET /report-affiliations
 
 **Method:** `GET`
 
@@ -1269,7 +1400,7 @@ X-DVM-Auth-Token: {token}
 
 ---
 
-### 9.5 Endpoint: GET /spanning-tree
+### 9.8 Endpoint: GET /spanning-tree
 
 **Method:** `GET`
 
@@ -2056,6 +2187,9 @@ if __name__ == "__main__":
 | GET | /force-update | Force peer updates | Yes |
 | GET | /reload-tgs | Reload talkgroups from disk | Yes |
 | GET | /reload-rids | Reload radio IDs from disk | Yes |
+| GET | /reload-peers | Reload peer list from disk | Yes |
+| GET | /reload-crypto | Reload crypto keys from disk | Yes |
+| GET | /stats | Get FNE statistics | Yes |
 | GET | /report-affiliations | Get affiliations | Yes |
 | GET | /spanning-tree | Get network topology | Yes |
 | PUT | /dmr/rid | DMR radio operations | Yes |
@@ -2209,6 +2343,7 @@ monitor_affiliations("fne.example.com", 9990, "your_token", 1)
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | Dec 3, 2025 | Initial documentation based on source code analysis |
+| 1.1 | Dec 6, 2025 | Added missing endpoints: `/reload-peers`, `/reload-crypto`, `/stats` |
 
 ---
 
