@@ -231,6 +231,8 @@ namespace lookups
         uint32_t m_reloadTime;
         yaml::Node m_rules;
 
+        uint64_t m_lastLoadTime;
+
         bool m_stop;
 
         static std::mutex s_mutex;  //!< Mutex used for change locking.

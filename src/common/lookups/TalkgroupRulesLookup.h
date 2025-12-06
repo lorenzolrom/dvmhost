@@ -641,6 +641,8 @@ namespace lookups
         uint32_t m_reloadTime;
         yaml::Node m_rules;
 
+        uint64_t m_lastLoadTime;
+
         bool m_acl;
         bool m_stop;
 

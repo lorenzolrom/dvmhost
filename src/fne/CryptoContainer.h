@@ -250,6 +250,8 @@ private:
     std::string m_password;
     uint32_t m_reloadTime;
 
+    uint64_t m_lastLoadTime;
+
     bool m_enabled;
     bool m_stop;
 

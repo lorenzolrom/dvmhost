@@ -55,7 +55,8 @@ namespace lookups
             m_filename(filename),
             m_reloadTime(reloadTime),
             m_table(),
-            m_stop(false)
+            m_stop(false),
+            m_lastLoadTime(0U)
         {
             /* stub */
         }
@@ -190,6 +191,8 @@ namespace lookups
         uint32_t m_reloadTime;
         std::unordered_map<uint32_t, T> m_table;
         bool m_stop;
+
+        uint64_t m_lastLoadTime;
 
         /**
          * @brief Loads the table from the passed lookup table file.
