@@ -1693,9 +1693,12 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
 
                         char timeBuf[26];
                         ::memset(timeBuf, 0x00U, 26);
+#if defined(_WIN32)
+                        ::ctime_s(timeBuf, 26, &lastPingTime);
+#else
                         ::ctime_r(&lastPingTime, timeBuf);
-
-                        // remove newline character from ctime_r output
+#endif
+                        // remove newline character from ctime output
                         std::string timeStr = std::string(timeBuf);
                         timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
                         peerObj["lastPing"].set<std::string>(timeStr);
@@ -1729,9 +1732,12 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
 
             char timeBuf[26];
             ::memset(timeBuf, 0x00U, 26);
+#if defined(_WIN32)
+            ::ctime_s(timeBuf, 26, &lastLoadTime);
+#else
             ::ctime_r(&lastLoadTime, timeBuf);
-
-            // remove newline character from ctime_r output
+#endif
+            // remove newline character from ctime output
             std::string timeStr = std::string(timeBuf);
             timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
             tableLastLoad["ridLastLoadTime"].set<std::string>(timeStr);
@@ -1746,9 +1752,12 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
 
             char timeBuf[26];
             ::memset(timeBuf, 0x00U, 26);
+#if defined(_WIN32)
+            ::ctime_s(timeBuf, 26, &lastLoadTime);
+#else
             ::ctime_r(&lastLoadTime, timeBuf);
-
-            // remove newline character from ctime_r output
+#endif
+            // remove newline character from ctime output
             std::string timeStr = std::string(timeBuf);
             timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
             tableLastLoad["tgLastLoadTime"].set<std::string>(timeStr);
@@ -1763,9 +1772,12 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
 
             char timeBuf[26];
             ::memset(timeBuf, 0x00U, 26);
+#if defined(_WIN32)
+            ::ctime_s(timeBuf, 26, &lastLoadTime);
+#else
             ::ctime_r(&lastLoadTime, timeBuf);
-
-            // remove newline character from ctime_r output
+#endif
+            // remove newline character from ctime output
             std::string timeStr = std::string(timeBuf);
             timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
             tableLastLoad["peerListLastLoadTime"].set<std::string>(timeStr);
@@ -1780,9 +1792,12 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
 
             char timeBuf[26];
             ::memset(timeBuf, 0x00U, 26);
+#if defined(_WIN32)
+            ::ctime_s(timeBuf, 26, &lastLoadTime);
+#else
             ::ctime_r(&lastLoadTime, timeBuf);
-
-            // remove newline character from ctime_r output
+#endif
+            // remove newline character from ctime output
             std::string timeStr = std::string(timeBuf);
             timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
             tableLastLoad["adjSiteMapLastLoadTime"].set<std::string>(timeStr);
@@ -1797,9 +1812,12 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
 
             char timeBuf[26];
             ::memset(timeBuf, 0x00U, 26);
+#if defined(_WIN32)
+            ::ctime_s(timeBuf, 26, &lastLoadTime);
+#else
             ::ctime_r(&lastLoadTime, timeBuf);
-
-            // remove newline character from ctime_r output
+#endif
+            // remove newline character from ctime output
             std::string timeStr = std::string(timeBuf);
             timeStr.erase(std::remove(timeStr.begin(), timeStr.end(), '\n'), timeStr.end());
             tableLastLoad["cryptoKeyLastLoadTime"].set<std::string>(timeStr);
