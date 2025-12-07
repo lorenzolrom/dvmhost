@@ -441,6 +441,7 @@ void P25PacketData::write_PDU_KMM(const uint8_t* data, uint32_t len, uint32_t ll
 
 void P25PacketData::clock(uint32_t ms)
 {
+#if !defined(_WIN32)
     uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
     if (m_queuedFrames.size() == 0U) {
@@ -527,6 +528,7 @@ pkt_clock_abort:
         // requeue packet
         m_queuedFrames.push_back(frame);
     }
+#endif // !defined(_WIN32)
 }
 
 /* Helper to cleanup any call's left in a dangling state without any further updates. */
