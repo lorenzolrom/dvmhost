@@ -54,8 +54,8 @@ const uint32_t ARP_RETRY_MS = 5000U; // milliseconds
 DMRPacketData::DMRPacketData(FNENetwork* network, TagDMRData* tag, bool debug) :
     m_network(network),
     m_tag(tag),
-    m_status(),
     m_queuedFrames(),
+    m_status(),
     m_arpTable(),
     m_readyForNextPkt(),
     m_suSendSeq(),
