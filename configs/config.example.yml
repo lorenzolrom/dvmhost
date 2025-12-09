@@ -249,6 +249,9 @@ protocols:
         forceAllowTG0: false
         # Flag indicating whether or not a TGID will be tested for affiliations before being granted.
         ignoreAffiliationCheck: false
+        # Flag indicating whether or not a P25 TDU (call terminator) will occur to the network immmediately after a 
+        #   SU dekey, or on a fixed 1 second delay. (This is useful for systems that require fast call termination after dekeying.)
+        immediateCallTerm: true
         # Flag indicating that the host will attempt to automatically inhibit unauthorized RIDs (those not in the
         # RID ACL list).
         inhibitUnauthorized: false

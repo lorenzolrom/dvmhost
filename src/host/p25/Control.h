@@ -315,6 +315,7 @@ namespace p25
         bool m_demandUnitRegForRefusedAff;
         bool m_dfsiFDX;
         bool m_forceAllowTG0;
+        bool m_immediateCallTerm;
 
         uint32_t m_defaultNetIdleTalkgroup;
 
@@ -357,6 +358,10 @@ namespace p25
         Timer m_activeTGUpdate;
 
         Timer m_ccPacketInterval;
+
+        uint32_t m_rfCallTermSrcId;
+        uint32_t m_rfCallTermDstId;
+        Timer m_rfVoiceCallTermTimeout;
 
         StopWatch m_interval;
 
