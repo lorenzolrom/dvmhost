@@ -1827,6 +1827,8 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
         // total calls processed
         uint32_t totalCallsProcessed = m_network->m_totalCallsProcessed;
         response["totalCallsProcessed"].set<uint32_t>(totalCallsProcessed);
+        int32_t totalActiveCalls = m_network->m_totalActiveCalls;
+        response["totalActiveCalls"].set<int32_t>(totalActiveCalls);
 
         // table totals
         uint32_t ridTotalEntries = m_network->m_ridLookup->table().size();
