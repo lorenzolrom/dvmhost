@@ -1208,6 +1208,8 @@ int main(int argc, char** argv)
     if (!Thread::runAsThread(nullptr, threadNetworkPump))
         return EXIT_FAILURE;
 
+    finalcut::FApplication::setColorTheme<dvmColorTheme>();
+
     // setup the finalcut tui
     SysViewApplication* app = nullptr;
     SysViewMainWnd* wnd = nullptr;
@@ -1273,7 +1275,6 @@ int main(int argc, char** argv)
         // show and start the application
         wnd->show();
 
-        finalcut::FApplication::setColorTheme<dvmColorTheme>();
         app->resetColors();
         app->redraw();
         

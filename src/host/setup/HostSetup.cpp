@@ -183,6 +183,8 @@ int HostSetup::run(int argc, char** argv)
         "Portions Copyright (c) 2015-2021 by Jonathan Naylor, G4KLX and others\r\n" \
         ">> Modem Setup\r\n");
 
+    finalcut::FApplication::setColorTheme<dvmColorTheme>();
+
     // setup the finalcut tui
     SetupApplication app{this, argc, argv};
 
@@ -248,7 +250,6 @@ int HostSetup::run(int argc, char** argv)
     // show and start the application
     setupWnd.show();
 
-    finalcut::FApplication::setColorTheme<dvmColorTheme>();
     app.resetColors();
     app.redraw();
     return app.exec();

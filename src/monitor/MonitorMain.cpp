@@ -200,6 +200,8 @@ int main(int argc, char** argv)
         ::fatal("cannot read the configuration file - %s (%s)", g_iniFile.c_str(), e.message());
     }
 
+    finalcut::FApplication::setColorTheme<dvmColorTheme>();
+
     // setup the finalcut tui
     MonitorApplication app{argc, argv};
 
@@ -234,7 +236,6 @@ int main(int argc, char** argv)
     // show and start the application
     wnd.show();
 
-    finalcut::FApplication::setColorTheme<dvmColorTheme>();
     app.resetColors();
     app.redraw();
     
