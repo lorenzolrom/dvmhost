@@ -91,7 +91,7 @@ network:
       #   aes - AES-256 Encryption
       #   arc4 - ARC4/ADP Encryption
       tekAlgo: "aes"
-      # Traffic Encryption Key ID
+      # Traffic Encryption Key ID (Hex)
       tekKeyId: 1
 
     # Source "Radio ID" for transmitted audio frames.

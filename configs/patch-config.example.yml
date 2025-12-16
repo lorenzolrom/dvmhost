@@ -68,7 +68,7 @@ network:
       #   aes - AES-256 Encryption
       #   arc4 - ARC4/ADP Encryption
       tekAlgo: "aes"
-      # Traffic Encryption Key ID
+      # Traffic Encryption Key ID (Hex)
       tekKeyId: 1
 
     # Destination Talkgroup ID for transmitted/received audio frames.
@@ -84,7 +84,7 @@ network:
       #   aes - AES-256 Encryption
       #   arc4 - ARC4/ADP Encryption
       tekAlgo: "aes"
-      # Traffic Encryption Key ID
+      # Traffic Encryption Key ID (Hex)
       tekKeyId: 1
 
     # Flag indicating whether or not the patch is two-way.
