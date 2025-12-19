@@ -1194,6 +1194,16 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                         }
                                     }
                                 } else {
+                                    // perform source address/port validation
+                                    if (connection->address() != udp::Socket::address(req->address) ||
+                                        connection->port() != udp::Socket::port(req->address)) {
+                                        LogError(LOG_MASTER, "PEER %u RPTL NAK, IP address/port mismatch on RPTL attempt while not running, old = %s:%u, new = %s:%u, connectionState = %u", peerId,
+                                            connection->address().c_str(), connection->port(), udp::Socket::address(req->address).c_str(), udp::Socket::port(req->address), connection->connectionState());
+
+                                        network->writePeerNAK(peerId, TAG_REPEATER_LOGIN, NET_CONN_NAK_FNE_UNAUTHORIZED, req->address, req->addrLen);
+                                        break;
+                                    }
+
                                     network->writePeerNAK(peerId, TAG_REPEATER_LOGIN, NET_CONN_NAK_BAD_CONN_STATE, req->address, req->addrLen);
 
                                     LogWarning(LOG_MASTER, "PEER %u (%s) RPTL NAK, bad connection state, connectionState = %u", peerId, connection->identWithQualifier().c_str(),
@@ -1294,6 +1304,16 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                 }
                             }
                             else {
+                                // perform source address/port validation
+                                if (connection->address() != udp::Socket::address(req->address) ||
+                                    connection->port() != udp::Socket::port(req->address)) {
+                                    LogError(LOG_MASTER, "PEER %u RPTK NAK, IP address/port mismatch on RPTK attempt while in an incorrect state, old = %s:%u, new = %s:%u, connectionState = %u", peerId,
+                                        connection->address().c_str(), connection->port(), udp::Socket::address(req->address).c_str(), udp::Socket::port(req->address), connection->connectionState());
+
+                                    network->writePeerNAK(peerId, TAG_REPEATER_LOGIN, NET_CONN_NAK_FNE_UNAUTHORIZED, req->address, req->addrLen);
+                                    break;
+                                }
+
                                 LogWarning(LOG_MASTER, "PEER %u RPTK NAK, login exchange while in an incorrect state, connectionState = %u", peerId, connection->connectionState());
                                 network->writePeerNAK(peerId, TAG_REPEATER_AUTH, NET_CONN_NAK_BAD_CONN_STATE, req->address, req->addrLen);
                                 network->disconnectPeer(peerId, connection);
@@ -1481,6 +1501,16 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                 }
                             }
                             else {
+                                // perform source address/port validation
+                                if (connection->address() != udp::Socket::address(req->address) ||
+                                    connection->port() != udp::Socket::port(req->address)) {
+                                    LogError(LOG_MASTER, "PEER %u (%s) RPTC NAK, IP address/port mismatch on RPTC attempt while in an incorrect state, old = %s:%u, new = %s:%u, connectionState = %u", peerId, connection->identWithQualifier().c_str(),
+                                        connection->address().c_str(), connection->port(), udp::Socket::address(req->address).c_str(), udp::Socket::port(req->address), connection->connectionState());
+
+                                    network->writePeerNAK(peerId, TAG_REPEATER_LOGIN, NET_CONN_NAK_FNE_UNAUTHORIZED, req->address, req->addrLen);
+                                    break;
+                                }
+
                                 LogWarning(LOG_MASTER, "PEER %u (%s) RPTC NAK, login exchange while in an incorrect state, connectionState = %u", peerId, connection->identWithQualifier().c_str(),
                                     connection->connectionState());
                                 network->writePeerNAK(peerId, TAG_REPEATER_CONFIG, NET_CONN_NAK_BAD_CONN_STATE, req->address, req->addrLen);
