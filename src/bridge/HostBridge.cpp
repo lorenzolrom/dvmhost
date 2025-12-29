@@ -1410,8 +1410,11 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
     using namespace dmr;
     using namespace dmr::defines;
 
-    if (m_txMode != TX_MODE_DMR)
+    if (m_txMode != TX_MODE_DMR) {
+        m_network->resetDMR(1U);
+        m_network->resetDMR(2U);
         return;
+    }
 
     // process network message header
     uint8_t seqNo = buffer[4U];
@@ -1474,10 +1477,14 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
             return;
 
         // ensure destination ID matches and slot matches
-        if (dstId != m_dstId)
+        if (dstId != m_dstId) {
+            m_network->resetDMR(slotNo);
             return;
-        if (slotNo != m_slot)
+        }
+        if (slotNo != m_slot) {
+            m_network->resetDMR(slotNo);
             return;
+        }
 
         // is this a new call stream?
         if (m_network->getDMRStreamId(slotNo) != m_rxStreamId) {
@@ -1877,8 +1884,10 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
     using namespace p25::dfsi::defines;
     using namespace p25::data;
 
-    if (m_txMode != TX_MODE_P25)
+    if (m_txMode != TX_MODE_P25) {
+        m_network->resetP25();
         return;
+    }
 
     bool grantDemand = (buffer[14U] & network::NET_CTRL_GRANT_DEMAND) == network::NET_CTRL_GRANT_DEMAND;
     bool grantDenial = (buffer[14U] & network::NET_CTRL_GRANT_DENIAL) == network::NET_CTRL_GRANT_DENIAL;
@@ -1952,8 +1961,10 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
         }
 
         // ensure destination ID matches
-        if (dstId != m_dstId)
+        if (dstId != m_dstId) {
+            m_network->resetP25();
             return;
+        }
 
         // is this a new call stream?
         uint16_t callKID = 0U;

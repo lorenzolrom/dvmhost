@@ -608,8 +608,11 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
     using namespace dmr;
     using namespace dmr::defines;
 
-    if (m_digiMode != TX_MODE_DMR)
+    if (m_digiMode != TX_MODE_DMR) {
+        m_network->resetDMR(1U);
+        m_network->resetDMR(2U);
         return;
+    }
 
     // process network message header
     uint32_t seqNo = buffer[4U];
@@ -673,10 +676,14 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
             return;
 
         // ensure destination ID matches and slot matches
-        if (dstId != m_srcTGId && dstId != m_dstTGId)
+        if (dstId != m_srcTGId && dstId != m_dstTGId) {
+            m_network->resetDMR(slotNo);
             return;
-        if (slotNo != m_srcSlot && slotNo != m_dstSlot)
+        }
+        if (slotNo != m_srcSlot && slotNo != m_dstSlot) {
+            m_network->resetDMR(slotNo);
             return;
+        }
 
         uint32_t actualDstId = m_dstTGId;
         if (m_twoWayPatch) {
@@ -897,8 +904,10 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
     DUID::E duid = (DUID::E)buffer[22U];
     uint8_t MFId = buffer[15U];
 
-    if (duid == DUID::HDU || duid == DUID::TSDU || duid == DUID::PDU)
+    if (duid == DUID::HDU || duid == DUID::TSDU || duid == DUID::PDU) {
+        m_network->resetP25();
         return;
+    }
 
     // process raw P25 data bytes
     UInt8Array data;
@@ -957,8 +966,10 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
             return;
 
         // ensure destination ID matches
-        if (dstId != m_srcTGId && dstId != m_dstTGId)
+        if (dstId != m_srcTGId && dstId != m_dstTGId) {
+            m_network->resetP25();
             return;
+        }
 
         bool reverseEncrypt = false;
         bool tekEnable = m_tekSrcEnable;
