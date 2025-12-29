@@ -628,22 +628,27 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
 
     if (slotNo > 3U) {
         LogError(LOG_DMR, "DMR, invalid slot, slotNo = %u", slotNo);
+        m_network->resetDMR(1U);
+        m_network->resetDMR(2U);
         return;
     }
 
     // DMO mode slot disabling
     if (slotNo == 1U && !m_network->getDuplex()) {
         LogError(LOG_DMR, "DMR/DMO, invalid slot, slotNo = %u", slotNo);
+        m_network->resetDMR(1U);
         return;
     }
 
     // Individual slot disabling
     if (slotNo == 1U && !m_network->getDMRSlot1()) {
         LogError(LOG_DMR, "DMR, invalid slot, slot 1 disabled, slotNo = %u", slotNo);
+        m_network->resetDMR(1U);
         return;
     }
     if (slotNo == 2U && !m_network->getDMRSlot2()) {
         LogError(LOG_DMR, "DMR, invalid slot, slot 2 disabled, slotNo = %u", slotNo);
+        m_network->resetDMR(2U);
         return;
     }
 
@@ -672,8 +677,10 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
     }
 
     if (flco == FLCO::GROUP) {
-        if (srcId == 0)
+        if (srcId == 0) {
+            m_network->resetDMR(slotNo);
             return;
+        }
 
         // ensure destination ID matches and slot matches
         if (dstId != m_srcTGId && dstId != m_dstTGId) {
@@ -690,8 +697,10 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
             if (dstId == m_dstTGId)
                 actualDstId = m_srcTGId;
         } else {
-            if (dstId == m_dstTGId)
+            if (dstId == m_dstTGId) {
+                m_network->resetDMR(slotNo);
                 return;
+            }
         }
 
         // is this a new call stream?
@@ -893,8 +902,10 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
     using namespace p25::defines;
     using namespace p25::dfsi::defines;
 
-    if (m_digiMode != TX_MODE_P25)
+    if (m_digiMode != TX_MODE_P25) {
+        m_network->resetP25();
         return;
+    }
 
     bool grantDemand = (buffer[14U] & network::NET_CTRL_GRANT_DEMAND) == network::NET_CTRL_GRANT_DEMAND;
     bool grantDenial = (buffer[14U] & network::NET_CTRL_GRANT_DENIAL) == network::NET_CTRL_GRANT_DENIAL;
@@ -962,8 +973,10 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
     lsd.setLSD2(lsd2);
 
     if (control.getLCO() == LCO::GROUP) {
-        if (srcId == 0)
+        if (srcId == 0) {
+            m_network->resetP25();
             return;
+        }
 
         // ensure destination ID matches
         if (dstId != m_srcTGId && dstId != m_dstTGId) {
@@ -988,8 +1001,10 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                     reverseEncrypt = true;
                 }
             } else {
-                if (dstId == m_dstTGId)
+                if (dstId == m_dstTGId) {
+                    m_network->resetP25();
                     return;
+                }
             }
         }
 
@@ -1010,6 +1025,7 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                         m_callInProgress = false;
 
                         LogWarning(LOG_HOST, "P25, call ignored, using different encryption parameters, callAlgoId = $%02X, callKID = $%04X, tekAlgoId = $%02X, tekKID = $%04X", m_callAlgoId, callKID, tekAlgoId, tekKeyId);
+                        m_network->resetP25();
                         return;
                     } else {
                         uint8_t mi[MI_LENGTH_BYTES];
@@ -1051,8 +1067,10 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
 
         if ((duid == DUID::TDU) || (duid == DUID::TDULC)) {
             // ignore TDU's that are grant demands
-            if (grantDemand)
+            if (grantDemand) {
+                m_network->resetP25();
                 return;
+            }
 
             p25::lc::LC lc = p25::lc::LC();
             lc.setLCO(P25DEF::LCO::GROUP);

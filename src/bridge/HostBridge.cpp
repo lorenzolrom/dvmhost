@@ -1428,22 +1428,27 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
 
     if (slotNo > 3U) {
         LogError(LOG_DMR, "DMR, invalid slot, slotNo = %u", slotNo);
+        m_network->resetDMR(1U);
+        m_network->resetDMR(2U);
         return;
     }
 
     // DMO mode slot disabling
     if (slotNo == 1U && !m_network->getDuplex()) {
         LogError(LOG_DMR, "DMR/DMO, invalid slot, slotNo = %u", slotNo);
+        m_network->resetDMR(1U);
         return;
     }
 
     // Individual slot disabling
     if (slotNo == 1U && !m_network->getDMRSlot1()) {
         LogError(LOG_DMR, "DMR, invalid slot, slot 1 disabled, slotNo = %u", slotNo);
+        m_network->resetDMR(1U);
         return;
     }
     if (slotNo == 2U && !m_network->getDMRSlot2()) {
         LogError(LOG_DMR, "DMR, invalid slot, slot 2 disabled, slotNo = %u", slotNo);
+        m_network->resetDMR(2U);
         return;
     }
 
@@ -1473,8 +1478,10 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
     }
 
     if (flco == FLCO::GROUP) {
-        if (srcId == 0)
+        if (srcId == 0) {
+            m_network->resetDMR(slotNo);
             return;
+        }
 
         // ensure destination ID matches and slot matches
         if (dstId != m_dstId) {
@@ -1545,14 +1552,17 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
 
             m_rtpSeqNo = 0U;
             m_rtpTimestamp = INVALID_TS;
+            m_network->resetDMR(slotNo);
             return;
         }
 
         if (m_ignoreCall && m_callAlgoId == 0U)
             m_ignoreCall = false;
 
-        if (m_ignoreCall)
+        if (m_ignoreCall) {
+            m_network->resetDMR(slotNo);
             return;
+        }
 
         if (m_callAlgoId != 0U) {
             if (m_callInProgress) {
@@ -1569,6 +1579,7 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
             }
 
             m_ignoreCall = true;
+            m_network->resetDMR(slotNo);
             return;
         }
 
@@ -1951,13 +1962,17 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
     lsd.setLSD2(lsd2);
 
     if (control.getLCO() == LCO::GROUP) {
-        if (srcId == 0)
+        if (srcId == 0) {
+            m_network->resetP25();
             return;
+        }
 
         if ((duid == DUID::TDU) || (duid == DUID::TDULC)) {
             // ignore TDU's that are grant demands
-            if (grantDemand)
+            if (grantDemand) {
+                m_network->resetP25();
                 return;
+            }
         }
 
         // ensure destination ID matches
@@ -1985,6 +2000,7 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
                         m_ignoreCall = true;
 
                         LogWarning(LOG_HOST, "P25, call ignored, using different encryption parameters, callAlgoId = $%02X, callKID = $%04X, tekAlgoId = $%02X, tekKID = $%04X", m_callAlgoId, callKID, m_tekAlgoId, m_tekKeyId);
+                        m_network->resetP25();
                         return;
                     } else {
                         uint8_t mi[MI_LENGTH_BYTES];
@@ -2030,6 +2046,7 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
 
             m_rtpSeqNo = 0U;
             m_rtpTimestamp = INVALID_TS;
+            m_network->resetP25();
             return;
         }
 
@@ -2050,8 +2067,10 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
                 m_ignoreCall = true;
         }
 
-        if (m_ignoreCall)
+        if (m_ignoreCall) {
+            m_network->resetP25();
             return;
+        }
 
         if (m_callAlgoId != ALGO_UNENCRYPT && m_callAlgoId != m_tekAlgoId && callKID != m_tekKeyId) {
             if (m_callInProgress) {
@@ -2068,6 +2087,7 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
             }
 
             m_ignoreCall = true;
+            m_network->resetP25();
             return;
         }
 
