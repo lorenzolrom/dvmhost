@@ -1083,10 +1083,14 @@ bool Voice::process(uint8_t* data, uint32_t len)
             if (m_p25->m_immediateCallTerm)
                 m_p25->writeRF_TDU(false);
             else {
-                m_p25->m_rfCallTermDstId = m_rfLC.getDstId();
-                m_p25->m_rfCallTermSrcId = m_rfLC.getSrcId();
-                m_p25->m_rfVoiceCallTermTimeout.start();
-                m_p25->writeRF_TDU(true);
+                if (m_rfLC.getDstId() != 0U && m_rfLC.getSrcId() != 0U) {
+                    m_p25->m_rfCallTermDstId = m_rfLC.getDstId();
+                    m_p25->m_rfCallTermSrcId = m_rfLC.getSrcId();
+                    m_p25->m_rfVoiceCallTermTimeout.start();
+                    m_p25->writeRF_TDU(true);
+                } else {
+                    m_p25->writeRF_TDU(false);
+                }
             }
 
             m_lastDUID = duid;
