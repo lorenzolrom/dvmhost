@@ -472,7 +472,6 @@ void Network::clock(uint32_t ms)
                                 }
                             }
 
-
                             if (m_debug)
                                 Utils::dump(1U, "Network::clock(), Network Rx, P25", buffer.get(), length);
                             if (length > 512)

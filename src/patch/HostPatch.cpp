@@ -729,6 +729,7 @@ void HostPatch::processDMRNetwork(uint8_t* buffer, uint32_t length)
             m_callInProgress = false;
             m_rxStartTime = 0U;
             m_rxStreamId = 0U;
+            m_network->resetDMR(slotNo);
             return;
         }
 
@@ -1078,6 +1079,8 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
             m_p25SrcCrypto->resetKeystream();
             m_p25DstCrypto->clearMI();
             m_p25DstCrypto->resetKeystream();
+
+            m_network->resetP25();
             return;
         }
 
