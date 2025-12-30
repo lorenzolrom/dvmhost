@@ -2232,14 +2232,14 @@ void HostBridge::decodeP25AudioFrame(uint8_t* ldu, uint32_t srcId, uint32_t dstI
     using namespace p25;
     using namespace p25::defines;
 
-        {
-            uint8_t mi[MI_LENGTH_BYTES];
-            ::memset(mi, 0x00U, MI_LENGTH_BYTES);
-            m_p25Crypto->getMI(mi);
+    if (m_debug) {
+        uint8_t mi[MI_LENGTH_BYTES];
+        ::memset(mi, 0x00U, MI_LENGTH_BYTES);
+        m_p25Crypto->getMI(mi);
 
-            LogInfoEx(LOG_NET, "Crypto, (D) Enc Sync, MI = %02X %02X %02X %02X %02X %02X %02X %02X %02X", 
-                mi[0U], mi[1U], mi[2U], mi[3U], mi[4U], mi[5U], mi[6U], mi[7U], mi[8U]);
-        }
+        LogInfoEx(LOG_NET, "Crypto, Enc Sync, MI = %02X %02X %02X %02X %02X %02X %02X %02X %02X", 
+            mi[0U], mi[1U], mi[2U], mi[3U], mi[4U], mi[5U], mi[6U], mi[7U], mi[8U]);
+    }
 
     // decode 9 IMBE codewords into PCM samples
     for (int n = 0; n < 9; n++) {
@@ -2274,7 +2274,7 @@ void HostBridge::decodeP25AudioFrame(uint8_t* ldu, uint32_t srcId, uint32_t dstI
             break;
         }
 
-         Utils::dump(1U, "HostBridge::decodeP25AudioFrame(), IMBE", imbe, RAW_IMBE_LENGTH_BYTES);
+        // Utils::dump(1U, "HostBridge::decodeP25AudioFrame(), IMBE", imbe, RAW_IMBE_LENGTH_BYTES);
 
         if (m_tekAlgoId != P25DEF::ALGO_UNENCRYPT && m_tekKeyId > 0U && m_p25Crypto->getTEKLength() > 0U) {
             switch (m_tekAlgoId) {
@@ -2293,7 +2293,7 @@ void HostBridge::decodeP25AudioFrame(uint8_t* ldu, uint32_t srcId, uint32_t dstI
             }
         }
 
-         Utils::dump(1U, "HostBridge::decodeP25AudioFrame(), Decrypted IMBE", imbe, RAW_IMBE_LENGTH_BYTES);
+        // Utils::dump(1U, "HostBridge::decodeP25AudioFrame(), Decrypted IMBE", imbe, RAW_IMBE_LENGTH_BYTES);
 
         short samples[AUDIO_SAMPLES_LENGTH];
         int errs = 0;
