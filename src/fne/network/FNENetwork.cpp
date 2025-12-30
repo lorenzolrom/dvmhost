@@ -912,8 +912,8 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
             uint64_t dt = req->pktRxTime + PACKET_LATE_TIME;
             if (dt < now) {
                 std::string peerIdentity = network->resolvePeerIdentity(peerId);
-                LogWarning(LOG_MASTER, "PEER %u (%s) packet processing latency >200ms, dt = %u, now = %u", peerId, peerIdentity.c_str(),
-                    dt, now);
+                LogWarning(LOG_MASTER, "PEER %u (%s) packet processing latency >200ms, ssrc = %u, dt = %u, now = %u", peerId, peerIdentity.c_str(),
+                    ssrc, dt, now);
             }
 
             // update current peer packet sequence and stream ID
