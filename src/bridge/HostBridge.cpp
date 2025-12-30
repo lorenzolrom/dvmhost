@@ -3463,10 +3463,16 @@ void* HostBridge::threadUDPAudioProcess(void* arg)
             uint32_t ms = stopWatch.elapsed();
             stopWatch.start();
 
-            frameTimeout.clock(ms);
-            if (frameTimeout.isRunning() && frameTimeout.hasExpired()) {
-                frameTimeout.stop();
-                bridge->padSilenceAudio(bridge->m_udpSrcId, bridge->m_udpDstId);
+            // don't consider frame timeouts for RTP or USRP UDP streams (these will be properly timed anyway, we hope)
+            if (!bridge->m_udpRTPFrames && !bridge->m_udpUsrp) {
+                frameTimeout.clock(ms);
+                if (frameTimeout.isRunning() && frameTimeout.hasExpired()) {
+                    frameTimeout.stop();
+                    bridge->padSilenceAudio(bridge->m_udpSrcId, bridge->m_udpDstId);
+                }
+            } else {
+                if (frameTimeout.isRunning())
+                    frameTimeout.stop();
             }
 
             if (bridge->m_udpPackets.empty())
