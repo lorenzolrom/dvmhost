@@ -990,14 +990,17 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
     lsd.setLSD2(lsd2);
 
     if ((duid == DUID::TDU) || (duid == DUID::TDULC)) {
-        // ignore TDU's that are grant demands
-        if (grantDemand) {
-            m_network->resetP25();
+        // ensure destination ID matches
+        if (dstId != m_srcTGId && dstId != m_dstTGId) {
+            // ignore TDU's that are grant demands
+            if (grantDemand) {
+                m_network->resetP25();
+                return;
+            }
+
+            resetP25Call(srcId);
             return;
         }
-
-        resetP25Call(srcId);
-        return;
     }
 
     if (control.getLCO() == LCO::GROUP) {
