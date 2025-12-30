@@ -383,7 +383,8 @@ void Network::clock(uint32_t ms)
                                 // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
                                 // to receiving a specific stream; a zero stream ID means the network is promiscuously
                                 // receiving streams sent to this peer
-                                if (m_rxDMRStreamId[slotNo] != 0U && m_rxDMRStreamId[slotNo] != streamId) {
+                                if (m_rxDMRStreamId[slotNo] != 0U && m_rxDMRStreamId[slotNo] != streamId &&
+                                    rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                     break;
                                 }
                             }
@@ -467,7 +468,8 @@ void Network::clock(uint32_t ms)
                                 // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
                                 // to receiving a specific stream; a zero stream ID means the network is promiscuously
                                 // receiving streams sent to this peer
-                                if (m_rxP25StreamId != 0U && m_rxP25StreamId != streamId) {
+                                if (m_rxP25StreamId != 0U && m_rxP25StreamId != streamId &&
+                                    rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                     break;
                                 }
                             }
@@ -560,7 +562,8 @@ void Network::clock(uint32_t ms)
                                 // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
                                 // to receiving a specific stream; a zero stream ID means the network is promiscuously
                                 // receiving streams sent to this peer
-                                if (m_rxNXDNStreamId != 0U && m_rxNXDNStreamId != streamId) {
+                                if (m_rxNXDNStreamId != 0U && m_rxNXDNStreamId != streamId &&
+                                    rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                     break;
                                 }
                             }
@@ -644,7 +647,8 @@ void Network::clock(uint32_t ms)
                                 // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
                                 // to receiving a specific stream; a zero stream ID means the network is promiscuously
                                 // receiving streams sent to this peer
-                                if (m_rxAnalogStreamId != 0U && m_rxAnalogStreamId != streamId) {
+                                if (m_rxAnalogStreamId != 0U && m_rxAnalogStreamId != streamId &&
+                                    rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                     break;
                                 }
                             }
