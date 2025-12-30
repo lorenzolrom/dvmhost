@@ -87,6 +87,9 @@ network:
       # Traffic Encryption Key ID (Hex)
       tekKeyId: 1
 
+    # Amount of time (ms) from loss of active call before ending call.
+    dropTimeMs: 1000
+
     # Flag indicating whether or not the patch is two-way.
     #  NOTE: If false (one-way patch from source to destination), and patching clear to
     #    encrypted traffic, only the destination TEK will be used for encryption. The clear
