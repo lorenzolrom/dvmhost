@@ -969,7 +969,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                         if (network->m_dmrEnabled) {
                                             if (network->m_tagDMR != nullptr) {
                                                 // check if jitter buffer is enabled for this peer
-                                                if (connection->jitterBufferEnabled()) {
+                                                if (connection->jitterBufferEnabled() && req->rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                                     AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
                                                     std::vector<BufferedFrame*> readyFrames;
 
@@ -1010,7 +1010,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                         if (network->m_p25Enabled) {
                                             if (network->m_tagP25 != nullptr) {
                                                 // check if jitter buffer is enabled for this peer
-                                                if (connection->jitterBufferEnabled()) {
+                                                if (connection->jitterBufferEnabled() && req->rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                                     AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
                                                     std::vector<BufferedFrame*> readyFrames;
 
@@ -1051,7 +1051,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                         if (network->m_nxdnEnabled) {
                                             if (network->m_tagNXDN != nullptr) {
                                                 // check if jitter buffer is enabled for this peer
-                                                if (connection->jitterBufferEnabled()) {
+                                                if (connection->jitterBufferEnabled() && req->rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                                     AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
                                                     std::vector<BufferedFrame*> readyFrames;
 
@@ -1092,7 +1092,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                         if (network->m_analogEnabled) {
                                             if (network->m_tagAnalog != nullptr) {
                                                 // check if jitter buffer is enabled for this peer
-                                                if (connection->jitterBufferEnabled()) {
+                                                if (connection->jitterBufferEnabled() && req->rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
                                                     AdaptiveJitterBuffer* buffer = connection->getOrCreateJitterBuffer(streamId);
                                                     std::vector<BufferedFrame*> readyFrames;
 
