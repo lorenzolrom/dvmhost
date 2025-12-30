@@ -1170,6 +1170,11 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
 
                 if (tekEnable && tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
                     cryptP25AudioFrame(netLDU, reverseEncrypt, 1U);
+                } else {
+                    if (!m_twoWayPatch && m_tekDstEnable && m_tekDstAlgoId != ALGO_UNENCRYPT && m_tekDstKeyId != 0U) {
+                        // for one-way patches, if the destination TEK is enabled, use it
+                        cryptP25AudioFrame(netLDU, false, 1U);
+                    }
                 }
 
                 control = lc::LC(*dfsiLC.control());
@@ -1208,6 +1213,18 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                         m_p25DstCrypto->getMI(mi);
 
                     control.setMI(mi);
+                } else {
+                    if (!m_twoWayPatch && m_tekDstEnable && m_tekDstAlgoId != ALGO_UNENCRYPT && m_tekDstKeyId != 0U) {
+                        // for one-way patches, if the destination TEK is enabled, use it
+                        control.setAlgId(m_tekDstAlgoId);
+                        control.setKId(m_tekDstKeyId);
+
+                        uint8_t mi[MI_LENGTH_BYTES];
+                        ::memset(mi, 0x00U, MI_LENGTH_BYTES);
+                        m_p25DstCrypto->getMI(mi);
+
+                        control.setMI(mi);
+                    }
                 }
 
                 if (m_mmdvmP25Reflector) {
@@ -1270,6 +1287,11 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
 
                 if (tekEnable && tekAlgoId != ALGO_UNENCRYPT && tekKeyId != 0U) {
                     cryptP25AudioFrame(netLDU, reverseEncrypt, 2U);
+                } else {
+                    if (!m_twoWayPatch && m_tekDstEnable && m_tekDstAlgoId != ALGO_UNENCRYPT && m_tekDstKeyId != 0U) {
+                        // for one-way patches, if the destination TEK is enabled, use it
+                        cryptP25AudioFrame(netLDU, false, 2U);
+                    }
                 }
 
                 control = lc::LC(*dfsiLC.control());
@@ -1290,6 +1312,18 @@ void HostPatch::processP25Network(uint8_t* buffer, uint32_t length)
                         m_p25DstCrypto->getMI(mi);
 
                     control.setMI(mi);
+                } else {
+                    if (!m_twoWayPatch && m_tekDstEnable && m_tekDstAlgoId != ALGO_UNENCRYPT && m_tekDstKeyId != 0U) {
+                        // for one-way patches, if the destination TEK is enabled, use it
+                        control.setAlgId(m_tekDstAlgoId);
+                        control.setKId(m_tekDstKeyId);
+
+                        uint8_t mi[MI_LENGTH_BYTES];
+                        ::memset(mi, 0x00U, MI_LENGTH_BYTES);
+                        m_p25DstCrypto->getMI(mi);
+
+                        control.setMI(mi);
+                    }
                 }
 
                 if (m_mmdvmP25Reflector) {

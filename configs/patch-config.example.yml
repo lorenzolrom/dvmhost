@@ -88,6 +88,9 @@ network:
       tekKeyId: 1
 
     # Flag indicating whether or not the patch is two-way.
+    #  NOTE: If false (one-way patch from source to destination), and patching clear to
+    #    encrypted traffic, only the destination TEK will be used for encryption. The clear
+    #    traffic must appear on the source side only.
     twoWay: false
 
     # Hostname/IP address of MMDVM gateway to connect to.
