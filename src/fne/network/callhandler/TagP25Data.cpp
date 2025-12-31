@@ -218,8 +218,14 @@ bool TagP25Data::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
         if (duid != DUID::TSDU && duid != DUID::PDU) {
             // is this the end of the call stream?
             if ((duid == DUID::TDU) || (duid == DUID::TDULC)) {
+                // reject TDU with no source or destination
                 if (srcId == 0U && dstId == 0U) {
                     LogWarning(LOG_NET, "P25, invalid TDU, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, streamId, fromUpstream);
+                    return false;
+                }
+
+                // reject TDU's with no destination
+                if (dstId == 0U) {
                     return false;
                 }
 

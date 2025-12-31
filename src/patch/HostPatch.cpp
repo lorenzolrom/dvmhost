@@ -1635,6 +1635,28 @@ void HostPatch::resetP25Call(uint32_t srcId)
     using namespace p25::defines;
     using namespace p25::dfsi::defines;
 
+    if (m_callDstId == 0U) {
+        LogWarning(LOG_HOST, "P25, resetP25Call(), callDstId is zero, cannot send TDU");
+
+        m_rxStartTime = 0U;
+        m_rxStreamId = 0U;
+
+        m_callInProgress = false;
+        m_callAlgoId = ALGO_UNENCRYPT;
+        m_rxStartTime = 0U;
+        m_rxStreamId = 0U;
+
+        m_p25SrcCrypto->clearMI();
+        m_p25SrcCrypto->resetKeystream();
+        m_p25DstCrypto->clearMI();
+        m_p25DstCrypto->resetKeystream();
+
+        m_callDropTime.stop();
+
+        m_network->resetP25();
+        return;
+    }
+
     p25::lc::LC lc = p25::lc::LC();
     lc.setLCO(P25DEF::LCO::GROUP);
     lc.setDstId(m_callDstId);
@@ -1669,6 +1691,8 @@ void HostPatch::resetP25Call(uint32_t srcId)
     m_callAlgoId = ALGO_UNENCRYPT;
     m_rxStartTime = 0U;
     m_rxStreamId = 0U;
+
+    m_callDstId = 0U;
 
     m_p25SrcCrypto->clearMI();
     m_p25SrcCrypto->resetKeystream();
