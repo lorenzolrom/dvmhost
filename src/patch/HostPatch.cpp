@@ -371,6 +371,7 @@ bool HostPatch::createNetwork()
     uint32_t id = networkConf["id"].as<uint32_t>(1000U);
     std::string password = networkConf["password"].as<std::string>();
     bool allowDiagnosticTransfer = networkConf["allowDiagnosticTransfer"].as<bool>(false);
+    bool packetDump = networkConf["packetDump"].as<bool>(false);
     bool debug = networkConf["debug"].as<bool>(false);
 
     m_srcTGId = (uint32_t)networkConf["sourceTGID"].as<uint32_t>(1U);
@@ -550,6 +551,10 @@ bool HostPatch::createNetwork()
 
     LogInfo("    Two-Way Patch: %s", m_twoWayPatch ? "yes" : "no");
 
+    if (packetDump) {
+        LogInfo("    Packet Dump: yes");
+    }
+
     if (debug) {
         LogInfo("    Debug: yes");
     }
@@ -567,6 +572,7 @@ bool HostPatch::createNetwork()
     // initialize networking
     m_network = new PeerNetwork(address, port, local, id, password, true, debug, dmr, p25, false, true, true, true, allowDiagnosticTransfer, true, false);
 
+    m_network->setPacketDump(packetDump);
     m_network->setMetadata(m_identity, 0U, 0U, 0.0F, 0.0F, 0, 0, 0, 0.0F, 0.0F, 0, "");
     m_network->setConventional(true);
     m_network->setKeyResponseCallback([=](p25::kmm::KeyItem ki, uint8_t algId, uint8_t keyLength) {

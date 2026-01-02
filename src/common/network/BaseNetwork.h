@@ -395,6 +395,12 @@ namespace network
         FrameQueue* getFrameQueue() const { return m_frameQueue; }
 
         /**
+         * @brief Helper to enable or disable packet dump logging.
+         * @param enable Flag indicating whether packet dump logging is enabled.
+         */
+        void setPacketDump(bool enable) { m_packetDump = enable; }
+
+        /**
          * @brief Writes a grant request to the network.
          * \code{.unparsed}
          *  Below is the representation of the data layout for the group affiliation
@@ -926,6 +932,7 @@ namespace network
         bool m_allowActivityTransfer;
         bool m_allowDiagnosticTransfer;
 
+        bool m_packetDump;
         bool m_debug;
 
         udp::Socket* m_socket;

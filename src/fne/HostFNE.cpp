@@ -550,6 +550,7 @@ bool HostFNE::createMasterNetwork()
     uint32_t id = masterConf["peerId"].as<uint32_t>(1001U);
     std::string password = masterConf["password"].as<std::string>();
     bool verbose = masterConf["verbose"].as<bool>(false);
+    bool packetDump = masterConf["packetDump"].as<bool>(false);
     bool debug = masterConf["debug"].as<bool>(false);
     bool kmfDebug = masterConf["kmfDebug"].as<bool>(false);
     uint16_t workerCnt = (uint16_t)masterConf["workers"].as<uint32_t>(16U);
@@ -635,6 +636,10 @@ bool HostFNE::createMasterNetwork()
         LogInfo("    Verbose: yes");
     }
 
+    if (packetDump) {
+        LogInfo("    Packet Dump: yes");
+    }
+
     if (debug) {
         LogInfo("    Debug: yes");
     }
@@ -649,6 +654,7 @@ bool HostFNE::createMasterNetwork()
         parrotDelay, parrotGrantDemand, m_allowActivityTransfer, m_allowDiagnosticTransfer,
         m_pingTime, m_updateLookupTime, workerCnt);
     m_network->setOptions(masterConf, true);
+    m_network->setPacketDump(packetDump);
 
     m_network->setLookups(m_ridLookup, m_tidLookup, m_peerListLookup, m_cryptoLookup, m_adjSiteMapLookup);
 
@@ -671,6 +677,7 @@ bool HostFNE::createMasterNetwork()
     // setup alternate port for diagnostics/activity logging
     if (m_useAlternatePortForDiagnostics) {
         m_diagNetwork = new DiagNetwork(this, m_network, address, port + 1U, workerCnt);
+        m_diagNetwork->setPacketDump(packetDump);
 
         bool ret = m_diagNetwork->open();
         if (!ret) {
@@ -820,6 +827,7 @@ bool HostFNE::createPeerNetworks()
             uint16_t masterPort = (uint16_t)peerConf["masterPort"].as<uint32_t>(TRAFFIC_DEFAULT_PORT);
             std::string password = peerConf["password"].as<std::string>();
             uint32_t id = peerConf["peerId"].as<uint32_t>(1001U);
+            bool packetDump = peerConf["packetDump"].as<bool>(false);
             bool debug = peerConf["debug"].as<bool>(false);
 
             bool encrypted = peerConf["encrypted"].as<bool>(false);
@@ -874,6 +882,7 @@ bool HostFNE::createPeerNetworks()
             // initialize networking
             network::PeerNetwork* network = new PeerNetwork(masterAddress, masterPort, 0U, id, password, true, debug, m_dmrEnabled, m_p25Enabled, m_nxdnEnabled, m_analogEnabled, true, true, 
                 m_allowActivityTransfer, m_allowDiagnosticTransfer, false, false);
+            network->setPacketDump(packetDump);
             network->setMetadata(identity, 0U, 0U, 0.0F, 0.0F, 0, 0, 0, latitude, longitude, 0, location);
             network->setLookups(m_ridLookup, m_tidLookup);
             network->setMasterPeerId(masterPeerId);

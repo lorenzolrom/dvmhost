@@ -831,6 +831,7 @@ bool Host::createNetwork()
     bool allowStatusTransfer = networkConf["allowStatusTransfer"].as<bool>(true);
     bool updateLookup = networkConf["updateLookups"].as<bool>(false);
     bool saveLookup = networkConf["saveLookups"].as<bool>(false);
+    bool packetDump = networkConf["packetDump"].as<bool>(false);
     bool debug = networkConf["debug"].as<bool>(false);
 
     m_allowStatusTransfer = allowStatusTransfer;
@@ -920,6 +921,10 @@ bool Host::createNetwork()
 
         LogInfo("    Encrypted: %s", encrypted ? "yes" : "no");
 
+        if (packetDump) {
+            LogInfo("    Packet Dump: yes");
+        }
+
         if (debug) {
             LogInfo("    Debug: yes");
         }
@@ -943,6 +948,7 @@ bool Host::createNetwork()
         m_network = new Network(address, port, local, id, password, m_duplex, debug, m_dmrEnabled, m_p25Enabled, m_nxdnEnabled, false, slot1, slot2, 
             allowActivityTransfer, allowDiagnosticTransfer, updateLookup, saveLookup);
 
+        m_network->setPacketDump(packetDump);
         m_network->setLookups(m_ridLookup, m_tidLookup);
         m_network->setMetadata(m_identity, m_rxFrequency, m_txFrequency, entry.txOffsetMhz(), entry.chBandwidthKhz(), m_channelId, m_channelNo,
             m_power, m_latitude, m_longitude, m_height, m_location);

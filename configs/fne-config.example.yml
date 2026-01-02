@@ -47,6 +47,8 @@ master:
     password: RPT1234
     # Flag indicating whether or not verbose logging is enabled.
     verbose: true
+    # Flag indicating whether or not packet dumping is enabled.
+    packetDump: false
     # Flag indicating whether or not verbose debug logging is enabled.
     debug: false
 
@@ -262,6 +264,8 @@ peers:
       # Textual location for this host.
       location: Anywhere, USA
 
+      # Flag indicating whether or not packet dumping is enabled.
+      packetDump: false
       # Flag indicating whether or not verbose debug logging is enabled.
       debug: false
 

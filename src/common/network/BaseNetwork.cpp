@@ -48,6 +48,7 @@ BaseNetwork::BaseNetwork(uint32_t peerId, bool duplex, bool debug, bool slot1, b
     m_useAlternatePortForDiagnostics(false),
     m_allowActivityTransfer(allowActivityTransfer),
     m_allowDiagnosticTransfer(allowDiagnosticTransfer),
+    m_packetDump(false),
     m_debug(debug),
     m_socket(nullptr),
     m_frameQueue(nullptr),
@@ -1023,7 +1024,7 @@ UInt8Array BaseNetwork::createDMR_Message(uint32_t& length, const uint32_t strea
     // pack raw DMR message bytes
     data.getData(buffer + 20U);
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createDMR_Message(), Message", buffer, (DMR_PACKET_LENGTH + PACKET_PAD));
 
     length = (DMR_PACKET_LENGTH + PACKET_PAD);
@@ -1080,7 +1081,7 @@ void BaseNetwork::createP25_MessageHdr(uint8_t* buffer, p25::defines::DUID::E du
         ::memset(mi, 0x00U, MI_LENGTH_BYTES);
         control.getMI(mi);
 
-        if (m_debug) {
+        if (m_packetDump) {
             Utils::dump(1U, "BaseNetwork::createP25_Message(), HDU MI", mi, MI_LENGTH_BYTES);
         }
 
@@ -1158,7 +1159,7 @@ UInt8Array BaseNetwork::createP25_LDU1Message(uint32_t& length, const p25::lc::L
 
     buffer[23U] = count;
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createP25_LDU1Message(), Message, LDU1", buffer, (P25_LDU1_PACKET_LENGTH + PACKET_PAD));
 
     length = (P25_LDU1_PACKET_LENGTH + PACKET_PAD);
@@ -1233,7 +1234,7 @@ UInt8Array BaseNetwork::createP25_LDU2Message(uint32_t& length, const p25::lc::L
 
     buffer[23U] = count;
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createP25_LDU2Message(), Message, LDU2", buffer, (P25_LDU2_PACKET_LENGTH + PACKET_PAD));
 
     length = (P25_LDU2_PACKET_LENGTH + PACKET_PAD);
@@ -1254,7 +1255,7 @@ UInt8Array BaseNetwork::createP25_TDUMessage(uint32_t& length, const p25::lc::LC
     buffer[14U] = controlByte;
     buffer[23U] = MSG_HDR_SIZE;
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createP25_TDUMessage(), Message, TDU", buffer, (MSG_HDR_SIZE + PACKET_PAD));
 
     length = (MSG_HDR_SIZE + PACKET_PAD);
@@ -1280,7 +1281,7 @@ UInt8Array BaseNetwork::createP25_TSDUMessage(uint32_t& length, const p25::lc::L
 
     buffer[23U] = P25_TSDU_FRAME_LENGTH_BYTES;
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createP25_TSDUMessage(), Message, TDSU", buffer, (P25_TSDU_PACKET_LENGTH + PACKET_PAD));
 
     length = (P25_TSDU_PACKET_LENGTH + PACKET_PAD);
@@ -1306,7 +1307,7 @@ UInt8Array BaseNetwork::createP25_TDULCMessage(uint32_t& length, const p25::lc::
 
     buffer[23U] = P25_TDULC_FRAME_LENGTH_BYTES;
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createP25_TDULCMessage(), Message, TDULC", buffer, (P25_TDULC_PACKET_LENGTH + PACKET_PAD));
 
     length = (P25_TDULC_PACKET_LENGTH + PACKET_PAD);
@@ -1354,7 +1355,7 @@ UInt8Array BaseNetwork::createP25_PDUMessage(uint32_t& length, const p25::data::
 
     buffer[23U] = count;
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createP25_PDUMessage(), Message, PDU", buffer, (count + PACKET_PAD));
 
     length = (count + PACKET_PAD);
@@ -1393,7 +1394,7 @@ UInt8Array BaseNetwork::createNXDN_Message(uint32_t& length, const nxdn::lc::RTC
 
     buffer[23U] = count;
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createNXDN_Message(), Message", buffer, (NXDN_PACKET_LENGTH + PACKET_PAD));
 
     length = (NXDN_PACKET_LENGTH + PACKET_PAD);
@@ -1428,7 +1429,7 @@ UInt8Array BaseNetwork::createAnalog_Message(uint32_t& length, const uint32_t st
     // pack raw audio message bytes
     data.getAudio(buffer + 20U);
 
-    if (m_debug)
+    if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createAnalog_Message(), Message", buffer, (ANALOG_PACKET_LENGTH + PACKET_PAD));
 
     length = (ANALOG_PACKET_LENGTH + PACKET_PAD);
