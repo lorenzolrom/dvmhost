@@ -350,6 +350,10 @@ void BaseNetwork::resetDMR(uint32_t slotNo)
         m_dmrStreamId[1U] = createStreamId();
     }
 
+    if (m_debug)
+        LogDebugEx(LOG_NET, "BaseNetwork::resetDMR()", "reset DMR Slot %u stream ID, streamId = %u", slotNo, 
+            (slotNo == 1U) ? m_dmrStreamId[0U] : m_dmrStreamId[1U]);
+
     m_pktSeq = 0U;
     m_rxDMRData.clear();
 }
@@ -359,6 +363,10 @@ void BaseNetwork::resetDMR(uint32_t slotNo)
 void BaseNetwork::resetP25()
 {
     m_p25StreamId = createStreamId();
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "BaseNetwork::resetP25()", "reset P25 stream ID, streamId = %u", m_p25StreamId);
+
     m_pktSeq = 0U;
     m_rxP25Data.clear();
 }
@@ -368,6 +376,10 @@ void BaseNetwork::resetP25()
 void BaseNetwork::resetNXDN()
 {
     m_nxdnStreamId = createStreamId();
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "BaseNetwork::resetNXDN()", "reset NXDN stream ID, streamId = %u", m_nxdnStreamId);
+
     m_pktSeq = 0U;
     m_rxNXDNData.clear();
 }
@@ -377,6 +389,10 @@ void BaseNetwork::resetNXDN()
 void BaseNetwork::resetAnalog()
 {
     m_analogStreamId = createStreamId();
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "BaseNetwork::resetAnalog()", "reset analog stream ID, streamId = %u", m_analogStreamId);
+
     m_pktSeq = 0U;
     m_rxAnalogData.clear();
 }

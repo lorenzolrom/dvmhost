@@ -124,6 +124,9 @@ void Network::resetDMR(uint32_t slotNo)
     else {
         m_rxDMRStreamId[1U] = 0U;
     }
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "Network::resetDMR()", "reset DMR Slot %u rx stream ID", slotNo);
 }
 
 /* Resets the P25 ring buffer. */
@@ -132,6 +135,9 @@ void Network::resetP25()
 {
     BaseNetwork::resetP25();
     m_rxP25StreamId = 0U;
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "Network::resetP25()", "reset P25 rx stream ID");
 }
 
 /* Resets the NXDN ring buffer. */
@@ -140,6 +146,9 @@ void Network::resetNXDN()
 {
     BaseNetwork::resetNXDN();
     m_rxNXDNStreamId = 0U;
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "Network::resetNXDN()", "reset NXDN rx stream ID");
 }
 
 /* Resets the analog ring buffer. */
@@ -148,6 +157,9 @@ void Network::resetAnalog()
 {
     BaseNetwork::resetAnalog();
     m_rxAnalogStreamId = 0U;
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "Network::resetAnalog()", "reset analog rx stream ID");
 }
 
 /* Sets the instances of the Radio ID and Talkgroup ID lookup tables. */
