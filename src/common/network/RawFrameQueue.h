@@ -92,6 +92,12 @@ namespace network
          */
         bool flushQueue(udp::BufferQueue* queue);
 
+        /**
+         * @brief Helper to enable or disable debug logging.
+         * @param enable Flag indicating whether debug logging is enabled.
+         */
+        void setDebug(bool enable) { m_debug = enable; }
+
     protected:
         sockaddr_storage m_addr;
         uint32_t m_addrLen;

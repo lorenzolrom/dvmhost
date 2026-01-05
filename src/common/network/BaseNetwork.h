@@ -398,7 +398,12 @@ namespace network
          * @brief Helper to enable or disable packet dump logging.
          * @param enable Flag indicating whether packet dump logging is enabled.
          */
-        void setPacketDump(bool enable) { m_packetDump = enable; }
+        void setPacketDump(bool enable) 
+        { 
+            m_packetDump = enable; 
+            if (m_frameQueue != nullptr) 
+                m_frameQueue->setDebug(enable);
+        }
 
         /**
          * @brief Writes a grant request to the network.
