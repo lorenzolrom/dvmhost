@@ -104,16 +104,14 @@ bool P25PacketData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
 {
     hrc::hrc_t pktTime = hrc::now();
 
+    uint8_t totalBlocks = data[20U] + 1U;
     uint32_t blockLength = GET_UINT24(data, 8U);
-
     uint8_t currentBlock = data[21U];
 
+    if (totalBlocks == 0U)
+        return false;
     if (blockLength == 0U)
         return false;
-
-    uint8_t buffer[P25_PDU_FEC_LENGTH_BYTES];
-    ::memset(buffer, 0x00U, P25_PDU_FEC_LENGTH_BYTES);
-    ::memcpy(buffer, data + 24U, P25_PDU_FEC_LENGTH_BYTES);
 
     auto it = std::find_if(m_status.begin(), m_status.end(), [&](StatusMapPair x) { return x.second->peerId == peerId; });
     if (it == m_status.end()) {
@@ -123,6 +121,7 @@ bool P25PacketData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
         status->callStartTime = pktTime;
         status->streamId = streamId;
         status->peerId = peerId;
+        status->totalBlocks = totalBlocks;
         m_status.unlock();
 
         m_status.insert(peerId, status);
@@ -164,116 +163,140 @@ bool P25PacketData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
     m_status.unlock();
 
     // make sure we don't get a PDU with more blocks then we support
-    if (currentBlock >= P25_MAX_PDU_BLOCKS) {
+    if (currentBlock >= P25_MAX_PDU_BLOCKS || status->totalBlocks > P25_MAX_PDU_BLOCKS) {
         LogError(LOG_P25, P25_PDU_STR ", too many PDU blocks to process, %u > %u", currentBlock, P25_MAX_PDU_BLOCKS);
         return false;
     }
 
-    // block 0 is always the PDU header block
-    if (currentBlock == 0U) {
-        bool ret = status->assembler.disassemble(buffer, P25_PDU_FEC_LENGTH_BYTES, true);
-        if (!ret) {
-            status->streamId = 0U;
-            return false;
-        }
+    LogInfoEx(LOG_NET, P25_PDU_STR ", received block %u, peerId = %u, len = %u",
+        currentBlock, peerId, blockLength);
 
-        LogInfoEx(LOG_P25, P25_PDU_STR ", peerId = %u, ack = %u, outbound = %u, fmt = $%02X, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, S = %u, n = %u, seqNo = %u, hdrOffset = %u, llId = %u",
-            peerId, status->assembler.dataHeader.getAckNeeded(), status->assembler.dataHeader.getOutbound(), status->assembler.dataHeader.getFormat(), status->assembler.dataHeader.getSAP(), status->assembler.dataHeader.getFullMessage(),
-            status->assembler.dataHeader.getBlocksToFollow(), status->assembler.dataHeader.getPadLength(), status->assembler.dataHeader.getPacketLength(), status->assembler.dataHeader.getSynchronize(), status->assembler.dataHeader.getNs(), 
-            status->assembler.dataHeader.getFSN(), status->assembler.dataHeader.getHeaderOffset(), status->assembler.dataHeader.getLLId());
+    // store the received block
+    uint8_t* blockData = new uint8_t[blockLength];
+    ::memcpy(blockData, data + 24U, blockLength);
+    status->receivedBlocks[currentBlock] = blockData;
+    status->dataBlockCnt++;
 
-        // make sure we don't get a PDU with more blocks then we support
-        if (status->assembler.dataHeader.getBlocksToFollow() >= P25_MAX_PDU_BLOCKS) {
-            LogError(LOG_P25, P25_PDU_STR ", too many PDU blocks to process, %u > %u", status->assembler.dataHeader.getBlocksToFollow(), P25_MAX_PDU_BLOCKS);
-            status->streamId = 0U;
-            return false;
-        }
-
-        status->hasRxHeader = true;
-        status->llId = status->assembler.dataHeader.getLLId();
-
-        m_readyForNextPkt[status->llId] = true;
-
-        // is this a response header?
-        if (status->assembler.dataHeader.getFormat() == PDUFormatType::RSP) {
-            dispatch(peerId);
-            status->streamId = 0U;
-            return true;
-        }
-
-        LogInfoEx((fromUpstream) ? LOG_PEER : LOG_MASTER, "P25, Data Call Start, peer = %u, llId = %u, streamId = %u, fromUpstream = %u", peerId, status->llId, streamId, fromUpstream);
-        return true;
-    }
-
-    status->callBusy = true;
-    bool ret = status->assembler.disassemble(data + 24U, blockLength);
-    if (!ret) {
-        status->callBusy = false;
-        return false;
-    }
-    else {
-        if (status->hasRxHeader && status->assembler.getComplete()) {
-            // is the source ID a blacklisted ID?
-            lookups::RadioId rid = m_network->m_ridLookup->find(status->assembler.dataHeader.getLLId());
-            if (!rid.radioDefault()) {
-                if (!rid.radioEnabled()) {
-                    // report error event to InfluxDB
-                    if (m_network->m_enableInfluxDB) {
-                        influxdb::QueryBuilder()
-                            .meas("call_error_event")
-                                .tag("peerId", std::to_string(peerId))
-                                .tag("streamId", std::to_string(streamId))
-                                .tag("srcId", std::to_string(status->assembler.dataHeader.getLLId()))
-                                .tag("dstId", std::to_string(status->assembler.dataHeader.getLLId()))
-                                    .field("message", INFLUXDB_ERRSTR_DISABLED_SRC_RID)
-                                .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
-                            .requestAsync(m_network->m_influxServer);
+    totalBlocks = status->totalBlocks;
+    if (status->dataBlockCnt == totalBlocks) {
+        for (uint16_t i = 0U; i < totalBlocks; i++) {
+            if (status->receivedBlocks.find(i) != status->receivedBlocks.end()) {
+                // block 0 is always the PDU header block
+                if (i == 0U) {
+                    bool ret = status->assembler.disassemble(status->receivedBlocks[i], P25_PDU_FEC_LENGTH_BYTES, true);
+                    if (!ret) {
+                        status->streamId = 0U;
+                        status->clearReceivedBlocks();
+                        return false;
                     }
 
-                    m_status.erase(peerId);
-                    delete status;
-                    status = nullptr;
+                    LogInfoEx(LOG_P25, P25_PDU_STR ", peerId = %u, ack = %u, outbound = %u, fmt = $%02X, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, S = %u, n = %u, seqNo = %u, hdrOffset = %u, llId = %u",
+                        peerId, status->assembler.dataHeader.getAckNeeded(), status->assembler.dataHeader.getOutbound(), status->assembler.dataHeader.getFormat(), status->assembler.dataHeader.getSAP(), status->assembler.dataHeader.getFullMessage(),
+                        status->assembler.dataHeader.getBlocksToFollow(), status->assembler.dataHeader.getPadLength(), status->assembler.dataHeader.getPacketLength(), status->assembler.dataHeader.getSynchronize(), status->assembler.dataHeader.getNs(), 
+                        status->assembler.dataHeader.getFSN(), status->assembler.dataHeader.getHeaderOffset(), status->assembler.dataHeader.getLLId());
+
+                    // make sure we don't get a PDU with more blocks then we support
+                    if (status->assembler.dataHeader.getBlocksToFollow() >= P25_MAX_PDU_BLOCKS) {
+                        LogError(LOG_P25, P25_PDU_STR ", too many PDU blocks to process, %u > %u", status->assembler.dataHeader.getBlocksToFollow(), P25_MAX_PDU_BLOCKS);
+                        status->streamId = 0U;
+                        status->clearReceivedBlocks();
+                        return false;
+                    }
+
+                    status->hasRxHeader = true;
+                    status->llId = status->assembler.dataHeader.getLLId();
+
+                    m_readyForNextPkt[status->llId] = true;
+
+                    // is this a response header?
+                    if (status->assembler.dataHeader.getFormat() == PDUFormatType::RSP) {
+                        dispatch(peerId);
+                        status->streamId = 0U;
+                        status->clearReceivedBlocks();
+                        return true;
+                    }
+
+                    LogInfoEx((fromUpstream) ? LOG_PEER : LOG_MASTER, "P25, Data Call Start, peer = %u, llId = %u, streamId = %u, fromUpstream = %u", peerId, status->llId, streamId, fromUpstream);
+                    continue;
+                }
+
+                status->callBusy = true;
+                bool ret = status->assembler.disassemble(status->receivedBlocks[i], blockLength);
+                if (!ret) {
+                    status->callBusy = false;
+                    status->clearReceivedBlocks();
                     return false;
                 }
+                else {
+                    if (status->hasRxHeader && status->assembler.getComplete()) {
+                        // is the source ID a blacklisted ID?
+                        lookups::RadioId rid = m_network->m_ridLookup->find(status->assembler.dataHeader.getLLId());
+                        if (!rid.radioDefault()) {
+                            if (!rid.radioEnabled()) {
+                                // report error event to InfluxDB
+                                if (m_network->m_enableInfluxDB) {
+                                    influxdb::QueryBuilder()
+                                        .meas("call_error_event")
+                                            .tag("peerId", std::to_string(peerId))
+                                            .tag("streamId", std::to_string(streamId))
+                                            .tag("srcId", std::to_string(status->assembler.dataHeader.getLLId()))
+                                            .tag("dstId", std::to_string(status->assembler.dataHeader.getLLId()))
+                                                .field("message", INFLUXDB_ERRSTR_DISABLED_SRC_RID)
+                                            .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
+                                        .requestAsync(m_network->m_influxServer);
+                                }
+
+                                m_status.erase(peerId);
+                                delete status;
+                                status = nullptr;
+                                return false;
+                            }
+                        }
+
+                        status->callBusy = true;
+
+                        // process all blocks in the data stream
+                        status->pduUserDataLength = status->assembler.getUserDataLength();
+                        status->pduUserData = new uint8_t[P25_MAX_PDU_BLOCKS * P25_PDU_CONFIRMED_LENGTH_BYTES + 2U];
+                        ::memset(status->pduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_CONFIRMED_LENGTH_BYTES + 2U);
+
+                        // dispatch the PDU data
+                        if (status->assembler.getUserData(status->pduUserData) > 0U) {
+                            if (m_network->m_dumpPacketData) {
+                                Utils::dump(1U, "P25, PDU Packet", status->pduUserData, status->pduUserDataLength);
+                            }
+                            dispatch(peerId);
+                        }
+
+                        uint64_t duration = hrc::diff(pktTime, status->callStartTime);
+                        uint32_t srcId = (status->assembler.getExtendedAddress()) ? status->assembler.dataHeader.getSrcLLId() : status->assembler.dataHeader.getLLId();
+                        uint32_t dstId = status->assembler.dataHeader.getLLId();
+                        LogInfoEx((fromUpstream) ? LOG_PEER : LOG_MASTER, "P25, Data Call End, peer = %u, srcId = %u, dstId = %u, blocks = %u, duration = %u, streamId = %u, fromUpstream = %u",
+                            peerId, srcId, dstId, status->assembler.dataHeader.getBlocksToFollow(), duration / 1000, streamId, fromUpstream);
+
+                        // report call event to InfluxDB
+                        if (m_network->m_enableInfluxDB) {
+                            influxdb::QueryBuilder()
+                                .meas("call_event")
+                                    .tag("peerId", std::to_string(peerId))
+                                    .tag("mode", "P25")
+                                    .tag("streamId", std::to_string(streamId))
+                                    .tag("srcId", std::to_string(srcId))
+                                    .tag("dstId", std::to_string(dstId))
+                                        .field("duration", duration)
+                                    .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
+                                .requestAsync(m_network->m_influxServer);
+                        }
+
+                        m_status.erase(peerId);
+                        delete status;
+                        status = nullptr;
+                        break;
+                    } else {
+                        status->callBusy = false;
+                    }
+                }
             }
-
-            status->callBusy = true;
-
-            // process all blocks in the data stream
-            status->pduUserDataLength = status->assembler.getUserDataLength();
-            status->pduUserData = new uint8_t[P25_MAX_PDU_BLOCKS * P25_PDU_CONFIRMED_LENGTH_BYTES + 2U];
-            ::memset(status->pduUserData, 0x00U, P25_MAX_PDU_BLOCKS * P25_PDU_CONFIRMED_LENGTH_BYTES + 2U);
-
-            status->assembler.getUserData(status->pduUserData);
-
-            // dispatch the PDU data
-            dispatch(peerId);
-
-            uint64_t duration = hrc::diff(pktTime, status->callStartTime);
-            uint32_t srcId = (status->assembler.getExtendedAddress()) ? status->assembler.dataHeader.getSrcLLId() : status->assembler.dataHeader.getLLId();
-            uint32_t dstId = status->assembler.dataHeader.getLLId();
-            LogInfoEx((fromUpstream) ? LOG_PEER : LOG_MASTER, "P25, Data Call End, peer = %u, srcId = %u, dstId = %u, blocks = %u, duration = %u, streamId = %u, fromUpstream = %u",
-                peerId, srcId, dstId, status->assembler.dataHeader.getBlocksToFollow(), duration / 1000, streamId, fromUpstream);
-
-            // report call event to InfluxDB
-            if (m_network->m_enableInfluxDB) {
-                influxdb::QueryBuilder()
-                    .meas("call_event")
-                        .tag("peerId", std::to_string(peerId))
-                        .tag("mode", "P25")
-                        .tag("streamId", std::to_string(streamId))
-                        .tag("srcId", std::to_string(srcId))
-                        .tag("dstId", std::to_string(dstId))
-                            .field("duration", duration)
-                        .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
-                    .requestAsync(m_network->m_influxServer);
-            }
-
-            m_status.erase(peerId);
-            delete status;
-            status = nullptr;
-        } else {
-            status->callBusy = false;
         }
     }
 

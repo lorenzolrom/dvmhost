@@ -124,23 +124,24 @@ namespace network
                  */
                 class RxStatus {
                 public:
-                    system_clock::hrc::hrc_t callStartTime;
-                    system_clock::hrc::hrc_t lastPacket;
-                    uint32_t srcId;
-                    uint32_t dstId;
-                    uint8_t slotNo;
-                    uint32_t streamId;
-                    uint32_t peerId;
+                    system_clock::hrc::hrc_t callStartTime;     //!< Data call start time
+                    system_clock::hrc::hrc_t lastPacket;        //!< Last packet time
+                    uint32_t srcId;                             //!< Source Radio ID
+                    uint32_t dstId;                             //!< Destination Radio ID
+                    uint8_t slotNo;                             //!< DMR Slot Number
+                    uint32_t streamId;                          //!< Stream ID
+                    uint32_t peerId;                            //!< Peer ID
 
-                    dmr::data::DataHeader header;
-                    bool hasRxHeader;
-                    uint8_t dataBlockCnt;
-                    uint8_t frames;
+                    std::unordered_map<uint16_t, uint8_t*> receivedBlocks;
+                    dmr::data::DataHeader header;               //!< PDU Data Header
+                    bool hasRxHeader;                           //!< Flag indicating whether or not a valid Rx header has been received
+                    uint16_t dataBlockCnt;                      //!< Number of data blocks received
+                    uint8_t frames;                             //!< Number of frames received
 
-                    bool callBusy;
+                    bool callBusy;                              //!< Flag indicating whether or not the call is busy
 
-                    uint8_t* pduUserData;
-                    uint32_t pduDataOffset;
+                    uint8_t* pduUserData;                       //!< PDU user data buffer
+                    uint32_t pduDataOffset;                     //!< Offset within the PDU data buffer
 
                     /**
                      * @brief Initializes a new instance of the RxStatus class
@@ -151,6 +152,7 @@ namespace network
                         slotNo(0U),
                         streamId(0U),
                         peerId(0U),
+                        receivedBlocks(),
                         header(),
                         hasRxHeader(false),
                         dataBlockCnt(0U),
@@ -167,6 +169,16 @@ namespace network
                      */
                     ~RxStatus()
                     {
+                        if (!receivedBlocks.empty()) {
+                            for (auto& it : receivedBlocks) {
+                                if (it.second != nullptr) {
+                                    delete[] it.second;
+                                    it.second = nullptr;
+                                }
+                            }
+                            receivedBlocks.clear();
+                        }
+
                         delete[] pduUserData;
                     }
                 };

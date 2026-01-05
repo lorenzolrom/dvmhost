@@ -153,19 +153,22 @@ namespace network
                  */
                 class RxStatus {
                 public:
-                    system_clock::hrc::hrc_t callStartTime;
-                    system_clock::hrc::hrc_t lastPacket;
-                    uint32_t llId;
-                    uint32_t streamId;
-                    uint32_t peerId;
+                    system_clock::hrc::hrc_t callStartTime;     //!< Data call start time
+                    system_clock::hrc::hrc_t lastPacket;        //!< Last packet time
+                    uint32_t llId;                              //!< Logical Link ID
+                    uint32_t streamId;                          //!< Stream ID
+                    uint32_t peerId;                            //!< Peer ID
 
-                    p25::data::Assembler assembler;
-                    bool hasRxHeader;
+                    std::unordered_map<uint16_t, uint8_t*> receivedBlocks;
+                    p25::data::Assembler assembler;             //!< PDU Assembler Instance
+                    bool hasRxHeader;                           //!< Flag indicating whether or not a valid Rx header has been received
+                    uint16_t dataBlockCnt;                      //!< Number of data blocks received
+                    uint16_t totalBlocks;                       //!< Total number of blocks expected
 
-                    bool callBusy;
+                    bool callBusy;                              //!< Flag indicating whether or not the call is busy
 
-                    uint8_t* pduUserData;
-                    uint32_t pduUserDataLength;
+                    uint8_t* pduUserData;                       //!< PDU user data buffer
+                    uint32_t pduUserDataLength;                 //!< Length of PDU user data buffer
 
                     /**
                      * @brief Initializes a new instance of the RxStatus class
@@ -174,8 +177,11 @@ namespace network
                         llId(0U),
                         streamId(0U),
                         peerId(0U),
+                        receivedBlocks(),
                         assembler(),
                         hasRxHeader(false),
+                        dataBlockCnt(0U),
+                        totalBlocks(0U),
                         callBusy(false),
                         pduUserData(nullptr),
                         pduUserDataLength(0U)
@@ -188,8 +194,28 @@ namespace network
                      */
                     ~RxStatus()
                     {
+                        clearReceivedBlocks();
                         if (pduUserData != nullptr)
                             delete[] pduUserData;
+                    }
+
+                    /**
+                     * @brief Clears all received blocks and frees associated memory.
+                     */
+                    void clearReceivedBlocks()
+                    {
+                        totalBlocks = 0U;
+                        dataBlockCnt = 0U;
+
+                        if (!receivedBlocks.empty()) {
+                            for (auto& it : receivedBlocks) {
+                                if (it.second != nullptr) {
+                                    delete[] it.second;
+                                    it.second = nullptr;
+                                }
+                            }
+                            receivedBlocks.clear();
+                        }
                     }
                 };
                 typedef std::pair<const uint32_t, RxStatus*> StatusMapPair;
