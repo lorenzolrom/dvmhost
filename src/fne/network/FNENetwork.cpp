@@ -3346,7 +3346,7 @@ bool FNENetwork::writePeerNAK(uint32_t peerId, const char* tag, NET_CONN_NAK_REA
     logPeerNAKReason(peerId, tag, reason);
     LogWarning(LOG_MASTER, "PEER %u NAK %s -> %s:%u", peerId, tag, udp::Socket::address(addr).c_str(), udp::Socket::port(addr));
     return m_frameQueue->write(buffer, 12U, createStreamId(), peerId, m_peerId,
-        { NET_FUNC::NAK, NET_SUBFUNC::NOP }, 0U, addr, addrLen);
+        { NET_FUNC::NAK, NET_SUBFUNC::NOP }, RTP_END_OF_CALL_SEQ, addr, addrLen);
 }
 
 /*
