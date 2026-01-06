@@ -494,9 +494,11 @@ int HostBridge::run()
         m_encoder = new vocoder::MBEEncoder(vocoder::ENCODE_88BIT_IMBE);
     }
 
-    m_decoder->setGainAdjust(m_vocoderDecoderAudioGain);
-    m_decoder->setAutoGain(m_vocoderDecoderAutoGain);
-    m_encoder->setGainAdjust(m_vocoderEncoderAudioGain);
+    if (m_txMode != TX_MODE_ANALOG) {
+        m_decoder->setGainAdjust(m_vocoderDecoderAudioGain);
+        m_decoder->setAutoGain(m_vocoderDecoderAutoGain);
+        m_encoder->setGainAdjust(m_vocoderEncoderAudioGain);
+    }
 
 #if defined(_WIN32)
     initializeAMBEDLL();
@@ -2869,6 +2871,10 @@ void HostBridge::encodeAnalogAudioFrame(uint8_t* pcm, uint32_t forcedSrcId, uint
         Utils::dump(1U, "HostBridge()::encodeAnalogAudioFrame(), Encoded uLaw Audio", outPcm, AUDIO_SAMPLES_LENGTH);
 
     analogData.setAudio(outPcm);
+
+    if (analogData.getFrameType() == AudioFrameType::VOICE) {
+        LogInfoEx(LOG_NET, ANO_VOICE ", audio, srcId = %u, dstId = %u, seqNo = %u", srcId, dstId, analogData.getSeqNo());
+    }
 
     m_network->writeAnalog(analogData);
     m_txStreamId = m_network->getAnalogStreamId();

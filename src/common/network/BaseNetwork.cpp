@@ -892,23 +892,13 @@ UInt8Array BaseNetwork::readAnalog(bool& ret, uint32_t& frameLength)
         return nullptr;
     }
 
-    uint8_t length = 0U;
-    m_rxAnalogData.get(&length, 1U);
-    if (length == 0U) {
-        ret = false;
-        return nullptr;
-    }
+    uint8_t lenOffs = 0U;
+    m_rxAnalogData.get(&lenOffs, 1U);
 
-    if (length < 254U) {
-        // if the length is less than 254, the analog packet is malformed, analog packets should never be less than 254 bytes
-        LogError(LOG_NET, "malformed analog packet, length < 254 (%u), shouldn't happen", length);
-        ret = false;
-        return nullptr;
-    }
-
+    uint16_t length = 254U + lenOffs;
     if (length == 254U) {
-        m_rxAnalogData.get(&length, 1U); // read the next byte for the actual length
-        length += 254U; // a packet length of 254 is a special case for P25 frames, so we need to add the 254 to the length
+        ret = false;
+        return nullptr;
     }
 
     UInt8Array buffer;

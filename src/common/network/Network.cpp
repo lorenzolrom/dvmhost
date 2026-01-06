@@ -674,12 +674,10 @@ void Network::clock(uint32_t ms)
                                     LogError(LOG_NET, "Analog Stream %u, frame oversized? this shouldn't happen, pktSeq = %u, len = %u", streamId, m_pktSeq, length);
 
                                 // Analog frames are larger then 254 bytes, but we need to handle the case where the frame is larger than 255 bytes
-                                uint8_t len = 254U;
-                                m_rxAnalogData.addData(&len, 1U);
-                                len = length - 254U;
+                                uint8_t len = length - 254U;
                                 m_rxAnalogData.addData(&len, 1U);
 
-                                m_rxAnalogData.addData(buffer.get(), len);
+                                m_rxAnalogData.addData(buffer.get(), length);
                             }
                         }
                     }
