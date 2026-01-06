@@ -1487,6 +1487,7 @@ void Control::processNetwork()
         }
 
         uint32_t blockLength = GET_UINT24(buffer, 8U);
+        uint8_t totalBlocks = data[20U] + 1U;
         uint8_t currentBlock = buffer[21U];
 
         if (m_debug) {
@@ -1494,7 +1495,7 @@ void Control::processNetwork()
         }
 
         if (!m_dedicatedControl)
-            m_data->processNetwork(data.get(), frameLength, currentBlock, blockLength);
+            m_data->processNetwork(data.get(), frameLength, currentBlock, blockLength, totalBlocks);
 
         return;
     }

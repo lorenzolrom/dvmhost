@@ -390,146 +390,184 @@ bool Data::process(uint8_t* data, uint32_t len)
 
 /* Process a data frame from the network. */
 
-bool Data::processNetwork(uint8_t* data, uint32_t len, uint8_t currentBlock, uint32_t blockLength)
+bool Data::processNetwork(uint8_t* data, uint32_t len, uint8_t currentBlock, uint32_t blockLength, uint16_t totalBlocks)
 {
-    if ((m_p25->m_netState != RS_NET_DATA) || (currentBlock == 0U)) {
+    if (m_p25->m_netState != RS_NET_DATA) {
         m_p25->m_netState = RS_NET_DATA;
         m_inbound = false;
-
-        bool ret = m_netAssembler->disassemble(data + 24U, blockLength, true);
-        if (!ret) {
-            m_p25->m_netState = RS_NET_IDLE;
-            return false;
-        }
-
-        // if we're a dedicated CC or in control only mode, we only want to handle AMBTs. Otherwise return
-        if ((m_p25->m_dedicatedControl || m_p25->m_controlOnly) && m_netAssembler->dataHeader.getFormat() != PDUFormatType::AMBT) {
-            if (m_debug) {
-                LogDebug(LOG_NET, "CC only mode, ignoring non-AMBT PDU from network");
-            }
-
-            m_p25->m_netState = RS_NET_IDLE;
-            return false;
-        }
-
-        // did we receive a response header?
-        if (m_netAssembler->dataHeader.getFormat() == PDUFormatType::RSP) {
-            m_p25->m_netState = RS_NET_IDLE;
-
-            if (m_verbose) {
-                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, fmt = $%02X, rspClass = $%02X, rspType = $%02X, rspStatus = $%02X, llId = %u, srcLlId = %u",
-                        m_netAssembler->dataHeader.getFormat(), m_netAssembler->dataHeader.getResponseClass(), m_netAssembler->dataHeader.getResponseType(), m_netAssembler->dataHeader.getResponseStatus(),
-                        m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getSrcLLId());
-
-                if (m_netAssembler->dataHeader.getResponseClass() == PDUAckClass::ACK && m_netAssembler->dataHeader.getResponseType() == PDUAckType::ACK) {
-                    LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP ACK, llId = %u, all blocks received OK, n = %u",
-                        m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
-                } else {
-                    if (m_netAssembler->dataHeader.getResponseClass() == PDUAckClass::NACK) {
-                        switch (m_netAssembler->dataHeader.getResponseType()) {
-                            case PDUAckType::NACK_ILLEGAL:
-                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, illegal format, llId = %u",
-                                    m_netAssembler->dataHeader.getLLId());
-                                break;
-                            case PDUAckType::NACK_PACKET_CRC:
-                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, packet CRC error, llId = %u, n = %u",
-                                    m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
-                                break;
-                            case PDUAckType::NACK_SEQ:
-                            case PDUAckType::NACK_OUT_OF_SEQ:
-                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, packet out of sequence, llId = %u, seqNo = %u",
-                                    m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
-                                break;
-                            case PDUAckType::NACK_UNDELIVERABLE:
-                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, packet undeliverable, llId = %u, n = %u",
-                                    m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
-                                break;
-
-                            default:
-                                break;
-                            }
-                    }
-                }
-            }
-
-            writeRF_PDU_Ack_Response(m_netAssembler->dataHeader.getResponseClass(), m_netAssembler->dataHeader.getResponseType(), m_netAssembler->dataHeader.getResponseStatus(),
-                m_netAssembler->dataHeader.getLLId(), (m_netAssembler->dataHeader.getSrcLLId() > 0U), m_netAssembler->dataHeader.getSrcLLId());
-        }
-
-        return true;
     }
 
+    LogInfoEx(LOG_NET, P25_PDU_STR ", received block %u, len = %u, totalBlocks = %u",
+        currentBlock, blockLength, totalBlocks);
+
+    // store the received block
+    uint8_t* blockData = new uint8_t[blockLength];
+    ::memcpy(blockData, data + 24U, blockLength);
+    m_netReceivedBlocks[currentBlock] = blockData;
+    m_netDataBlockCnt++;
+    m_netTotalBlocks = totalBlocks;
+
     if (m_p25->m_netState == RS_NET_DATA) {
-        // block 0 is always the PDU header block -- if we got here with that bail bail bail
-        if (currentBlock == 0U) {
-            return false; // bail
-        }
+        if (m_netDataBlockCnt == m_netTotalBlocks) {
+            for (uint16_t i = 0U; i < totalBlocks; i++) {
+                if (m_netReceivedBlocks.find(i) != m_netReceivedBlocks.end()) {
+                    // block 0 is always the PDU header block
+                    if (i == 0U) {
+                        bool ret = m_netAssembler->disassemble(m_netReceivedBlocks[i], blockLength, true);
+                        if (!ret) {
+                            m_p25->m_netState = RS_NET_IDLE;
+                            resetReceivedBlocks();
+                            return false;
+                        }
 
-        bool ret = m_netAssembler->disassemble(data + 24U, blockLength);
-        if (!ret) {
-            m_p25->m_netState = RS_NET_IDLE;
-            return false;
-        }
-        else {
-            if (m_netAssembler->getComplete()) {
-                m_netPduUserDataLength = m_netAssembler->getUserDataLength();
-                m_netAssembler->getUserData(m_netPduUserData);
+                        // if we're a dedicated CC or in control only mode, we only want to handle AMBTs. Otherwise return
+                        if ((m_p25->m_dedicatedControl || m_p25->m_controlOnly) && m_netAssembler->dataHeader.getFormat() != PDUFormatType::AMBT) {
+                            if (m_debug) {
+                                LogDebug(LOG_NET, "CC only mode, ignoring non-AMBT PDU from network");
+                            }
 
-                uint32_t srcId = (m_netAssembler->getExtendedAddress()) ? m_netAssembler->dataHeader.getSrcLLId() : m_netAssembler->dataHeader.getLLId();
-                uint32_t dstId = m_netAssembler->dataHeader.getLLId();
+                            m_p25->m_netState = RS_NET_IDLE;
+                            resetReceivedBlocks();
+                            return false;
+                        }
 
-                uint8_t sap = (m_netAssembler->getExtendedAddress()) ? m_netAssembler->dataHeader.getEXSAP() : m_netAssembler->dataHeader.getSAP();
-                if (m_netAssembler->getAuxiliaryES())
-                    sap = m_netAssembler->dataHeader.getEXSAP();
+                        // did we receive a response header?
+                        if (m_netAssembler->dataHeader.getFormat() == PDUFormatType::RSP) {
+                            m_p25->m_netState = RS_NET_IDLE;
 
-                // handle standard P25 service access points
-                switch (sap) {
-                case PDUSAP::ARP:
-                {
-                    /* bryanb: quick and dirty ARP logging */
-                    uint8_t arpPacket[P25_PDU_ARP_PCKT_LENGTH];
-                    ::memset(arpPacket, 0x00U, P25_PDU_ARP_PCKT_LENGTH);
-                    ::memcpy(arpPacket, m_netPduUserData, P25_PDU_ARP_PCKT_LENGTH);
+                            if (m_verbose) {
+                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, fmt = $%02X, rspClass = $%02X, rspType = $%02X, rspStatus = $%02X, llId = %u, srcLlId = %u",
+                                        m_netAssembler->dataHeader.getFormat(), m_netAssembler->dataHeader.getResponseClass(), m_netAssembler->dataHeader.getResponseType(), m_netAssembler->dataHeader.getResponseStatus(),
+                                        m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getSrcLLId());
 
-                    uint16_t opcode = GET_UINT16(arpPacket, 6U);
-                    uint32_t srcHWAddr = GET_UINT24(arpPacket, 8U);
-                    uint32_t srcProtoAddr = GET_UINT32(arpPacket, 11U);
-                    //uint32_t tgtHWAddr = GET_UINT24(arpPacket, 15U);
-                    uint32_t tgtProtoAddr = GET_UINT32(arpPacket, 18U);
+                                if (m_netAssembler->dataHeader.getResponseClass() == PDUAckClass::ACK && m_netAssembler->dataHeader.getResponseType() == PDUAckType::ACK) {
+                                    LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP ACK, llId = %u, all blocks received OK, n = %u",
+                                        m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
+                                } else {
+                                    if (m_netAssembler->dataHeader.getResponseClass() == PDUAckClass::NACK) {
+                                        switch (m_netAssembler->dataHeader.getResponseType()) {
+                                            case PDUAckType::NACK_ILLEGAL:
+                                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, illegal format, llId = %u",
+                                                    m_netAssembler->dataHeader.getLLId());
+                                                break;
+                                            case PDUAckType::NACK_PACKET_CRC:
+                                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, packet CRC error, llId = %u, n = %u",
+                                                    m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
+                                                break;
+                                            case PDUAckType::NACK_SEQ:
+                                            case PDUAckType::NACK_OUT_OF_SEQ:
+                                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, packet out of sequence, llId = %u, seqNo = %u",
+                                                    m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
+                                                break;
+                                            case PDUAckType::NACK_UNDELIVERABLE:
+                                                LogInfoEx(LOG_NET, P25_PDU_STR ", FNE ISP, response, OSP NACK, packet undeliverable, llId = %u, n = %u",
+                                                    m_netAssembler->dataHeader.getLLId(), m_netAssembler->dataHeader.getResponseStatus());
+                                                break;
 
-                    if (m_verbose) {
-                        if (opcode == P25_PDU_ARP_REQUEST) {
-                            LogInfoEx(LOG_NET, P25_PDU_STR ", ARP request, who has %s? tell %s (%u)", __IP_FROM_UINT(tgtProtoAddr).c_str(), __IP_FROM_UINT(srcProtoAddr).c_str(), srcHWAddr);
-                        } else if (opcode == P25_PDU_ARP_REPLY) {
-                            LogInfoEx(LOG_NET, P25_PDU_STR ", ARP reply, %s is at %u", __IP_FROM_UINT(srcProtoAddr).c_str(), srcHWAddr);
+                                            default:
+                                                break;
+                                            }
+                                    }
+                                }
+                            }
+
+                            writeRF_PDU_Ack_Response(m_netAssembler->dataHeader.getResponseClass(), m_netAssembler->dataHeader.getResponseType(), m_netAssembler->dataHeader.getResponseStatus(),
+                                m_netAssembler->dataHeader.getLLId(), (m_netAssembler->dataHeader.getSrcLLId() > 0U), m_netAssembler->dataHeader.getSrcLLId());
+
+                            resetReceivedBlocks();
+                            return true;
+                        }
+
+                        continue;
+                    }
+
+                    bool ret = m_netAssembler->disassemble(m_netReceivedBlocks[i], blockLength);
+                    if (!ret) {
+                        m_p25->m_netState = RS_NET_IDLE;
+                        resetReceivedBlocks();
+                        return false;
+                    }
+                    else {
+                        if (m_netAssembler->getComplete()) {
+                            m_netPduUserDataLength = m_netAssembler->getUserDataLength();
+                            m_netAssembler->getUserData(m_netPduUserData);
+
+                            uint32_t srcId = (m_netAssembler->getExtendedAddress()) ? m_netAssembler->dataHeader.getSrcLLId() : m_netAssembler->dataHeader.getLLId();
+                            uint32_t dstId = m_netAssembler->dataHeader.getLLId();
+
+                            uint8_t sap = (m_netAssembler->getExtendedAddress()) ? m_netAssembler->dataHeader.getEXSAP() : m_netAssembler->dataHeader.getSAP();
+                            if (m_netAssembler->getAuxiliaryES())
+                                sap = m_netAssembler->dataHeader.getEXSAP();
+
+                            // handle standard P25 service access points
+                            switch (sap) {
+                            case PDUSAP::ARP:
+                            {
+                                /* bryanb: quick and dirty ARP logging */
+                                uint8_t arpPacket[P25_PDU_ARP_PCKT_LENGTH];
+                                ::memset(arpPacket, 0x00U, P25_PDU_ARP_PCKT_LENGTH);
+                                ::memcpy(arpPacket, m_netPduUserData, P25_PDU_ARP_PCKT_LENGTH);
+
+                                uint16_t opcode = GET_UINT16(arpPacket, 6U);
+                                uint32_t srcHWAddr = GET_UINT24(arpPacket, 8U);
+                                uint32_t srcProtoAddr = GET_UINT32(arpPacket, 11U);
+                                //uint32_t tgtHWAddr = GET_UINT24(arpPacket, 15U);
+                                uint32_t tgtProtoAddr = GET_UINT32(arpPacket, 18U);
+
+                                if (m_verbose) {
+                                    if (opcode == P25_PDU_ARP_REQUEST) {
+                                        LogInfoEx(LOG_NET, P25_PDU_STR ", ARP request, who has %s? tell %s (%u)", __IP_FROM_UINT(tgtProtoAddr).c_str(), __IP_FROM_UINT(srcProtoAddr).c_str(), srcHWAddr);
+                                    } else if (opcode == P25_PDU_ARP_REPLY) {
+                                        LogInfoEx(LOG_NET, P25_PDU_STR ", ARP reply, %s is at %u", __IP_FROM_UINT(srcProtoAddr).c_str(), srcHWAddr);
+                                    }
+                                }
+
+                                writeNet_PDU_Buffered(); // re-generate buffered PDU and send it on
+                            }
+                            break;
+                            default:
+                                ::ActivityLog("P25", false, "Net data transmission from %u to %u, %u blocks", srcId, dstId, m_netAssembler->dataHeader.getBlocksToFollow());
+                                LogInfoEx(LOG_NET, "P25 Data Call, srcId = %u, dstId = %u", srcId, dstId);
+
+                                if (m_verbose) {
+                                    LogInfoEx(LOG_NET, P25_PDU_STR ", transmitting network PDU, llId = %u", (m_netAssembler->getExtendedAddress()) ? m_netAssembler->dataHeader.getSrcLLId() : m_netAssembler->dataHeader.getLLId());
+                                }
+
+                                writeNet_PDU_Buffered(); // re-generate buffered PDU and send it on
+
+                                ::ActivityLog("P25", false, "end of Net data transmission");
+                                break;
+                            }
+
+                            m_netPduUserDataLength = 0U;
+                            m_p25->m_netState = RS_NET_IDLE;
+                            m_p25->m_network->resetP25();
+                            resetReceivedBlocks();
+                            break;
                         }
                     }
-
-                    writeNet_PDU_Buffered(); // re-generate buffered PDU and send it on
                 }
-                break;
-                default:
-                    ::ActivityLog("P25", false, "Net data transmission from %u to %u, %u blocks", srcId, dstId, m_netAssembler->dataHeader.getBlocksToFollow());
-                    LogInfoEx(LOG_NET, "P25 Data Call, srcId = %u, dstId = %u", srcId, dstId);
-
-                    if (m_verbose) {
-                        LogInfoEx(LOG_NET, P25_PDU_STR ", transmitting network PDU, llId = %u", (m_netAssembler->getExtendedAddress()) ? m_netAssembler->dataHeader.getSrcLLId() : m_netAssembler->dataHeader.getLLId());
-                    }
-
-                    writeNet_PDU_Buffered(); // re-generate buffered PDU and send it on
-
-                    ::ActivityLog("P25", false, "end of Net data transmission");
-                    break;
-                }
-
-                m_netPduUserDataLength = 0U;
-                m_p25->m_netState = RS_NET_IDLE;
-                m_p25->m_network->resetP25();
             }
         }
     }
 
     return true;
+}
+
+/* Helper to reset received network blocks. */
+
+void Data::resetReceivedBlocks()
+{
+    for (auto it : m_netReceivedBlocks) {
+        if (it.second != nullptr) {
+            delete[] it.second;
+            it.second = nullptr;
+        }
+    }
+    m_netReceivedBlocks.clear();
+
+    m_netDataBlockCnt = 0U;
+    m_netTotalBlocks = 0U;
 }
 
 /* Helper to check if a logical link ID has registered with data services. */
@@ -723,6 +761,9 @@ Data::Data(Control* p25, bool dumpPDUData, bool repeatPDU, bool debug, bool verb
     m_rfPDUCount(0U),
     m_rfPDUBits(0U),
     m_netAssembler(nullptr),
+    m_netReceivedBlocks(),
+    m_netDataBlockCnt(0U),
+    m_netTotalBlocks(0U),
     m_retryPDUData(nullptr),
     m_retryPDUBitLength(0U),
     m_retryCount(0U),
