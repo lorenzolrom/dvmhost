@@ -285,6 +285,20 @@ private:
      * @param match HTTP request matcher.
      */
     void restAPI_GetPeerCommit(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
+    /**
+     * @brief REST API endpoint; implements put peer NAK request.
+     * @param request HTTP request.
+     * @param reply HTTP reply.
+     * @param match HTTP request matcher.
+     */
+    void restAPI_PutPeerNAKByPeerId(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
+    /**
+     * @brief REST API endpoint; implements put peer NAK request.
+     * @param request HTTP request.
+     * @param reply HTTP reply.
+     * @param match HTTP request matcher.
+     */
+    void restAPI_PutPeerNAKByAddress(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
 
     /**
      * @brief REST API endpoint; implements get adjacent site map list query request.

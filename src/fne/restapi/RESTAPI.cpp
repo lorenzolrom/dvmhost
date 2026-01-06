@@ -657,6 +657,8 @@ void RESTAPI::initializeEndpoints()
     m_dispatcher.match(FNE_PUT_PEER_ADD).put(REST_API_BIND(RESTAPI::restAPI_PutPeerAdd, this));
     m_dispatcher.match(FNE_PUT_PEER_DELETE).put(REST_API_BIND(RESTAPI::restAPI_PutPeerDelete, this));
     m_dispatcher.match(FNE_GET_PEER_COMMIT).get(REST_API_BIND(RESTAPI::restAPI_GetPeerCommit, this));
+    m_dispatcher.match(FNE_PUT_PEER_NAK_PEERID).put(REST_API_BIND(RESTAPI::restAPI_PutPeerNAKByPeerId, this));
+    m_dispatcher.match(FNE_PUT_PEER_NAK_ADDRESS).put(REST_API_BIND(RESTAPI::restAPI_PutPeerNAKByAddress, this));
 
     m_dispatcher.match(FNE_GET_ADJ_MAP_LIST).get(REST_API_BIND(RESTAPI::restAPI_GetAdjMapList, this));
     m_dispatcher.match(FNE_PUT_ADJ_MAP_ADD).put(REST_API_BIND(RESTAPI::restAPI_PutAdjMapAdd, this));
@@ -725,12 +727,14 @@ bool RESTAPI::validateAuth(const HTTPPayload& request, HTTPPayload& reply)
             } else {
                 m_authTokens.erase(host); // devalidate host
                 errorPayload(reply, "invalid authentication token", HTTPPayload::UNAUTHORIZED);
+                LogError(LOG_REST, "invalid authentication token from host %s", host.c_str());
                 return false;
             }
         }
     }
 
     errorPayload(reply, "illegal authentication token", HTTPPayload::UNAUTHORIZED);
+    LogError(LOG_REST, "illegal authentication token from host %s", host.c_str());
     return false;
 }
 
@@ -795,6 +799,7 @@ void RESTAPI::restAPI_PutAuth(const HTTPPayload& request, HTTPPayload& reply, co
     if (::memcmp(m_passwordHash, passwordHash, 32U) != 0) {
         invalidateHostToken(host);
         errorPayload(reply, "invalid password");
+        LogError(LOG_REST, "failed authentication attempt from host %s", host.c_str());
         return;
     }
 
@@ -870,7 +875,7 @@ void RESTAPI::restAPI_GetPeerQuery(const HTTPPayload& request, HTTPPayload& repl
                 network::FNEPeerConnection* peer = entry.second;
                 if (peer != nullptr) {
                     if (m_debug) {
-                        LogDebug(LOG_REST, "Preparing Peer %u (%s) for REST API query", peerId, peer->address().c_str());
+                        LogDebug(LOG_REST, "preparing Peer %u (%s) for REST API query", peerId, peer->address().c_str());
                     }
 
                     json::object peerObj = m_network->fneConnObject(peerId, peer);
@@ -879,7 +884,7 @@ void RESTAPI::restAPI_GetPeerQuery(const HTTPPayload& request, HTTPPayload& repl
             }
         }
         else {
-            LogDebug(LOG_REST, "No peers connected to this FNE");
+            LogError(LOG_REST, "peer query failed, no peers connected to this FNE");
         }
 
         // report any peers from replica peers
@@ -897,7 +902,7 @@ void RESTAPI::restAPI_GetPeerQuery(const HTTPPayload& request, HTTPPayload& repl
         }
     }
     else {
-        LogDebug(LOG_REST, "Network not set up, no peers to return");
+        LogError(LOG_REST, "peer query failed, network not set up, no peers to return");
     }
 
     response["peers"].set<json::array>(peers);
@@ -946,6 +951,7 @@ void RESTAPI::restAPI_PutPeerReset(const HTTPPayload& request, HTTPPayload& repl
 
     uint32_t peerId = req["peerId"].get<uint32_t>();
 
+    LogInfoEx(LOG_REST, "PEER %u, attempting to reset connection", peerId);
     m_network->resetPeer(peerId);
 }
 
@@ -975,7 +981,7 @@ void RESTAPI::restAPI_PutPeerResetConn(const HTTPPayload& request, HTTPPayload& 
         for (auto peer : m_host->m_peerNetworks) {
             if (peer.second != nullptr) {
                 if (peer.second->getPeerId() == peerId) {
-                    LogInfoEx(LOG_NET, "PEER %u, request to reset upstream peer connection", peerId);
+                    LogInfoEx(LOG_REST, "PEER %u, request to reset upstream peer connection", peerId);
                     
                     peer.second->clearDuplicateConnFlag();
 
@@ -1056,6 +1062,8 @@ void RESTAPI::restAPI_PutRIDAdd(const HTTPPayload& request, HTTPPayload& reply, 
         alias = req["alias"].get<std::string>();
     }
 
+    LogInfoEx(LOG_REST, "request to add RID ACL, rid = %u", rid);
+
     // The addEntry function will automatically update an existing entry, so no need to check for an exisitng one here
     m_ridLookup->addEntry(rid, enabled, alias);
 /*    
@@ -1093,6 +1101,8 @@ void RESTAPI::restAPI_PutRIDDelete(const HTTPPayload& request, HTTPPayload& repl
         return;
     }
 
+    LogInfoEx(LOG_REST, "request to delete RID ACL, rid = %u", rid);
+
     m_ridLookup->eraseEntry(rid);
 /*    
     if (m_network != nullptr) {
@@ -1112,6 +1122,7 @@ void RESTAPI::restAPI_GetRIDCommit(const HTTPPayload& request, HTTPPayload& repl
     json::object response = json::object();
     setResponseDefaultStatus(response);
 
+    LogInfoEx(LOG_REST, "request to commit and save RID ACLs");
     m_ridLookup->commit();
 
     reply.payload(response);
@@ -1178,6 +1189,7 @@ void RESTAPI::restAPI_PutTGAdd(const HTTPPayload& request, HTTPPayload& reply, c
         ::LogWarning(LOG_REST, "Talkgroup (%s) defines both inclusions and exclusions! Inclusions take precedence and exclusions will be ignored.", groupName.c_str());
     }
 
+    ::LogInfoEx(LOG_REST, "request to add TGID ACL");
     ::LogInfoEx(LOG_REST, "Talkgroup NAME: %s SRC_TGID: %u SRC_TS: %u ACTIVE: %u PARROT: %u INCLUSIONS: %u EXCLUSIONS: %u REWRITES: %u PREFERRED: %u", groupName.c_str(), tgId, tgSlot, active, parrot, incCount, excCount, rewrCount, prefCount);
 
     m_tidLookup->addEntry(groupVoice);
@@ -1223,6 +1235,7 @@ void RESTAPI::restAPI_PutTGDelete(const HTTPPayload& request, HTTPPayload& reply
         return;
     }
 
+    ::LogInfoEx(LOG_REST, "request to delete TGID ACL, tgid = %u, slot = %u", tgid, slot);
     m_tidLookup->eraseEntry(groupVoice.source().tgId(), groupVoice.source().tgSlot());
 /*    
     if (m_network != nullptr) {
@@ -1242,6 +1255,7 @@ void RESTAPI::restAPI_GetTGCommit(const HTTPPayload& request, HTTPPayload& reply
     json::object response = json::object();
     setResponseDefaultStatus(response);
 
+    LogInfoEx(LOG_REST, "request to commit and save TGID ACLs");
     if(!m_tidLookup->commit()) {
         errorPayload(reply, "failed to write new TGID file");
         return;
@@ -1393,6 +1407,8 @@ void RESTAPI::restAPI_PutPeerAdd(const HTTPPayload& request, HTTPPayload& reply,
     entry.canIssueInhibit(canIssueInhibit);
     entry.hasCallPriority(hasCallPriority);
 
+    LogInfoEx(LOG_REST, "request to add peer ACL, peerId = %u", peerId);
+
     m_peerListLookup->addEntry(peerId, entry);
 }
 
@@ -1418,6 +1434,8 @@ void RESTAPI::restAPI_PutPeerDelete(const HTTPPayload& request, HTTPPayload& rep
 
     uint32_t peerId = req["peerId"].get<uint32_t>();
 
+    LogInfoEx(LOG_REST, "request to delete peer ACL, peerId = %u", peerId);
+
     m_peerListLookup->eraseEntry(peerId);
 }
 
@@ -1432,11 +1450,110 @@ void RESTAPI::restAPI_GetPeerCommit(const HTTPPayload& request, HTTPPayload& rep
     json::object response = json::object();
     setResponseDefaultStatus(response);
 
+    LogInfoEx(LOG_REST, "request to commit and save peer ACLs");
     m_peerListLookup->commit();
 
     reply.payload(response);
 }
 
+/* REST API endpoint; implements put peer NAK request. */
+
+void RESTAPI::restAPI_PutPeerNAKByPeerId(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object req = json::object();
+    if (!parseRequestBody(request, reply, req)) {
+        return;
+    }
+
+    errorPayload(reply, "OK", HTTPPayload::OK);
+
+    if (!req["peerId"].is<uint32_t>()) {
+        errorPayload(reply, "peerId was not a valid integer");
+        return;
+    }
+
+    uint32_t peerId = req["peerId"].get<uint32_t>();
+
+    if (!req["tag"].is<std::string>()) {
+        errorPayload(reply, "tag was not a valid string");
+        return;
+    }
+
+    std::string tag = req["tag"].get<std::string>();
+
+    if (!req["reason"].is<uint32_t>()) {
+        errorPayload(reply, "reason was not a valid integer");
+        return;
+    }
+
+    uint32_t reasonCode = req["reason"].get<uint32_t>();
+
+    LogInfoEx(LOG_REST, "sending NAK to %u, peerId = %u, tag = %s, reason = %u", peerId, peerId, tag.c_str(), reasonCode);
+    m_network->writePeerNAK(peerId, m_network->createStreamId(), tag.c_str(), (NET_CONN_NAK_REASON)reasonCode);
+}
+
+/* REST API endpoint; implements put peer NAK request. */
+
+void RESTAPI::restAPI_PutPeerNAKByAddress(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object req = json::object();
+    if (!parseRequestBody(request, reply, req)) {
+        return;
+    }
+
+    errorPayload(reply, "OK", HTTPPayload::OK);
+
+    if (!req["address"].is<std::string>()) {
+        errorPayload(reply, "address was not a valid string");
+        return;
+    }
+
+    std::string address = req["address"].get<std::string>();
+
+    if (!req["port"].is<uint16_t>()) {
+        errorPayload(reply, "port was not a valid integer");
+        return;
+    }
+
+    uint16_t port = req["port"].get<uint16_t>();
+
+    if (!req["peerId"].is<uint32_t>()) {
+        errorPayload(reply, "peerId was not a valid integer");
+        return;
+    }
+
+    uint32_t peerId = req["peerId"].get<uint32_t>();
+
+    if (!req["tag"].is<std::string>()) {
+        errorPayload(reply, "tag was not a valid string");
+        return;
+    }
+
+    std::string tag = req["tag"].get<std::string>();
+
+    if (!req["reason"].is<uint32_t>()) {
+        errorPayload(reply, "reason was not a valid integer");
+        return;
+    }
+
+    uint32_t reasonCode = req["reason"].get<uint32_t>();
+
+    sockaddr_storage addr;
+    uint32_t addrLen;
+
+    udp::Socket::lookup(address, port, addr, addrLen);
+
+    LogInfoEx(LOG_REST, "sending NAK to %s:%u, peerId = %u, tag = %s, reason = %u", address.c_str(), port, peerId, tag.c_str(), reasonCode);
+    m_network->writePeerNAK(peerId, tag.c_str(), (NET_CONN_NAK_REASON)reasonCode, addr, addrLen);
+}
 
 /* REST API endpoint; implements get adjacent site map query request. */
 
@@ -1523,6 +1640,7 @@ void RESTAPI::restAPI_PutAdjMapAdd(const HTTPPayload& request, HTTPPayload& repl
         entry.neighbors(neighbor);
     }
 
+    LogInfoEx(LOG_REST, "request to add adjacent site map entry, peerId = %u", peerId);
     m_adjSiteMapLookup->addEntry(entry);
 }
 
@@ -1548,6 +1666,7 @@ void RESTAPI::restAPI_PutAdjMapDelete(const HTTPPayload& request, HTTPPayload& r
 
     uint32_t peerId = req["peerId"].get<uint32_t>();
 
+    LogInfoEx(LOG_REST, "request to delete adjacent site map entry, peerId = %u", peerId);
     m_adjSiteMapLookup->eraseEntry(peerId);
 }
 
@@ -1562,6 +1681,7 @@ void RESTAPI::restAPI_GetAdjMapCommit(const HTTPPayload& request, HTTPPayload& r
     json::object response = json::object();
     setResponseDefaultStatus(response);
 
+    LogInfoEx(LOG_REST, "request to commit and save adjacent site map");
     m_adjSiteMapLookup->commit();
 
     reply.payload(response);
@@ -1578,6 +1698,7 @@ void RESTAPI::restAPI_GetForceUpdate(const HTTPPayload& request, HTTPPayload& re
     json::object response = json::object();
     setResponseDefaultStatus(response);
 
+    LogInfoEx(LOG_REST, "request to force peer list update");
     if (m_network != nullptr) {
         m_network->m_forceListUpdate = true;
     }

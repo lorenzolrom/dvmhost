@@ -44,6 +44,8 @@
 #define FNE_PUT_PEER_ADD                "/peer/add"
 #define FNE_PUT_PEER_DELETE             "/peer/delete"
 #define FNE_GET_PEER_COMMIT             "/peer/commit"
+#define FNE_PUT_PEER_NAK_PEERID         "/peer/nak/byPeerId"
+#define FNE_PUT_PEER_NAK_ADDRESS        "/peer/nak/byAddress"
 
 #define FNE_GET_ADJ_MAP_LIST            "/adjmap/list"
 #define FNE_PUT_ADJ_MAP_ADD             "/adjmap/add"

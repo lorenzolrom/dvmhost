@@ -369,12 +369,14 @@ bool RESTAPI::validateAuth(const HTTPPayload& request, HTTPPayload& reply)
             } else {
                 m_authTokens.erase(host); // devalidate host
                 errorPayload(reply, "invalid authentication token", HTTPPayload::UNAUTHORIZED);
+                LogError(LOG_REST, "invalid authentication token from host %s", host.c_str());
                 return false;
             }
         }
     }
 
     errorPayload(reply, "illegal authentication token", HTTPPayload::UNAUTHORIZED);
+    LogError(LOG_REST, "illegal authentication token from host %s", host.c_str());
     return false;
 }
 
@@ -439,6 +441,7 @@ void RESTAPI::restAPI_PutAuth(const HTTPPayload& request, HTTPPayload& reply, co
     if (::memcmp(m_passwordHash, passwordHash, 32U) != 0) {
         invalidateHostToken(host);
         errorPayload(reply, "invalid password");
+        LogError(LOG_REST, "failed authentication attempt from host %s", host.c_str());
         return;
     }
 
