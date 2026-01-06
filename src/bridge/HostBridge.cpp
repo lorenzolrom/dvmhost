@@ -973,14 +973,6 @@ bool HostBridge::readParams()
     m_ctsCorPort = systemConf["ctsCorPort"].as<std::string>("/dev/ttyUSB0");
     m_ctsCorInvert = systemConf["ctsCorInvert"].as<bool>(false);
     m_ctsCorHoldoffMs = (uint32_t)systemConf["ctsCorHoldoffMs"].as<uint32_t>(m_ctsCorHoldoffMs);
-    
-    if (m_ctsCorEnable) {
-        LogInfo("CTS COR Configuration");
-        LogInfo("    Enabled: yes");
-        LogInfo("    Port: %s", m_ctsCorPort.c_str());
-        LogInfo("    Invert: %s (%s triggers)", m_ctsCorInvert ? "yes" : "no", m_ctsCorInvert ? "LOW" : "HIGH");
-        LogInfo("    Holdoff: %u ms", m_ctsCorHoldoffMs);
-    }
 
     std::string txModeStr = "DMR";
     if (m_txMode == TX_MODE_P25)
@@ -1011,6 +1003,12 @@ bool HostBridge::readParams()
     if (m_rtsPttEnable) {
         LogInfo("    RTS PTT Port: %s", m_rtsPttPort.c_str());
         LogInfo("    RTS PTT Hold-off: %ums", m_rtsPttHoldoffMs);
+    }
+    LogInfo("    CTS COR Enable: %s", m_ctsCorEnable ? "yes" : "no");
+    if (m_ctsCorEnable) {
+        LogInfo("    CTS COR Port: %s", m_ctsCorPort.c_str());
+        LogInfo("    CTS COR Invert: %s (%s triggers)", m_ctsCorInvert ? "yes" : "no", m_ctsCorInvert ? "LOW" : "HIGH");
+        LogInfo("    CTS COR Holdoff: %u ms", m_ctsCorHoldoffMs);
     }
 
     if (m_debug) {
@@ -3145,17 +3143,22 @@ void* HostBridge::threadAudioProcess(void* arg)
                 // When COR is active, we need to send frames continuously when audio data is available
                 // The audio callback should be continuously feeding data, so we should always have data available
                 bool hasAudioData = bridge->m_inputAudio.dataSize() >= AUDIO_SAMPLES_LENGTH;
-                
-                // Process if we have audio data
-                // When COR is active: process whenever we have data (which should be continuous)
-                // When COR is not active: only process when VOX detects audio (normal mode)
                 bool shouldProcess = false;
-                if (bridge->m_ctsCorActive && bridge->m_audioDetect) {
-                    // COR is active: process whenever we have audio data (continuous transmission)
-                    shouldProcess = hasAudioData;
-                } else if (!bridge->m_ctsCorActive && bridge->m_audioDetect) {
-                    // Normal VOX mode: process when we have audio data
-                    shouldProcess = hasAudioData;
+
+                if (!bridge->m_ctsCorEnable)
+                    shouldProcess = true;
+                else {
+                    // When COR is active: process whenever we have data (which should be continuous)
+                    // When COR is not active: only process when VOX detects audio (normal mode)
+                    if (bridge->m_ctsCorActive && bridge->m_audioDetect) {
+                        // COR is active: process whenever we have audio data (continuous transmission)
+                        shouldProcess = hasAudioData;
+
+                    }
+                    else if (!bridge->m_ctsCorActive && bridge->m_audioDetect) {
+                        // Normal VOX mode: process when we have audio data
+                        shouldProcess = hasAudioData;
+                    }
                 }
 
                 if (shouldProcess && hasAudioData) {
