@@ -57,6 +57,12 @@ network:
     # Flag indicating whether or not verbose debug logging is enabled.
     debug: false
 
+    #
+    # UDP Audio Transport Configuration
+    #   NOTE: Validate the UDP Audio Configuration section below when using UDP audio. Bridge does *not*
+    #     by default, perform any timing for UDP audio, so proper configuration is required.
+    #
+
     # Enable PCM audio over UDP.
     udpAudio: false
     # Enable meta data such as dstId and srcId in the UDP data.
@@ -70,6 +76,12 @@ network:
     # PCM over UDP receive address.
     udpReceiveAddress: "127.0.0.1"
 
+    #
+    # UDP Audio Configuration
+    #   NOTE: When configuring UDP audio for back-to-back transcoding, it is highly recommended to
+    #     enable 'udpRTPFrames' and 'udpUseULaw' to ensure proper timing and framing of audio packets.
+    #
+
     # Flag indicating UDP audio should be encoded using G.711 uLaw.
     udpUseULaw: false
     # Flag indicating UDP audio should be transmitted without the length leader.
@@ -82,10 +94,13 @@ network:
     udpUsrp: false
 
     # Flag indicating UDP audio frame timing will be performed at the bridge.
-    #   (This allows the sending source to send audio as fast as it wants.)
+    #   (This allows the sending source to send audio as fast as it wants. This should not be used in combination
+    #    with 'udpRTPFrames'.)
     udpFrameTiming: false
 
-    # Traffic Encryption
+    #
+    # Traffic Encryption Key (TEK) Configuration
+    #
     tek:
       # Flag indicating whether or not traffic encryption is enabled.
       enable: false
