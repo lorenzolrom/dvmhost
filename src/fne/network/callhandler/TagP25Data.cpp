@@ -755,6 +755,7 @@ bool TagP25Data::processGrantReq(uint32_t srcId, uint32_t dstId, bool unitToUnit
     } 
 
     // repeat traffic to the connected peers
+    m_network->m_peers.shared_lock();
     if (m_network->m_peers.size() > 0U) {
         for (auto peer : m_network->m_peers) {
             if (peerId != peer.first) {
@@ -762,6 +763,7 @@ bool TagP25Data::processGrantReq(uint32_t srcId, uint32_t dstId, bool unitToUnit
             }
         }
     }
+    m_network->m_peers.shared_unlock();
 
     return true;
 }
@@ -820,8 +822,19 @@ void TagP25Data::playbackParrot()
                 UInt8Array message = m_network->createP25_TDUMessage(messageLength, control, lsd, controlByte);
                 if (message != nullptr) {
                     if (m_network->m_parrotOnlyOriginating) {
+                        uint32_t targetPeerId = pkt.peerId;
+
+                        // check if this peer is a VC peer (ccPeerId non-zero), and if so
+                        // redirect the grant demand to its CC peer
+                        m_network->m_peers.shared_lock();
+                        auto it = m_network->m_peers.find(pkt.peerId);
+                        if (it != m_network->m_peers.end() && it->second->ccPeerId() > 0) {
+                            targetPeerId = it->second->ccPeerId();
+                        }
+                        m_network->m_peers.shared_unlock();
+
                         LogInfoEx(LOG_P25, "Parrot Grant Demand, peer = %u, srcId = %u, dstId = %u", pkt.peerId, srcId, dstId);
-                        m_network->writePeer(pkt.peerId, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25 }, message.get(), messageLength,
+                        m_network->writePeer(targetPeerId, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25 }, message.get(), messageLength,
                             RTP_END_OF_CALL_SEQ, m_network->createStreamId());
                     } else {
                         // repeat traffic to the connected peers
@@ -842,10 +855,47 @@ void TagP25Data::playbackParrot()
         m_lastParrotDstId = pkt.dstId;
 
         if (m_network->m_parrotOnlyOriginating) {
-            m_network->writePeer(pkt.peerId, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25 }, pkt.buffer, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
-            if (m_network->m_debug) {
-                LogDebugEx(LOG_P25, "TagP25Data::playbackParrot()", "Parrot, dstPeer = %u, len = %u, pktSeq = %u, streamId = %u", 
-                    pkt.peerId, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
+            uint32_t ccPeerId = 0U;
+
+            // check if this peer is a VC peer (ccPeerId non-zero), and if so
+            // determine its CC peer ID
+            m_network->m_peers.shared_lock();
+            auto it = m_network->m_peers.find(pkt.peerId);
+            if (it != m_network->m_peers.end() && it->second->ccPeerId() > 0) {
+                ccPeerId = it->second->ccPeerId();
+            }
+            m_network->m_peers.shared_unlock();
+
+            // if we have a CC peer ID repeat the parrot traffic to all its connected VC peers
+            if (ccPeerId > 0U && m_network->m_ccPeerMap.find(ccPeerId) != m_network->m_ccPeerMap.end()) {
+                m_network->m_ccPeerMap.shared_lock();
+
+                // repeat traffic to the connected VC peers
+                uint32_t i = 0U;
+                udp::BufferQueue queue = udp::BufferQueue();
+
+                for (auto peer : m_network->m_ccPeerMap[ccPeerId]) {
+                    // every MAX_QUEUED_PEER_MSGS peers flush the queue
+                    if (i % MAX_QUEUED_PEER_MSGS == 0U) {
+                        m_network->m_frameQueue->flushQueue(&queue);
+                    }
+
+                    m_network->writePeerQueue(&queue, peer, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25 }, pkt.buffer, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
+                    if (m_network->m_debug) {
+                        LogDebug(LOG_P25, "TagP25Data::playbackParrot()", "Parrot, dstPeer = %u, len = %u, pktSeq = %u, streamId = %u", 
+                            peer, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
+                    }
+
+                    i++;
+                }
+                m_network->m_frameQueue->flushQueue(&queue);
+                m_network->m_ccPeerMap.shared_unlock();
+            } else {
+                m_network->writePeer(pkt.peerId, pkt.peerId, { NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25 }, pkt.buffer, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
+                if (m_network->m_debug) {
+                    LogDebugEx(LOG_P25, "TagP25Data::playbackParrot()", "Parrot, dstPeer = %u, len = %u, pktSeq = %u, streamId = %u", 
+                        pkt.peerId, pkt.bufferLen, pkt.pktSeq, pkt.streamId);
+                }
             }
         } else {
             // repeat traffic to the connected peers

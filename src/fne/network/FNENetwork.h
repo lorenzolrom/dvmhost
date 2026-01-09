@@ -340,7 +340,7 @@ namespace network
         concurrent::unordered_map<uint32_t, json::array> m_peerReplicaPeers;
         typedef std::pair<const uint32_t, lookups::AffiliationLookup*> PeerAffiliationMapPair;
         concurrent::unordered_map<uint32_t, fne_lookups::AffiliationLookup*> m_peerAffiliations;
-        concurrent::unordered_map<uint32_t, std::vector<uint32_t>> m_ccPeerMap;
+        concurrent::shared_unordered_map<uint32_t, std::vector<uint32_t>> m_ccPeerMap;
         static std::timed_mutex s_keyQueueMutex;
         std::unordered_map<uint32_t, uint16_t> m_peerReplicaKeyQueue;
 
