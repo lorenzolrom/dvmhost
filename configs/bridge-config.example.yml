@@ -82,18 +82,16 @@ network:
     #     enable 'udpRTPFrames' and 'udpUseULaw' to ensure proper timing and framing of audio packets.
     #
 
-    # Flag indicating UDP audio should be encoded using G.711 uLaw.
-    udpUseULaw: false
-    # Flag indicating UDP audio should be transmitted without the length leader.
-    #   NOTE: This flag is only applicable when encoding G.711 uLaw.
-    udpNoIncludeLength: false
     # Flag indicating UDP audio should be RTP framed.
-    #   NOTE: This flag is only applicable when encoding G.711 uLaw.
-    udpRTPFrames: false
+    udpRTPFrames: true
+    # Flag indicating UDP audio should be encoded using G.711 uLaw.
+    #   NOTE: This flag is only applicable when sending audio via RTP.
+    udpUseULaw: true
+
     # Flag indicating UDP audio should follow the USRP format.
     udpUsrp: false
 
-    # Flag indicating UDP audio frame timing will be performed at the bridge.
+    # Flag indicating UDP audio frame timing will be performed by the bridge.
     #   (This allows the sending source to send audio as fast as it wants. This should not be used in combination
     #    with 'udpRTPFrames'.)
     udpFrameTiming: false

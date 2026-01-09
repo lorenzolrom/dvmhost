@@ -155,9 +155,9 @@ private:
     std::string m_udpSendAddress;
     uint16_t m_udpReceivePort;
     std::string m_udpReceiveAddress;
-    bool m_udpNoIncludeLength;
-    bool m_udpUseULaw;
+
     bool m_udpRTPFrames;
+    bool m_udpUseULaw;
     bool m_udpUsrp;
     bool m_udpFrameTiming;
     uint32_t m_udpFrameCnt;
@@ -253,7 +253,7 @@ private:
 
     bool m_mtNoSleep;
 
-    bool m_running;
+    static bool s_running;
     bool m_trace;
     bool m_debug;
 
@@ -428,6 +428,15 @@ private:
      * @brief Helper to process UDP audio.
      */
     void processUDPAudio();
+
+    /**
+     * @brief Helper to write UDP audio to the UDP audio socket.
+     * @param srcId Source ID.
+     * @param dstId Destination ID.
+     * @param pcm PCM audio buffer.
+     * @param pcmLength Length of PCM audio buffer.
+     */
+    void writeUDPAudio(uint32_t srcId, uint32_t dstId, uint8_t* pcm, uint32_t pcmLength);
 
     /**
      * @brief Helper to process an In-Call Control message.
