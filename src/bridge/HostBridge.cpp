@@ -2865,7 +2865,6 @@ void HostBridge::callEnd(uint32_t srcId, uint32_t dstId)
                 LogInfoEx(LOG_HOST, DMR_DT_TERMINATOR_WITH_LC ", slot = %u, dstId = %u", m_slot, dstId);
 
                 m_network->writeDMRTerminator(data, &m_dmrSeqNo, &m_dmrN, m_dmrEmbeddedData);
-                m_network->resetDMR(data.getSlotNo());
             }
             break;
         case TX_MODE_P25:
@@ -2883,7 +2882,6 @@ void HostBridge::callEnd(uint32_t srcId, uint32_t dstId)
 
                 uint8_t controlByte = 0x00U;
                 m_network->writeP25TDU(lc, lsd, controlByte);
-                m_network->resetP25();
             }
             break;
         case TX_MODE_ANALOG:
@@ -2903,7 +2901,6 @@ void HostBridge::callEnd(uint32_t srcId, uint32_t dstId)
                 analogData.setAudio(pcm);
 
                 m_network->writeAnalog(analogData, true);
-                m_network->resetAnalog();
             }
             break;
         }
@@ -2935,6 +2932,10 @@ void HostBridge::callEnd(uint32_t srcId, uint32_t dstId)
 
     m_p25Crypto->clearMI();
     m_p25Crypto->resetKeystream();
+
+    m_network->resetDMR(m_slot);
+    m_network->resetP25();
+    m_network->resetAnalog();
 }
 
 /* Helper to process a FNE KMM TEK response. */
