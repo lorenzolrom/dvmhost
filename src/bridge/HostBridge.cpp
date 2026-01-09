@@ -242,7 +242,6 @@ HostBridge::HostBridge(const std::string& confFile) :
     m_rxStreamId(0U),
     m_txStreamId(0U),
     m_detectedSampleCnt(0U),
-    m_dumpSampleLevel(false),
     m_trace(false),
     m_debug(false),
     m_rtsPttEnable(false),
@@ -959,8 +958,6 @@ bool HostBridge::readParams()
     m_preambleTone = (uint16_t)systemConf["preambleTone"].as<uint32_t>(2175);
     m_preambleLength = (uint16_t)systemConf["preambleLength"].as<uint32_t>(200);
 
-    m_dumpSampleLevel = systemConf["dumpSampleLevel"].as<bool>(false);
-
     m_grantDemand = systemConf["grantDemand"].as<bool>(false);
 
     m_localAudio = systemConf["localAudio"].as<bool>(true);
@@ -1000,7 +997,6 @@ bool HostBridge::readParams()
     LogInfo("    Generate Preamble Tone: %s", m_preambleLeaderTone ? "yes" : "no");
     LogInfo("    Preamble Tone: %uhz", m_preambleTone);
     LogInfo("    Preamble Tone Length: %ums", m_preambleLength);
-    LogInfo("    Dump Sample Levels: %s", m_dumpSampleLevel ? "yes" : "no");
     LogInfo("    Grant Demands: %s", m_grantDemand ? "yes" : "no");
     LogInfo("    Local Audio: %s", m_localAudio ? "yes" : "no");
     LogInfo("    UDP Audio: %s", m_udpAudio ? "yes" : "no");
@@ -3055,12 +3051,12 @@ void* HostBridge::threadAudioProcess(void* arg)
                     }
                     maxSample = maxSample / 1000;
 
-                    if (bridge->m_dumpSampleLevel && bridge->m_detectedSampleCnt > 50U) {
+                    if (g_dumpSampleLevels && bridge->m_detectedSampleCnt > 50U) {
                         bridge->m_detectedSampleCnt = 0U;
                         ::LogInfoEx(LOG_HOST, "Detected Sample Level: %.2f", maxSample * 1000);
                     }
 
-                    if (bridge->m_dumpSampleLevel) {
+                    if (g_dumpSampleLevels) {
                         bridge->m_detectedSampleCnt++;
                     }
 

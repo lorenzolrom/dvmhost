@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2024,2026 Bryan Biedenkapp, N2PLL
  *
  */
 #include "Defines.h"
@@ -47,6 +47,8 @@ bool g_hideMessages = false;
 
 int g_inputDevice = -1;
 int g_outputDevice = -1;
+
+bool g_dumpSampleLevels = false;
 
 uint8_t* g_gitHashBytes = nullptr;
 
@@ -116,6 +118,7 @@ void usage(const char* message, const char* arg)
         "\n"
         "  -i        input audio device\n"
         "  -o        output audio device\n"
+        "  -level    dump sample levels\n"
 #ifdef _WIN32
         "\n"
         "  -winmm    use WinMM audio on Windows\n"
@@ -211,6 +214,9 @@ int checkArgs(int argc, char* argv[])
             g_backends[2] = ma_backend_null;
         }
 #endif
+        else if (IS("-level")) {
+            g_dumpSampleLevels = true;
+        }
         else if (IS("-v")) {
             ::fprintf(stdout, __PROG_NAME__ " %s (built %s)\r\n", __VER__, __BUILD__);
             ::fprintf(stdout, "Copyright (c) 2017-2026 Bryan Biedenkapp, N2PLL and DVMProject (https://github.com/dvmproject) Authors.\n");

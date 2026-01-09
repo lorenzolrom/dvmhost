@@ -249,7 +249,6 @@ private:
     uint32_t m_txStreamId;
 
     uint8_t m_detectedSampleCnt;
-    bool m_dumpSampleLevel;
 
     static bool s_running;
     bool m_trace;

@@ -175,9 +175,6 @@ system:
     # Amount of time (ms) to transmit preamble tone.
     preambleLength: 200
 
-    # Flag indicating the detected VOX sample level should be dumped to the log (useful for setting VOX levels).
-    dumpSampleLevel: false
-
     # Flag indicating whether a network grant demand packet will be sent before audio.
     grantDemand: false
 
