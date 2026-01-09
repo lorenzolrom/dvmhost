@@ -119,7 +119,7 @@ private:
     uint32_t m_netId;
     uint32_t m_sysId;
 
-    bool m_running;
+    static bool s_running;
     bool m_trace;
     bool m_debug;
 

@@ -58,6 +58,7 @@ using namespace network::udp;
 // ---------------------------------------------------------------------------
 
 std::mutex HostPatch::s_networkMutex;
+bool HostPatch::s_running = false;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -106,7 +107,6 @@ HostPatch::HostPatch(const std::string& confFile) :
     m_p25DstCrypto(nullptr),
     m_netId(P25DEF::WACN_STD_DEFAULT),
     m_sysId(P25DEF::SID_STD_DEFAULT),
-    m_running(false),
     m_trace(false),
     m_debug(false)
 {
@@ -237,7 +237,7 @@ int HostPatch::run()
 
     ::LogInfoEx(LOG_HOST, "Patch is up and running");
 
-    m_running = true;
+    s_running = true;
 
     StopWatch stopWatch;
     stopWatch.start();
@@ -283,6 +283,8 @@ int HostPatch::run()
         if (ms < 2U)
             Thread::sleep(1U);
     }
+
+    s_running = false;
 
     ::LogSetNetwork(nullptr);
     if (m_network != nullptr) {
@@ -2096,8 +2098,9 @@ void* HostPatch::threadNetworkProcess(void* arg)
 #endif // _GNU_SOURCE
 
         while (!g_killed) {
-            if (!patch->m_running) {
-                Thread::sleep(1U);
+            if (!HostPatch::s_running) {
+                LogError(LOG_HOST, "HostPatch::threadNetworkProcess(), thread not running");
+                Thread::sleep(1000U);
                 continue;
             }
 
@@ -2186,8 +2189,9 @@ void* HostPatch::threadMMDVMProcess(void* arg)
         stopWatch.start();
 
         while (!g_killed) {
-            if (!patch->m_running) {
-                Thread::sleep(1U);
+            if (!HostPatch::s_running) {
+                LogError(LOG_HOST, "HostPatch::threadMMDVMProcess(), thread not running");
+                Thread::sleep(1000U);
                 continue;
             }
 
