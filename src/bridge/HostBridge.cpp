@@ -2873,7 +2873,7 @@ void HostBridge::encodeAnalogAudioFrame(uint8_t* pcm, uint32_t forcedSrcId, uint
     analogData.setAudio(outPcm);
 
     if (analogData.getFrameType() == AudioFrameType::VOICE) {
-        LogInfoEx(LOG_NET, ANO_VOICE ", audio, srcId = %u, dstId = %u, seqNo = %u", srcId, dstId, analogData.getSeqNo());
+        LogInfoEx(LOG_HOST, ANO_VOICE ", audio, srcId = %u, dstId = %u, seqNo = %u", srcId, dstId, analogData.getSeqNo());
     }
 
     m_network->writeAnalog(analogData);
