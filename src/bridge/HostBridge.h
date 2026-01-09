@@ -251,8 +251,6 @@ private:
     uint8_t m_detectedSampleCnt;
     bool m_dumpSampleLevel;
 
-    bool m_mtNoSleep;
-
     static bool s_running;
     bool m_trace;
     bool m_debug;

@@ -243,7 +243,6 @@ HostBridge::HostBridge(const std::string& confFile) :
     m_txStreamId(0U),
     m_detectedSampleCnt(0U),
     m_dumpSampleLevel(false),
-    m_mtNoSleep(false),
     m_trace(false),
     m_debug(false),
     m_rtsPttEnable(false),
@@ -620,7 +619,7 @@ int HostBridge::run()
         if (m_udpAudio && m_udpAudioSocket != nullptr)
             processUDPAudio();
 
-        if (ms < 2U && !m_mtNoSleep)
+        if (ms < 2U)
             Thread::sleep(1U);
     }
 
@@ -1313,8 +1312,6 @@ void HostBridge::processUDPAudio()
         return;
 
     if (length > 0) {
-        m_mtNoSleep = true; // make main thread run as fast as possible
-
         if (m_debug && m_trace)
             Utils::dump(1U, "HostBridge()::processUDPAudio(), Audio Network Packet", buffer, length);
 
@@ -1371,9 +1368,6 @@ void HostBridge::processUDPAudio()
 
         req->dstId = m_dstId;
         m_udpPackets.push_back(req);
-    }
-    else {
-        m_mtNoSleep = false; // restore main thread sleeping if no pending packets
     }
 }
 
