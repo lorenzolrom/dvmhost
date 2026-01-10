@@ -46,7 +46,7 @@ const uint32_t MAX_RID_LIST_CHUNK = 50U;
 
 const uint32_t MAX_MISSED_ACL_UPDATES = 10U;
 
-const uint64_t PACKET_LATE_TIME = 200U; // 200ms
+const uint64_t PACKET_LATE_TIME = 250U; // 250ms
 
 const uint32_t FIXED_HA_UPDATE_INTERVAL = 30U; // 30s
 
@@ -908,11 +908,11 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
             uint32_t ssrc = req->rtpHeader.getSSRC();
             uint32_t streamId = req->fneHeader.getStreamId();
 
-            // determine if this packet is late (i.e. are we processing this packet more than 200ms after it was received?)
+            // determine if this packet is late (i.e. are we processing this packet more than 250ms after it was received?)
             uint64_t dt = req->pktRxTime + PACKET_LATE_TIME;
             if (dt < now) {
                 std::string peerIdentity = network->resolvePeerIdentity(peerId);
-                LogWarning(LOG_MASTER, "PEER %u (%s) packet processing latency >200ms, ssrc = %u, dt = %u, now = %u", peerId, peerIdentity.c_str(),
+                LogWarning(LOG_MASTER, "PEER %u (%s) packet processing latency >250ms, ssrc = %u, dt = %u, now = %u", peerId, peerIdentity.c_str(),
                     ssrc, dt, now);
             }
 
