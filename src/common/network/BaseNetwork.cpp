@@ -766,18 +766,16 @@ UInt8Array BaseNetwork::readP25P2(bool& ret, uint32_t& frameLength)
 
 /* Writes P25 Phase 2 frame data to the network. */
 
-bool BaseNetwork::writeP25P2(const p25::lc::LC& control, p25::defines::P2_DUID::E duid, bool slot, const uint8_t* data,
+bool BaseNetwork::writeP25P2(const p25::lc::LC& control, p25::defines::P2_DUID::E duid, uint8_t slot, const uint8_t* data,
     const uint8_t controlByte)
 {
     if (m_status != NET_STAT_RUNNING && m_status != NET_STAT_MST_RUNNING)
         return false;
 
-    uint8_t slotNo = slot ? 0x00U : 0x01U;
-
     bool resetSeq = false;
-    if (m_p25P2StreamId[slotNo] = 0U) {
+    if (m_p25P2StreamId[slot] = 0U) {
         resetSeq = true;
-        m_p25P2StreamId[slotNo] = createStreamId();
+        m_p25P2StreamId[slot] = createStreamId();
     }
 
     uint32_t messageLength = 0U;
@@ -786,7 +784,7 @@ bool BaseNetwork::writeP25P2(const p25::lc::LC& control, p25::defines::P2_DUID::
         return false;
     }
 
-    return writeMaster({ NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25_P2 }, message.get(), messageLength, pktSeq(resetSeq), m_p25P2StreamId[slotNo]);
+    return writeMaster({ NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25_P2 }, message.get(), messageLength, pktSeq(resetSeq), m_p25P2StreamId[slot]);
 }
 
 /* Helper to test if the P25 ring buffer has data. */

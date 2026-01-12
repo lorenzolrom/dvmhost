@@ -861,12 +861,12 @@ namespace network
          * @brief Writes P25 Phase 2 frame data to the network.
          * @param[in] control Instance of p25::lc::LC containing link control data.
          * @param[in] duid P25 Phase 2 DUID type.
-         * @param[in] slot DMR slot number.
+         * @param[in] slot P25 Phase 2 slot number.
          * @param[in] data Buffer containing P25 Phase 2 data to send.
          * @param[in] controlByte DVM control byte.
          * @returns bool True, if message was sent, otherwise false.
          */
-        virtual bool writeP25P2(const p25::lc::LC& control, p25::defines::P2_DUID::E duid, bool slot, const uint8_t* data,
+        virtual bool writeP25P2(const p25::lc::LC& control, p25::defines::P2_DUID::E duid, uint8_t slot, const uint8_t* data,
             const uint8_t controlByte = 0U);
 
         /**
