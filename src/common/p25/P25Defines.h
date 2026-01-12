@@ -860,7 +860,8 @@ namespace p25
                 UNIQUE = 0x00U,                         //!< Unique
 
                 ABBREVIATED = 0x40U,                    //!< Abbreviate
-                EXPLICIT = 0xC0U,                       //!< Explicit
+                MFID_SPECIFIC = 0x80U,                  //!< MFID Specific
+                EXPLICIT = 0xC0U                        //!< Explicit
             };
         }
 
