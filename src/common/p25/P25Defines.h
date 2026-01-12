@@ -871,9 +871,13 @@ namespace p25
             /** @brief Phase 2 MAC PDU Opcode(s) */
             enum : uint8_t {
             // MAC PDU ISP/OSP Shared Opcode(s) (Unique Partition)
-                IOSP_NULL = 0x00U,                      //!< Null MAC
-                IOSP_GRP_VCH = 0x01U,                   //!< GRP VCH REQ - Group Voice Channel Request (ISP), GRP VCH GRANT - Group Voice Channel Grant (OSP)
-                IOSP_UU_VCH = 0x02U,                    //!< UU VCH REQ - Unit-to-Unit Voice Channel Request (ISP), UU VCH GRANT - Unit-to-Unit Voice Channel Grant (OSP)
+                PDU_NULL = 0x00U,                       //!< Null MAC
+
+                GROUP = 0x01U,                          //!< GRP VCH USER - Group Voice Channel User
+                PRIVATE = 0x02U,                        //!< UU VCH USER - Unit-to-Unit Voice Channel User
+                TEL_INT_VCH_USER = 0x03U,               //!< TEL INT VCH USER - Telephone Interconnect Voice Channel User
+
+                MAC_RELEASE = 0x61U,                    //!< MAC RELEASE - MAC Release
 
             /* Any abbreviated or explicit partition opcodes are essentially just TSBKO's. */
             };
