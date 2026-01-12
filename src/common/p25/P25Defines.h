@@ -874,20 +874,7 @@ namespace p25
                 IOSP_GRP_VCH = 0x01U,                   //!< GRP VCH REQ - Group Voice Channel Request (ISP), GRP VCH GRANT - Group Voice Channel Grant (OSP)
                 IOSP_UU_VCH = 0x02U,                    //!< UU VCH REQ - Unit-to-Unit Voice Channel Request (ISP), UU VCH GRANT - Unit-to-Unit Voice Channel Grant (OSP)
 
-            // MAC PDU ISP/OSP Shared Opcode(s) (Abbreviated or Explicit)
-                IOSP_UU_ANS = 0x05U,                    //!< UU ANS RSP - Unit-to-Unit Answer Response (ISP), UU ANS REQ - Unit-to-Unit Answer Request (OSP)
-                IOSP_CALL_ALRT = 0x1FU,                 //!< CALL ALRT REQ - Call Alert Request (ISP), CALL ALRT - Call Alert (OSP)
-                IOSP_ACK_RSP = 0x20U,                   //!< ACK RSP U - Acknowledge Response - Unit (ISP), ACK RSP FNE - Acknowledge Response - FNE (OSP)
-                IOSP_EXT_FNCT = 0x24U,                  //!< EXT FNCT RSP - Extended Function Response (ISP), EXT FNCT CMD - Extended Function Command (OSP)
-
-            // MAC PDU Inbound Signalling Packet (ISP) Opcode(s) (Abbreviated or Explicit)
-                ISP_CAN_SRV_REQ = 0x23U,                //!< CAN SRV REQ - Cancel Service Request
-
-            // MAC PDU Outbound Signalling Packet (OSP) Opcode(s) (Abbreviated or Explicit)
-                OSP_GRP_VCH_GRANT_UPD = 0x02U,          //!< GRP VCH GRANT UPD - Group Voice Channel Grant Update
-                OSP_UU_VCH_GRANT_UPD = 0x06U,           //!< UU VCH GRANT UPD - Unit-to-Unit Voice Channel Grant Update
-                OSP_QUE_RSP = 0x21U,                    //!< QUE RSP - Queued Response
-                OSP_DENY_RSP = 0x27U,                   //!< DENY RSP - Deny Response
+            /* Any abbreviated or explicit partition opcodes are essentially just TSBKO's. */
             };
         }
 
