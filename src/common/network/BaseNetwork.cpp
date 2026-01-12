@@ -54,6 +54,7 @@ BaseNetwork::BaseNetwork(uint32_t peerId, bool duplex, bool debug, bool slot1, b
     m_frameQueue(nullptr),
     m_rxDMRData(NET_RING_BUF_SIZE, "DMR Net Buffer"),
     m_rxP25Data(NET_RING_BUF_SIZE, "P25 Net Buffer"),
+    m_rxP25P2Data(NET_RING_BUF_SIZE, "P25 Phase 2 Net Buffer"),
     m_rxNXDNData(NET_RING_BUF_SIZE, "NXDN Net Buffer"),
     m_rxAnalogData(NET_RING_BUF_SIZE, "Analog Net Buffer"),
     m_random(),
@@ -77,6 +78,9 @@ BaseNetwork::BaseNetwork(uint32_t peerId, bool duplex, bool debug, bool slot1, b
     m_dmrStreamId[0U] = createStreamId();
     m_dmrStreamId[1U] = createStreamId();
     m_p25StreamId = createStreamId();
+    m_p25P2StreamId = new uint32_t[2U];
+    m_p25P2StreamId[0U] = createStreamId();
+    m_p25P2StreamId[1U] = createStreamId();
     m_nxdnStreamId = createStreamId();
     m_analogStreamId = createStreamId();
 }
@@ -94,6 +98,7 @@ BaseNetwork::~BaseNetwork()
     }
 
     delete[] m_dmrStreamId;
+    delete[] m_p25P2StreamId;
 }
 
 /* Writes grant request to the network. */
@@ -371,6 +376,27 @@ void BaseNetwork::resetP25()
     m_rxP25Data.clear();
 }
 
+/* Resets the P25 Phase 2 ring buffer for the given slot. */
+
+void BaseNetwork::resetP25P2(uint32_t slotNo)
+{
+    assert(slotNo == 1U || slotNo == 2U);
+
+    if (slotNo == 1U) {
+        m_p25P2StreamId[0U] = createStreamId();
+    }
+    else {
+        m_p25P2StreamId[1U] = createStreamId();
+    }
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "BaseNetwork::resetP25P2()", "reset P25 Phase 2 Slot %u stream ID, streamId = %u", slotNo, 
+            (slotNo == 1U) ? m_p25P2StreamId[0U] : m_p25P2StreamId[1U]);
+
+    m_pktSeq = 0U;
+    m_rxP25P2Data.clear();
+}
+
 /* Resets the NXDN ring buffer. */
 
 void BaseNetwork::resetNXDN()
@@ -408,6 +434,20 @@ uint32_t BaseNetwork::getDMRStreamId(uint32_t slotNo) const
     }
     else {
         return m_dmrStreamId[1U];
+    }
+}
+
+/* Gets the current P25 Phase 2 stream ID. */
+
+uint32_t BaseNetwork::getP25P2StreamId(uint32_t slotNo) const
+{
+    assert(slotNo == 1U || slotNo == 2U);
+
+    if (slotNo == 1U) {
+        return m_p25P2StreamId[0U];
+    }
+    else {
+        return m_p25P2StreamId[1U];
     }
 }
 
@@ -695,11 +735,75 @@ bool BaseNetwork::writeP25PDU(const p25::data::DataHeader& header, const uint8_t
     return writeMaster({ NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25 }, message.get(), messageLength, seq, m_p25StreamId);
 }
 
+/* Reads P25 raw frame data from the P25 ring buffer. */
+
+UInt8Array BaseNetwork::readP25P2(bool& ret, uint32_t& frameLength)
+{
+    if (m_status != NET_STAT_RUNNING && m_status != NET_STAT_MST_RUNNING)
+        return nullptr;
+
+    ret = true;
+    if (m_rxP25P2Data.isEmpty()) {
+        ret = false;
+        return nullptr;
+    }
+
+    uint8_t length = 0U;
+    m_rxP25P2Data.get(&length, 1U);
+    if (length == 0U) {
+        ret = false;
+        return nullptr;
+    }
+
+    UInt8Array buffer;
+    frameLength = length;
+    buffer = std::unique_ptr<uint8_t[]>(new uint8_t[length]);
+    ::memset(buffer.get(), 0x00U, length);
+    m_rxP25P2Data.get(buffer.get(), length);
+
+    return buffer;
+}
+
+/* Writes P25 Phase 2 frame data to the network. */
+
+bool BaseNetwork::writeP25P2(const p25::lc::LC& control, p25::defines::P2_DUID::E duid, bool slot, const uint8_t* data,
+    const uint8_t controlByte)
+{
+    if (m_status != NET_STAT_RUNNING && m_status != NET_STAT_MST_RUNNING)
+        return false;
+
+    uint8_t slotNo = slot ? 0x00U : 0x01U;
+
+    bool resetSeq = false;
+    if (m_p25P2StreamId[slotNo] = 0U) {
+        resetSeq = true;
+        m_p25P2StreamId[slotNo] = createStreamId();
+    }
+
+    uint32_t messageLength = 0U;
+    UInt8Array message = createP25P2_Message(messageLength, control, duid, slot, data, controlByte);
+    if (message == nullptr) {
+        return false;
+    }
+
+    return writeMaster({ NET_FUNC::PROTOCOL, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25_P2 }, message.get(), messageLength, pktSeq(resetSeq), m_p25P2StreamId[slotNo]);
+}
+
 /* Helper to test if the P25 ring buffer has data. */
 
 bool BaseNetwork::hasP25Data() const
 {
     if (m_rxP25Data.isEmpty())
+        return false;
+
+    return true;
+}
+
+/* Helper to test if the P25 Phase 2 ring buffer has data. */
+
+bool BaseNetwork::hasP25P2Data() const
+{
+    if (m_rxP25P2Data.isEmpty())
         return false;
 
     return true;
@@ -1363,6 +1467,41 @@ UInt8Array BaseNetwork::createP25_PDUMessage(uint32_t& length, const p25::data::
 
     if (m_packetDump)
         Utils::dump(1U, "BaseNetwork::createP25_PDUMessage(), Message, PDU", buffer, (count + PACKET_PAD));
+
+    length = (count + PACKET_PAD);
+    return UInt8Array(buffer);
+}
+
+/* Creates an P25 Phase 2 frame message. */
+
+UInt8Array BaseNetwork::createP25P2_Message(uint32_t& length, const p25::lc::LC& control, p25::defines::P2_DUID::E duid, 
+            const bool slot, const uint8_t* data, uint8_t controlByte)
+{
+    using namespace p25::defines;
+    uint8_t* buffer = new uint8_t[DATA_PACKET_LENGTH];
+    ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
+
+    // create dummy low speed data
+    p25::data::LowSpeedData lsd = p25::data::LowSpeedData();
+
+    // construct P25 message header
+    createP25_MessageHdr(buffer, DUID::PDU, control, lsd, FrameType::DATA_UNIT);
+
+    buffer[14U] = controlByte;
+
+    buffer[19U] = slot ? 0x00U : 0x80U;                                         // Slot Number
+    buffer[19U] |= (uint8_t)duid;                                               // Phase 2 DUID
+
+    // pack raw P25 Phase 2 bytes
+    uint32_t count = MSG_HDR_SIZE;
+
+    ::memcpy(buffer + 24U, data, P25_P2_FRAME_LENGTH_BYTES);
+    count += P25_P2_FRAME_LENGTH_BYTES;
+
+    buffer[23U] = count;
+
+    if (m_packetDump)
+        Utils::dump(1U, "BaseNetwork::createP25P2_Message(), Message, Phase 2", buffer, (count + PACKET_PAD));
 
     length = (count + PACKET_PAD);
     return UInt8Array(buffer);

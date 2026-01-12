@@ -94,6 +94,9 @@ Network::Network(const std::string& address, uint16_t port, uint16_t localPort, 
     m_rxDMRStreamId[0U] = 0U;
     m_rxDMRStreamId[1U] = 0U;
     m_rxP25StreamId = 0U;
+    m_rxP25P2StreamId = new uint32_t[2U];
+    m_rxP25P2StreamId[0U] = 0U;
+    m_rxP25P2StreamId[1U] = 0U;
     m_rxNXDNStreamId = 0U;
     m_rxAnalogStreamId = 0U;
 
@@ -107,6 +110,7 @@ Network::~Network()
 {
     delete[] m_salt;
     delete[] m_rxDMRStreamId;
+    delete[] m_rxP25P2StreamId;
     delete m_metadata;
     delete m_mux;
 }
@@ -138,6 +142,24 @@ void Network::resetP25()
 
     if (m_debug)
         LogDebugEx(LOG_NET, "Network::resetP25()", "reset P25 rx stream ID");
+}
+
+/* Resets the P25 Phase 2 ring buffer for the given slot. */
+
+void Network::resetP25P2(uint32_t slotNo)
+{
+    assert(slotNo == 1U || slotNo == 2U);
+
+    BaseNetwork::resetP25P2(slotNo);
+    if (slotNo == 1U) {
+        m_rxP25P2StreamId[0U] = 0U;
+    }
+    else {
+        m_rxP25P2StreamId[1U] = 0U;
+    }
+
+    if (m_debug)
+        LogDebugEx(LOG_NET, "Network::resetP25P2()", "reset P25 Phase 2 Slot %u rx stream ID", slotNo);
 }
 
 /* Resets the NXDN ring buffer. */
@@ -503,6 +525,93 @@ void Network::clock(uint32_t ms)
                             }
 
                             m_rxP25Data.addData(buffer.get(), len);
+                        }
+                    }
+                    break;
+
+                case NET_SUBFUNC::PROTOCOL_SUBFUNC_P25_P2:              // Encapsulated DMR data frame
+                    {
+                        if (m_enabled && m_p25Enabled) {
+                            uint32_t slotNo = (buffer[19U] & 0x80U) == 0x80U ? 1U : 0U; // this is the raw index for the stream ID array
+
+                            if (m_debug) {
+                                LogDebug(LOG_NET, "P25 Phase 2 Slot %u, peer = %u, len = %u, pktSeq = %u, streamId = %u", 
+                                    slotNo + 1U, peerId, length, rtpHeader.getSequence(), streamId);
+                            }
+
+                            if (m_promiscuousPeer) {
+                                m_rxP25P2StreamId[slotNo] = streamId;
+                                m_pktLastSeq = m_pktSeq;
+
+                                uint16_t lastRxSeq = 0U;
+
+                                MULTIPLEX_RET_CODE ret = m_mux->verifyStream(streamId, rtpHeader.getSequence(), fneHeader.getFunction(), &lastRxSeq);
+                                if (ret == MUX_LOST_FRAMES) {
+                                    LogError(LOG_NET, "PEER %u stream %u possible lost frames; got %u, expected %u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq, rtpHeader.getSequence());
+                                }
+                                else if (ret == MUX_OUT_OF_ORDER) {
+                                    LogError(LOG_NET, "PEER %u stream %u out-of-order; got %u, expected >%u", peerId,
+                                        streamId, rtpHeader.getSequence(), lastRxSeq);
+                                }
+#if DEBUG_RTP_MUX
+                                else {
+                                    LogDebugEx(LOG_NET, "Network::clock()", "PEER %u valid mux, seq = %u, streamId = %u", peerId, rtpHeader.getSequence(), streamId);
+                                }
+#endif
+                            }
+                            else {
+                                if (m_rxP25P2StreamId[slotNo] == 0U) {
+                                    if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
+                                        m_rxP25P2StreamId[slotNo] = 0U;
+                                    }
+                                    else {
+                                        m_rxP25P2StreamId[slotNo] = streamId;
+                                    }
+
+                                    m_pktLastSeq = m_pktSeq;
+                                }
+                                else {
+                                    if (m_rxP25P2StreamId[slotNo] == streamId) {
+                                        uint16_t lastRxSeq = 0U;
+
+                                        MULTIPLEX_RET_CODE ret = verifyStream(&lastRxSeq);
+                                        if (ret == MUX_LOST_FRAMES) {
+                                            LogWarning(LOG_NET, "DMR Slot %u stream %u possible lost frames; got %u, expected %u", 
+                                                slotNo, streamId, m_pktSeq, lastRxSeq);
+                                        }
+                                        else if (ret == MUX_OUT_OF_ORDER) {
+                                            LogWarning(LOG_NET, "DMR Slot %u stream %u out-of-order; got %u, expected %u", 
+                                                slotNo, streamId, m_pktSeq, lastRxSeq);
+                                        }
+#if DEBUG_RTP_MUX
+                                        else {
+                                            LogDebugEx(LOG_NET, "Network::clock()", "P25 Phase 2 Slot %u valid seq, seq = %u, streamId = %u", slotNo, rtpHeader.getSequence(), streamId);
+                                        }
+#endif
+                                        if (rtpHeader.getSequence() == RTP_END_OF_CALL_SEQ) {
+                                            m_rxP25P2StreamId[slotNo] = 0U;
+                                        }
+                                    }
+                                }
+
+                                // check if we need to skip this stream -- a non-zero stream ID means the network client is locked
+                                // to receiving a specific stream; a zero stream ID means the network is promiscuously
+                                // receiving streams sent to this peer
+                                if (m_rxP25P2StreamId[slotNo] != 0U && m_rxP25P2StreamId[slotNo] != streamId &&
+                                    rtpHeader.getSequence() != RTP_END_OF_CALL_SEQ) {
+                                    break;
+                                }
+                            }
+
+                            if (m_packetDump)
+                                Utils::dump(1U, "Network::clock(), Network Rx, P25 Phase 2", buffer.get(), length);
+                            if (length > (int)(P25_P2_PACKET_LENGTH + PACKET_PAD))
+                                LogError(LOG_NET, "P25 Phase 2 Stream %u, frame oversized? this shouldn't happen, pktSeq = %u, len = %u", streamId, m_pktSeq, length);
+
+                            uint8_t len = length;
+                            m_rxP25P2Data.addData(&len, 1U);
+                            m_rxP25P2Data.addData(buffer.get(), len);
                         }
                     }
                     break;

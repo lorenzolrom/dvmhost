@@ -63,7 +63,7 @@ namespace p25
         const uint32_t  P25_TDULC_FRAME_LENGTH_BYTES = 54U;
         const uint32_t  P25_TDULC_FRAME_LENGTH_BITS = P25_TDULC_FRAME_LENGTH_BYTES * 8U;
 
-        const uint32_t  P25_P2_FRAME_LENGTH_BYTES = 45U;
+        const uint32_t  P25_P2_FRAME_LENGTH_BYTES = 40U;
         const uint32_t  P25_P2_FRAME_LENGTH_BITS = P25_P2_FRAME_LENGTH_BYTES * 8U;
 
         const uint32_t  P25_NID_LENGTH_BYTES = 8U;

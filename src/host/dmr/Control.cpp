@@ -723,11 +723,11 @@ void Control::processNetwork()
     }
 
     // Individual slot disabling
-    if (slotNo == 1U && !m_network->getDMRSlot1()) {
+    if (slotNo == 1U && !m_network->getSlot1()) {
         LogError(LOG_DMR, "DMR, invalid slot, slot 1 disabled, slotNo = %u", slotNo);
         return;
     }
-    if (slotNo == 2U && !m_network->getDMRSlot2()) {
+    if (slotNo == 2U && !m_network->getSlot2()) {
         LogError(LOG_DMR, "DMR, invalid slot, slot 2 disabled, slotNo = %u", slotNo);
         return;
     }
