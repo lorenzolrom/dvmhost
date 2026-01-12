@@ -5,7 +5,7 @@
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  *  Copyright (C) 2016 Jonathan Naylor, G4KLX
- *  Copyright (C) 2017-2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2017-2026 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -837,6 +837,60 @@ namespace p25
             };
         }
 
+        // TIA-102.BBAD-D Section 4.1
+        /** @brief Phase 2 MAC PDU Opcode(s) */
+        namespace P2_MAC_HEADER_OPCODE {
+            /** @brief Phase 2 MAC PDU Opcode(s) */
+            enum : uint8_t {
+                SIGNAL = 0x00U,                         //!<
+                PTT = 0x01U,                            //!< Push-To-Talk
+                END_PTT = 0x02U,                        //!< End Push-To-Talk
+                IDLE = 0x03U,                           //!< Idle
+                ACTIVE = 0x04U,                         //!< Active
+
+                HANGTIME = 0x06U,                       //!< Call Hangtime
+            };
+        }
+
+        // TIA-102.BBAD-D Section 3
+        /** @brief Phase 2 MAC MCO Partitioning */
+        namespace P2_MAC_MCO_PARTITION {
+            /** @brief Phase 2 MAC MCO Partitioning */
+            enum : uint8_t {
+                UNIQUE = 0x00U,                         //!< Unique
+
+                ABBREVIATED = 0x40U,                    //!< Abbreviate
+                EXPLICIT = 0xC0U,                       //!< Explicit
+            };
+        }
+
+        // TIA-102.BBAD-D Section 3
+        /** @brief Phase 2 MAC PDU Opcode(s) */
+        namespace P2_MAC_MCO {
+            /** @brief Phase 2 MAC PDU Opcode(s) */
+            enum : uint8_t {
+            // MAC PDU ISP/OSP Shared Opcode(s) (Unique Partition)
+                IOSP_NULL = 0x00U,                      //!< Null MAC
+                IOSP_GRP_VCH = 0x01U,                   //!< GRP VCH REQ - Group Voice Channel Request (ISP), GRP VCH GRANT - Group Voice Channel Grant (OSP)
+                IOSP_UU_VCH = 0x02U,                    //!< UU VCH REQ - Unit-to-Unit Voice Channel Request (ISP), UU VCH GRANT - Unit-to-Unit Voice Channel Grant (OSP)
+
+            // MAC PDU ISP/OSP Shared Opcode(s) (Abbreviated or Explicit)
+                IOSP_UU_ANS = 0x05U,                    //!< UU ANS RSP - Unit-to-Unit Answer Response (ISP), UU ANS REQ - Unit-to-Unit Answer Request (OSP)
+                IOSP_CALL_ALRT = 0x1FU,                 //!< CALL ALRT REQ - Call Alert Request (ISP), CALL ALRT - Call Alert (OSP)
+                IOSP_ACK_RSP = 0x20U,                   //!< ACK RSP U - Acknowledge Response - Unit (ISP), ACK RSP FNE - Acknowledge Response - FNE (OSP)
+                IOSP_EXT_FNCT = 0x24U,                  //!< EXT FNCT RSP - Extended Function Response (ISP), EXT FNCT CMD - Extended Function Command (OSP)
+
+            // MAC PDU Inbound Signalling Packet (ISP) Opcode(s) (Abbreviated or Explicit)
+                ISP_CAN_SRV_REQ = 0x23U,                //!< CAN SRV REQ - Cancel Service Request
+
+            // MAC PDU Outbound Signalling Packet (OSP) Opcode(s) (Abbreviated or Explicit)
+                OSP_GRP_VCH_GRANT_UPD = 0x02U,          //!< GRP VCH GRANT UPD - Group Voice Channel Grant Update
+                OSP_UU_VCH_GRANT_UPD = 0x06U,           //!< UU VCH GRANT UPD - Unit-to-Unit Voice Channel Grant Update
+                OSP_QUE_RSP = 0x21U,                    //!< QUE RSP - Queued Response
+                OSP_DENY_RSP = 0x27U,                   //!< DENY RSP - Deny Response
+            };
+        }
+
         // TIA-102.BAAC-D Section 2.11
         /** @brief Data Unit ID(s) */
         namespace DUID {
@@ -854,6 +908,7 @@ namespace p25
             };
         }
 
+        // TIA-102.BBAC-A Section 5.4.1
         /** @brief Phase 2 Data Unit ID(s) */
         namespace P2_DUID {
             /** @brief Data Unit ID(s) */
