@@ -773,7 +773,7 @@ bool BaseNetwork::writeP25P2(const p25::lc::LC& control, p25::defines::P2_DUID::
         return false;
 
     bool resetSeq = false;
-    if (m_p25P2StreamId[slot] = 0U) {
+    if (m_p25P2StreamId[slot] == 0U) {
         resetSeq = true;
         m_p25P2StreamId[slot] = createStreamId();
     }
