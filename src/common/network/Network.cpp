@@ -529,7 +529,7 @@ void Network::clock(uint32_t ms)
                     }
                     break;
 
-                case NET_SUBFUNC::PROTOCOL_SUBFUNC_P25_P2:              // Encapsulated DMR data frame
+                case NET_SUBFUNC::PROTOCOL_SUBFUNC_P25_P2:              // Encapsulated P25 Phase 2 data frame
                     {
                         if (m_enabled && m_p25Enabled) {
                             uint32_t slotNo = (buffer[19U] & 0x80U) == 0x80U ? 1U : 0U; // this is the raw index for the stream ID array
