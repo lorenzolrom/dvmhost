@@ -23,6 +23,7 @@
 #include "common/dmr/lc/PrivacyLC.h"
 #include "common/p25/Crypto.h"
 #include "common/network/udp/Socket.h"
+#include "common/network/RTPHeader.h"
 #include "common/yaml/Yaml.h"
 #include "common/RingBuffer.h"
 #include "common/Timer.h"
@@ -105,11 +106,13 @@ void mdcPacketDetected(int frameCount, mdc_u8_t op, mdc_u8_t arg, mdc_u16_t unit
  * @ingroup bridge
  */
 struct NetPacketRequest {
-    uint32_t srcId;                     //!< Source Address
-    uint32_t dstId;                     //!< Destination Address
+    uint32_t srcId;                         //!< Source Address
+    uint32_t dstId;                         //!< Destination Address
 
-    int pcmLength = 0U;                 //!< Length of PCM data buffer
-    uint8_t* pcm = nullptr;             //!< Raw PCM buffer
+    network::frame::RTPHeader rtpHeader;    //!< RTP Header
+
+    int pcmLength = 0U;                     //!< Length of PCM data buffer
+    uint8_t* pcm = nullptr;                 //!< Raw PCM buffer
 };
 
 // ---------------------------------------------------------------------------
@@ -157,6 +160,7 @@ private:
     std::string m_udpReceiveAddress;
 
     bool m_udpRTPFrames;
+    bool m_udpIgnoreRTPTiming;
     bool m_udpUseULaw;
     bool m_udpUsrp;
     bool m_udpFrameTiming;
@@ -274,6 +278,9 @@ private:
 
     uint16_t m_rtpSeqNo;
     uint32_t m_rtpTimestamp;
+
+    uint16_t m_udpNetPktSeq;
+    uint16_t m_udpNetLastPktSeq;
 
     uint32_t m_usrpSeqNo;
 

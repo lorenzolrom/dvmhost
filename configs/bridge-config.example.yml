@@ -84,6 +84,10 @@ network:
 
     # Flag indicating UDP audio should be RTP framed.
     udpRTPFrames: true
+    # Flag indicating UDP audio RTP timing should be ignored.
+    #   (This allows the sending source to send audio as fast as it wants. This should not be used in combination
+    #    with 'udpFrameTiming', and is intended for diagnostic purposes only.)
+    udpIgnoreRTPTiming: false
     # Flag indicating UDP audio should be encoded using G.711 uLaw.
     #   NOTE: This flag is only applicable when sending audio via RTP.
     udpUseULaw: true

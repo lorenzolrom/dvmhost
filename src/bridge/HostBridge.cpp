@@ -173,6 +173,7 @@ HostBridge::HostBridge(const std::string& confFile) :
     m_udpReceivePort(32001),
     m_udpReceiveAddress("127.0.0.1"),
     m_udpRTPFrames(false),
+    m_udpIgnoreRTPTiming(false),
     m_udpUseULaw(false),
     m_udpUsrp(false),
     m_udpFrameTiming(false),
@@ -259,6 +260,8 @@ HostBridge::HostBridge(const std::string& confFile) :
     m_ctsCorHoldoffMs(250U),
     m_rtpSeqNo(0U),
     m_rtpTimestamp(INVALID_TS),
+    m_udpNetPktSeq(0U),
+    m_udpNetLastPktSeq(0U),
     m_usrpSeqNo(0U)
 #if defined(_WIN32)
     ,
@@ -1051,6 +1054,7 @@ bool HostBridge::createNetwork()
     }
     
     m_udpRTPFrames = networkConf["udpRTPFrames"].as<bool>(false);
+    m_udpIgnoreRTPTiming = networkConf["udpIgnoreRTPTiming"].as<bool>(false);
     if (m_udpRTPFrames) {
         m_udpUsrp = false;              // RTP disabled USRP
         m_udpFrameTiming = false;
@@ -1060,6 +1064,9 @@ bool HostBridge::createNetwork()
             m_udpMetadata = false;      // metadata isn't supported when encoding uLaw
         }
     }
+
+    if (m_udpIgnoreRTPTiming)
+        ::LogWarning(LOG_HOST, "Ignoring RTP timing, audio frames will be processed as they arrive.");
 
     yaml::Node tekConf = networkConf["tek"];
     bool tekEnable = tekConf["enable"].as<bool>(false);
@@ -1202,6 +1209,7 @@ bool HostBridge::createNetwork()
         LogInfo("    UDP Audio RTP Framed: %s", m_udpRTPFrames ? "yes" : "no");
         if (m_udpRTPFrames) {
             LogInfo("    UDP Audio Use uLaw Encoding: %s", m_udpUseULaw ? "yes" : "no");
+            LogInfo("    UDP Audio Ignore RTP Timing: %s", m_udpIgnoreRTPTiming ? "yes" : "no");
         }
         LogInfo("    UDP Audio USRP: %s", m_udpUsrp ? "yes" : "no");
         LogInfo("    UDP Frame Timing: %s", m_udpFrameTiming ? "yes" : "no");
@@ -1318,15 +1326,45 @@ void HostBridge::processUDPAudio()
             pcmLength = AUDIO_SAMPLES_LENGTH_BYTES;
 
         DECLARE_UINT8_ARRAY(pcm, pcmLength);
+        RTPHeader rtpHeader = RTPHeader();
 
+        // are we setup for receiving RTP frames?
         if (m_udpRTPFrames) {
-            RTPHeader rtpHeader = RTPHeader();
             rtpHeader.decode(buffer);
 
             if (rtpHeader.getPayloadType() != RTP_G711_PAYLOAD_TYPE) {
                 LogError(LOG_HOST, "Invalid RTP payload type %u", rtpHeader.getPayloadType());
                 return;
             }
+
+            m_udpNetPktSeq = rtpHeader.getSequence();
+
+            if (m_udpNetPktSeq == RTP_END_OF_CALL_SEQ) {
+                // reset the received sequence back to 0
+                m_udpNetLastPktSeq = 0U;
+            }
+            else {
+                uint16_t lastRxSeq = m_udpNetLastPktSeq;
+
+                if ((m_udpNetPktSeq >= m_udpNetLastPktSeq) || (m_udpNetPktSeq == 0U)) {
+                    // if the sequence isn't 0, and is greater then the last received sequence + 1 frame
+                    // assume a packet was lost
+                    if ((m_udpNetPktSeq != 0U) && m_udpNetPktSeq > m_udpNetLastPktSeq + 1U) {
+                        LogWarning(LOG_NET, "audio possible lost frames; got %u, expected %u", 
+                            m_udpNetPktSeq, lastRxSeq);
+                    }
+
+                    m_udpNetPktSeq = m_udpNetPktSeq;
+                }
+                else {
+                    if (m_udpNetPktSeq < m_udpNetPktSeq) {
+                        LogWarning(LOG_NET, "audio out-of-order; got %u, expected %u", 
+                            m_udpNetPktSeq, lastRxSeq);
+                    }
+                }
+            }
+
+            m_udpNetLastPktSeq = m_udpNetPktSeq;
 
             ::memcpy(pcm, buffer + RTP_HEADER_LENGTH_BYTES, AUDIO_SAMPLES_LENGTH_BYTES);
         } else {
@@ -1350,6 +1388,7 @@ void HostBridge::processUDPAudio()
         ::memset(req->pcm, 0x00U, pcmLength);
         ::memcpy(req->pcm, pcm, pcmLength);
 
+        req->rtpHeader = rtpHeader;
         req->pcmLength = pcmLength;
 
         if (m_udpMetadata) {
@@ -1400,6 +1439,8 @@ void HostBridge::writeUDPAudio(uint32_t srcId, uint32_t dstId, uint8_t* pcm, uin
         }
 
         m_rtpSeqNo++;
+        if (m_rtpSeqNo == RTP_END_OF_CALL_SEQ)
+            m_rtpSeqNo = 0U;
     }
     else {
         // are we sending USRP formatted audio frames?
@@ -1602,6 +1643,7 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
             m_callAlgoId = lc.getAlgId();
         }
 
+        // process call termination
         if (dataSync && (dataType == DataType::TERMINATOR_WITH_LC)) {
             m_callInProgress = false;
             m_ignoreCall = false;
@@ -1652,6 +1694,7 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
             return;
         }
 
+        // process audio frames
         if (dataType == DataType::VOICE_SYNC || dataType == DataType::VOICE) {
             uint8_t ambe[27U];
             ::memcpy(ambe, data.get(), 14U);
@@ -2024,6 +2067,7 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
                 generatePreambleTone();
         }
 
+        // process call termination
         if ((duid == DUID::TDU) || (duid == DUID::TDULC)) {
             m_callInProgress = false;
             m_ignoreCall = false;
@@ -2073,6 +2117,7 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
             return;
         }
 
+        // unsupported change of encryption parameters during call
         if (m_callAlgoId != ALGO_UNENCRYPT && m_callAlgoId != m_tekAlgoId && callKID != m_tekKeyId) {
             if (m_callInProgress) {
                 m_callInProgress = false;
@@ -2593,6 +2638,7 @@ void HostBridge::processAnalogNetwork(uint8_t* buffer, uint32_t length)
                 generatePreambleTone();
         }
 
+        // process call termination
         if (frameType == AudioFrameType::TERMINATOR) {
             m_callInProgress = false;
             m_ignoreCall = false;
@@ -2619,6 +2665,7 @@ void HostBridge::processAnalogNetwork(uint8_t* buffer, uint32_t length)
         if (m_ignoreCall)
             return;
 
+        // decode audio frames
         if (frameType == AudioFrameType::VOICE_START || frameType == AudioFrameType::VOICE) {
             LogInfoEx(LOG_NET, ANO_VOICE ", audio, srcId = %u, dstId = %u, seqNo = %u", srcId, dstId, analogData.getSeqNo());
 
@@ -2787,7 +2834,7 @@ uint8_t* HostBridge::generateRTPHeaders(uint8_t msgLen, uint16_t& rtpSeq)
 {
     uint32_t timestamp = m_rtpTimestamp;
     if (timestamp != INVALID_TS) {
-        timestamp += (RTP_GENERIC_CLOCK_RATE / 50);
+        timestamp += (RTP_GENERIC_CLOCK_RATE / AUDIO_SAMPLES_LENGTH);
         if (m_debug)
             LogDebugEx(LOG_NET, "HostBridge::generateRTPHeaders()", "RTP, previous TS = %u, TS = %u, rtpSeq = %u", m_rtpTimestamp, timestamp, rtpSeq);
         m_rtpTimestamp = timestamp;
@@ -3378,17 +3425,45 @@ void* HostBridge::threadUDPAudioProcess(void* arg)
                         }
                     }
 
+                    uint16_t pktSeq = 0U;
+                    if (bridge->m_udpRTPFrames) {
+                        pktSeq = req->rtpHeader.getSequence();
+
+                        // are we timing based on RTP timestamps?
+                        if (!bridge->m_udpIgnoreRTPTiming) {
+                            if (lastFrameTime == 0U)
+                                lastFrameTime = req->rtpHeader.getTimestamp();
+                            else {
+                                if (lastFrameTime + (RTP_GENERIC_CLOCK_RATE / AUDIO_SAMPLES_LENGTH) >= req->rtpHeader.getTimestamp()) {
+                                    // already time to send next frame
+                                }
+                                else {
+                                    if (bridge->m_debug)
+                                        LogDebugEx(LOG_HOST, "HostBridge::threadUDPAudioProcess()", "RTP frame timing, delaying packet, now = %llu, lastUdpFrameTime = %llu, pktSeq = %u",
+                                            now, lastFrameTime, pktSeq);
+                                    continue;
+                                }
+                            }
+
+                            lastFrameTime = now;
+                        }
+                    }
+
                     if (bridge->m_debug)
-                        LogDebugEx(LOG_HOST, "HostBridge::threadUDPAudioProcess()", "now = %llu, lastUdpFrameTime = %llu, audioDetect = %u, callInProgress = %u, p25N = %u, dmrN = %u, analogN = %u, frameCnt = %u",
-                            now, lastFrameTime, bridge->m_audioDetect, bridge->m_callInProgress, bridge->m_p25N, bridge->m_dmrN, bridge->m_analogN, bridge->m_udpFrameCnt);
+                        LogDebugEx(LOG_HOST, "HostBridge::threadUDPAudioProcess()", "now = %llu, lastUdpFrameTime = %llu, audioDetect = %u, callInProgress = %u, p25N = %u, dmrN = %u, analogN = %u, frameCnt = %u, pktSeq = %u",
+                            now, lastFrameTime, bridge->m_audioDetect, bridge->m_callInProgress, bridge->m_p25N, bridge->m_dmrN, bridge->m_analogN, bridge->m_udpFrameCnt, pktSeq);
 
                     bridge->m_udpPackets.pop_front();
                     bridge->m_udpDropTime.start();
                     frameTimeout.start();
 
+                    // handle source ID management
                     bool forceCallStart = false;
                     uint32_t txStreamId = bridge->m_txStreamId;
+
+                    // determine source ID to use for this UDP audio frame
                     if (bridge->m_udpMetadata) {
+                        // use source ID from UDP metadata if available and override is enabled
                         if (bridge->m_overrideSrcIdFromUDP) {
                             if (req->srcId != 0U && bridge->m_udpSrcId != 0U) {
                                 // if the UDP source ID now doesn't match the current call ID, reset call states
@@ -3460,6 +3535,7 @@ void* HostBridge::threadUDPAudioProcess(void* arg)
                             bridge->m_udpDropTime.start();
                     }
 
+                    // process the received audio frame
                     std::lock_guard<std::mutex> lock(s_audioMutex);
                     uint8_t pcm[AUDIO_SAMPLES_LENGTH_BYTES];
                     ::memset(pcm, 0x00U, AUDIO_SAMPLES_LENGTH_BYTES);
