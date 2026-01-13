@@ -451,66 +451,8 @@ private:
     void processInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId, uint8_t slotNo);
 
     /**
-     * @brief Helper to process DMR network traffic.
-     * @param buffer 
-     * @param length 
+     * @brief Helper to generate USRP end of transmission
      */
-    void processDMRNetwork(uint8_t* buffer, uint32_t length);
-    /**
-     * @brief Helper to decode DMR network traffic audio frames.
-     * @param ambe 
-     * @param srcId 
-     * @param dstId 
-     * @param dmrN 
-     */
-    void decodeDMRAudioFrame(uint8_t* ambe, uint32_t srcId, uint32_t dstId, uint8_t dmrN);
-    /**
-     * @brief Helper to encode DMR network traffic audio frames.
-     * @param pcm 
-     * @param forcedSrcId 
-     * @param forcedDstId 
-     */
-    void encodeDMRAudioFrame(uint8_t* pcm, uint32_t forcedSrcId = 0U, uint32_t forcedDstId = 0U);
-
-    /**
-     * @brief Helper to process P25 network traffic.
-     * @param buffer 
-     * @param length 
-     */
-    void processP25Network(uint8_t* buffer, uint32_t length);
-    /**
-     * @brief Helper to decode P25 network traffic audio frames.
-     * @param ldu 
-     * @param srcId 
-     * @param dstId 
-     * @param p25N 
-     */
-    void decodeP25AudioFrame(uint8_t* ldu, uint32_t srcId, uint32_t dstId, uint8_t p25N);
-    /**
-     * @brief Helper to encode P25 network traffic audio frames.
-     * @param pcm 
-     * @param forcedSrcId 
-     * @param forcedDstId 
-     */
-    void encodeP25AudioFrame(uint8_t* pcm, uint32_t forcedSrcId = 0U, uint32_t forcedDstId = 0U);
-
-    /**
-     * @brief Helper to process analog network traffic.
-     * @param buffer
-     * @param length
-     */
-    void processAnalogNetwork(uint8_t* buffer, uint32_t length);
-    /**
-     * @brief Helper to encode analog network traffic audio frames.
-     * @param pcm
-     * @param forcedSrcId
-     * @param forcedDstId
-     */
-    void encodeAnalogAudioFrame(uint8_t* pcm, uint32_t forcedSrcId = 0U, uint32_t forcedDstId = 0U);
-
-    /**
-    * @brief Helper to generate USRP end of transmission
-    */
     void sendUsrpEot();
 
     /**
@@ -607,6 +549,67 @@ private:
      * @returns void* (Ignore)
      */
     static void* threadCtsCorMonitor(void* arg);
+
+    // Digital Mobile Radio (HostBridge.DMR.cpp)
+    /**
+     * @brief Helper to process DMR network traffic.
+     * @param buffer 
+     * @param length 
+     */
+    void processDMRNetwork(uint8_t* buffer, uint32_t length);
+    /**
+     * @brief Helper to decode DMR network traffic audio frames.
+     * @param ambe 
+     * @param srcId 
+     * @param dstId 
+     * @param dmrN 
+     */
+    void decodeDMRAudioFrame(uint8_t* ambe, uint32_t srcId, uint32_t dstId, uint8_t dmrN);
+    /**
+     * @brief Helper to encode DMR network traffic audio frames.
+     * @param pcm 
+     * @param forcedSrcId 
+     * @param forcedDstId 
+     */
+    void encodeDMRAudioFrame(uint8_t* pcm, uint32_t forcedSrcId = 0U, uint32_t forcedDstId = 0U);
+
+    // Project 25 (HostBridge.P25.cpp)
+    /**
+     * @brief Helper to process P25 network traffic.
+     * @param buffer 
+     * @param length 
+     */
+    void processP25Network(uint8_t* buffer, uint32_t length);
+    /**
+     * @brief Helper to decode P25 network traffic audio frames.
+     * @param ldu 
+     * @param srcId 
+     * @param dstId 
+     * @param p25N 
+     */
+    void decodeP25AudioFrame(uint8_t* ldu, uint32_t srcId, uint32_t dstId, uint8_t p25N);
+    /**
+     * @brief Helper to encode P25 network traffic audio frames.
+     * @param pcm 
+     * @param forcedSrcId 
+     * @param forcedDstId 
+     */
+    void encodeP25AudioFrame(uint8_t* pcm, uint32_t forcedSrcId = 0U, uint32_t forcedDstId = 0U);
+
+    // Analog (HostBridge.Analog.cpp)
+    /**
+     * @brief Helper to process analog network traffic.
+     * @param buffer
+     * @param length
+     */
+    void processAnalogNetwork(uint8_t* buffer, uint32_t length);
+    /**
+     * @brief Helper to encode analog network traffic audio frames.
+     * @param pcm
+     * @param forcedSrcId
+     * @param forcedDstId
+     */
+    void encodeAnalogAudioFrame(uint8_t* pcm, uint32_t forcedSrcId = 0U, uint32_t forcedDstId = 0U);
 };
 
 #endif // __HOST_BRIDGE_H__

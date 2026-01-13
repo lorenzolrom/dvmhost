@@ -90,7 +90,7 @@ network:
     udpIgnoreRTPTiming: false
     # Flag indicating UDP audio should be encoded using G.711 uLaw.
     #   NOTE: This flag is only applicable when sending audio via RTP.
-    udpUseULaw: true
+    udpUseULaw: false
 
     # Flag indicating UDP audio should follow the USRP format.
     udpUsrp: false
