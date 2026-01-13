@@ -2275,7 +2275,9 @@ void* HostPatch::threadMMDVMProcess(void* arg)
                             patch->checkNet_LDU1();
                         }
                         
-                        patch->writeNet_LDU2(true);
+                        if (patch->m_netState != RS_NET_IDLE) {
+                            patch->writeNet_LDU2(true);
+                        }
                         break;
 
                     case 0x80U:
