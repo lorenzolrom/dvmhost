@@ -77,6 +77,7 @@ HostPatch::HostPatch(const std::string& confFile) :
     m_twoWayPatch(false),
     m_mmdvmP25Reflector(false),
     m_mmdvmP25Net(nullptr),
+    m_mmdvmCallEndTimer(1000U, 0U, 500U),
     m_dropTimeMS(1U),
     m_callDropTime(1000U, 0U, 1000U),
     m_netState(RS_NET_IDLE),
@@ -1949,6 +1950,9 @@ void HostPatch::writeNet_LDU1(bool toFNE)
     using namespace p25::dfsi::defines;
 
     if (toFNE) {
+        uint32_t dstId = GET_UINT24(m_netLDU1, 76U);
+        uint32_t srcId = GET_UINT24(m_netLDU1, 101U);
+
         if (m_netState == RS_NET_IDLE) {
             m_callInProgress = true;
 
@@ -1957,8 +1961,6 @@ void HostPatch::writeNet_LDU1(bool toFNE)
 
             uint8_t lco = m_netLDU1[51U];
             uint8_t mfId = m_netLDU1[52U];
-            uint32_t dstId = GET_UINT24(m_netLDU1, 76U);
-            uint32_t srcId = GET_UINT24(m_netLDU1, 101U);
 
             LogInfoEx(LOG_HOST, "MMDVM P25, call start, srcId = %u, dstId = %u", srcId, dstId);
 
@@ -1981,6 +1983,11 @@ void HostPatch::writeNet_LDU1(bool toFNE)
                 m_network->writeP25TDU(lc, lsd, controlByte);
             }
         }
+
+        if (dstId != 0U)
+            m_netLC.setDstId(dstId);
+        if (srcId != 0U)
+            m_netLC.setSrcId(srcId);
 
         p25::data::LowSpeedData lsd = p25::data::LowSpeedData();
         lsd.setLSD1(m_netLDU1[201U]);
@@ -2200,6 +2207,34 @@ void* HostPatch::threadMMDVMProcess(void* arg)
             ms = stopWatch.elapsed();
             stopWatch.start();
 
+            if (patch->m_mmdvmCallEndTimer.isRunning())
+                patch->m_mmdvmCallEndTimer.clock(ms);
+            if (patch->m_mmdvmCallEndTimer.isRunning() && patch->m_mmdvmCallEndTimer.hasExpired()) {
+                patch->m_mmdvmCallEndTimer.stop();
+                patch->m_netState = RS_NET_IDLE;
+
+                p25::data::LowSpeedData lsd = p25::data::LowSpeedData();
+
+                LogInfoEx(LOG_HOST, "MMDVM " P25_TDU_STR);
+
+                uint8_t controlByte = 0x00U;
+                patch->m_network->writeP25TDU(patch->m_netLC, lsd, controlByte);
+
+                if (patch->m_rxStartTime > 0U) {
+                    uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    uint64_t diff = now - patch->m_rxStartTime;
+
+                    LogInfoEx(LOG_HOST, "MMDVM P25, call end, srcId = %u, dstId = %u, dur = %us", patch->m_netLC.getSrcId(), patch->m_netLC.getDstId(), diff / 1000U);
+                }
+
+                patch->m_rxStartTime = 0U;
+                patch->m_rxStreamId = 0U;
+
+                patch->m_callInProgress = false;
+                patch->m_rxStartTime = 0U;
+                patch->m_rxStreamId = 0U;
+            }
+
             if (patch->m_digiMode == TX_MODE_P25) {
                 std::lock_guard<std::mutex> lock(HostPatch::s_networkMutex);
 
@@ -2239,6 +2274,9 @@ void* HostPatch::threadMMDVMProcess(void* arg)
                         if (patch->m_netState != RS_NET_IDLE) {
                             patch->m_gotNetLDU1 = true;
                             patch->writeNet_LDU1(true);
+
+                            if (patch->m_mmdvmCallEndTimer.isRunning())
+                                patch->m_mmdvmCallEndTimer.start();
                         }
                         break;
 
@@ -2277,34 +2315,14 @@ void* HostPatch::threadMMDVMProcess(void* arg)
                         
                         if (patch->m_netState != RS_NET_IDLE) {
                             patch->writeNet_LDU2(true);
+
+                            if (patch->m_mmdvmCallEndTimer.isRunning())
+                                patch->m_mmdvmCallEndTimer.start();
                         }
                         break;
 
                     case 0x80U:
-                        {
-                            patch->m_netState = RS_NET_IDLE;
-
-                            p25::data::LowSpeedData lsd = p25::data::LowSpeedData();
-
-                            LogInfoEx(LOG_HOST, "MMDVM " P25_TDU_STR);
-
-                            uint8_t controlByte = 0x00U;
-                            patch->m_network->writeP25TDU(patch->m_netLC, lsd, controlByte);
-
-                            if (patch->m_rxStartTime > 0U) {
-                                uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                                uint64_t diff = now - patch->m_rxStartTime;
-
-                                LogInfoEx(LOG_HOST, "MMDVM P25, call end, srcId = %u, dstId = %u, dur = %us", patch->m_netLC.getSrcId(), patch->m_netLC.getDstId(), diff / 1000U);
-                            }
-
-                            patch->m_rxStartTime = 0U;
-                            patch->m_rxStreamId = 0U;
-
-                            patch->m_callInProgress = false;
-                            patch->m_rxStartTime = 0U;
-                            patch->m_rxStreamId = 0U;
-                        }
+                        patch->m_mmdvmCallEndTimer.start();
                         break;
 
                     case 0xF0U:

@@ -78,6 +78,7 @@ private:
 
     bool m_mmdvmP25Reflector;
     mmdvm::P25Network* m_mmdvmP25Net;
+    Timer m_mmdvmCallEndTimer;
 
     uint16_t m_dropTimeMS;
     Timer m_callDropTime;
