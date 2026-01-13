@@ -66,6 +66,11 @@ namespace p25
         const uint32_t  P25_P2_FRAME_LENGTH_BYTES = 40U;
         const uint32_t  P25_P2_FRAME_LENGTH_BITS = P25_P2_FRAME_LENGTH_BYTES * 8U;
 
+        const uint32_t  P25_P2_IEMI_LENGTH_BITS = 312U;
+        const uint32_t  P25_P2_IEMI_LENGTH_BYTES = (P25_P2_IEMI_LENGTH_BITS / 8U) + 1U;
+        const uint32_t  P25_P2_SOEMI_LENGTH_BITS = 270U;
+        const uint32_t  P25_P2_SOEMI_LENGTH_BYTES = (P25_P2_SOEMI_LENGTH_BITS / 8U) + 1U;
+
         const uint32_t  P25_NID_LENGTH_BYTES = 8U;
         const uint32_t  P25_NID_LENGTH_BITS = P25_NID_LENGTH_BYTES * 8U;
 
@@ -849,6 +854,24 @@ namespace p25
                 ACTIVE = 0x04U,                         //!< Active
 
                 HANGTIME = 0x06U,                       //!< Call Hangtime
+            };
+        }
+
+        // TIA-102.BBAD-D Section 4.2
+        /** @brief Phase 2 MAC 4V/SACCH Offset(s) */
+        namespace P2_MAC_HEADER_OFFSET {
+            /** @brief Phase 2 MAC 4V/SACCH Offset(s) */
+            enum : uint8_t {
+                FIRST_4V_NEXT = 0x00U,                  //!< First 4V Next non-SACCH Burst on Slot
+                FIRST_4V_2ND = 0x01U,                   //!< First 4V Second non-SACCH Burst on Slot
+                FIRST_4V_3RD = 0x02U,                   //!< First 4V Third non-SACCH Burst on Slot
+                FIRST_4V_4TH = 0x03U,                   //!< First 4V Fourth non-SACCH Burst on Slot
+                FIRST_4V_5TH = 0x04U,                   //!< First 4V Fifth non-SACCH Burst on Slot
+                FIRST_4V_6TH = 0x05U,                   //!< First 4V Sixth non-SACCH Burst on Slot (Inbound Reserved)
+
+                INBOUND_RANDOM_SACCH = 0x06U,           //!< Inbound Random SACCH (Outbound Reserved)
+
+                NO_VOICE_OR_UNK = 0x07U                 //!< No Voice or Unknown
             };
         }
 
