@@ -1536,6 +1536,9 @@ void HostBridge::sendUsrpEot()
 
 void HostBridge::generatePreambleTone()
 {
+    if (!m_localAudio)
+        return;
+
     std::lock_guard<std::mutex> lock(s_audioMutex);
 
     uint64_t frameCount = AnalogAudio::toSamples(SAMPLE_RATE, 1, m_preambleLength);
