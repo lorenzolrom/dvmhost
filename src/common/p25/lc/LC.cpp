@@ -77,6 +77,7 @@ LC::LC() :
     m_macPduOffset(P2_MAC_HEADER_OFFSET::NO_VOICE_OR_UNK),
     m_macPartition(P2_MAC_MCO_PARTITION::ABBREVIATED),
     m_rsValue(0U),
+    p2MCOData(nullptr),
     m_rs(),
     m_encryptOverride(false),
     m_tsbkVendorSkip(false),
@@ -105,6 +106,11 @@ LC::~LC()
     if (m_userAlias != nullptr) {
         delete[] m_userAlias;
         m_userAlias = nullptr;
+    }
+
+    if (p2MCOData != nullptr) {
+        delete[] p2MCOData;
+        p2MCOData = nullptr;
     }
 }
 
@@ -1036,7 +1042,16 @@ bool LC::decodeMACPDU(const uint8_t* raw)
                 return false;
             }
         } else {
-            /* TODO: support abbreviated via TSBK code */
+            // for non-unique partitions, we currently do not decode
+            // instead we will copy the MCO bytes out and allow user code to decode
+            if (p2MCOData != nullptr)
+                delete[] p2MCOData;
+
+            p2MCOData = new uint8_t[P25_P2_IOEMI_MAC_LENGTH_BYTES];
+            ::memset(p2MCOData, 0x00U, P25_P2_IOEMI_MAC_LENGTH_BYTES);
+
+            // this will include the entire MCO (and depending on message length multiple MCOs)
+            ::memcpy(p2MCOData, raw + 1U, P25_P2_IEMI_MAC_LENGTH_BYTES - 3U); // excluding MAC PDU header and CRC
         }
         break;
 
@@ -1124,7 +1139,14 @@ void LC::encodeMACPDU(uint8_t* raw, bool sync)
             }
             break;
         } else {
-            /* TODO: support abbreviated via TSBK code */
+            if (p2MCOData != nullptr) {
+                // this will include the entire MCO (and depending on message length multiple MCOs)
+                if (sync) {
+                    ::memcpy(raw + 1U, p2MCOData, P25_P2_IEMI_MAC_LENGTH_BYTES - 3U); // excluding MAC PDU header and CRC
+                } else {
+                    ::memcpy(raw + 1U, p2MCOData, P25_P2_IOEMI_MAC_LENGTH_BYTES - 3U); // excluding MAC PDU header and CRC
+                }
+            }
         }
         break;
 
@@ -1273,6 +1295,21 @@ void LC::copy(const LC& data)
         m_userAlias = new uint8_t[HARRIS_USER_ALIAS_LENGTH_BYTES];
         ::memset(m_userAlias, 0x00U, HARRIS_USER_ALIAS_LENGTH_BYTES);
         m_gotUserAlias = false;
+    }
+
+    // do we have Phase 2 MCO data to copy?
+    if (data.p2MCOData != nullptr) {
+        if (p2MCOData != nullptr)
+            delete[] p2MCOData;
+
+        p2MCOData = new uint8_t[P25_P2_IOEMI_MAC_LENGTH_BYTES];
+        ::memset(p2MCOData, 0x00U, P25_P2_IOEMI_MAC_LENGTH_BYTES);
+        ::memcpy(p2MCOData, data.p2MCOData, P25_P2_IOEMI_MAC_LENGTH_BYTES);
+    } else {
+        if (p2MCOData != nullptr) {
+            delete[] p2MCOData;
+            p2MCOData = nullptr;
+        }
     }
 
     s_siteData = data.s_siteData;

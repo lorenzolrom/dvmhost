@@ -320,6 +320,10 @@ namespace p25
             DECLARE_PROPERTY(ulong64_t, rsValue, RS);
             /** @} */
 
+            /** @name Phase 2 Raw MCO Data */
+            uint8_t* p2MCOData; // ?? - this should probably be private with getters/setters
+            /** @} */
+
         private:
             friend class TSBK;
             friend class TDULC;
