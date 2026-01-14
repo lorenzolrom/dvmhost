@@ -68,8 +68,12 @@ namespace p25
 
         const uint32_t  P25_P2_IEMI_LENGTH_BITS = 312U;
         const uint32_t  P25_P2_IEMI_LENGTH_BYTES = (P25_P2_IEMI_LENGTH_BITS / 8U) + 1U;
+        const uint32_t  P25_P2_IEMI_MAC_LENGTH_BITS = 148U;
+        const uint32_t  P25_P2_IEMI_MAC_LENGTH_BYTES = (P25_P2_IEMI_MAC_LENGTH_BITS / 8U) + 1U;
         const uint32_t  P25_P2_SOEMI_LENGTH_BITS = 270U;
         const uint32_t  P25_P2_SOEMI_LENGTH_BYTES = (P25_P2_SOEMI_LENGTH_BITS / 8U) + 1U;
+        const uint32_t  P25_P2_IOEMI_MAC_LENGTH_BITS = 172U;
+        const uint32_t  P25_P2_IOEMI_MAC_LENGTH_BYTES = (P25_P2_IOEMI_MAC_LENGTH_BITS / 8U) + 1U;
 
         const uint32_t  P25_NID_LENGTH_BYTES = 8U;
         const uint32_t  P25_NID_LENGTH_BITS = P25_NID_LENGTH_BYTES * 8U;
