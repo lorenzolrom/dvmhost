@@ -486,52 +486,75 @@ void LC::encodeLDU2(uint8_t* data)
 
 /* Decode a IEMI VCH MAC PDU. */
 
-bool LC::decodeVCH_MACPDU_IEMI(const uint8_t* data)
+bool LC::decodeVCH_MACPDU_IEMI(const uint8_t* data, bool sync)
 {
     assert(data != nullptr);
 
+    // determine buffer size based on sync flag
+    uint32_t lengthBits = sync ? P25_P2_IEMI_WSYNC_LENGTH_BITS : P25_P2_IEMI_LENGTH_BITS;
+    uint32_t lengthBytes = sync ? P25_P2_IEMI_WSYNC_LENGTH_BYTES : P25_P2_IEMI_LENGTH_BYTES;
+
     // decode the Phase 2 DUID
-    uint8_t duid[1U], raw[P25_P2_IEMI_LENGTH_BYTES];
+    uint8_t duid[1U], raw[P25_P2_IEMI_LENGTH_BYTES];  // Use max size for stack allocation
     ::memset(duid, 0x00U, 1U);
-    ::memset(raw, 0x00U, P25_P2_IEMI_LENGTH_BYTES);
+    ::memset(raw, 0x00U, lengthBytes);
 
-    for (uint8_t i = 0U; i < 8U; i++) {
-        uint32_t n = i + 72U; // skip field 1
-        if (i >= 2U)
-            n += 72U; // skip field 2
-        if (i >= 4U)
-            n += 96U; // skip field 3
-        if (i >= 6U)
-            n += 72U; // skip field 4
+    // DUID bit extraction differs based on sync flag
+    if (sync) {
+        // IEMI with sync: 14 LSB sync bits + 36-bit field 1, then DUIDs at different positions
+        for (uint8_t i = 0U; i < 8U; i++) {
+            uint32_t n = i + 14U + 36U; // skip 14-bit sync + field 1 (36 bits)
+            if (i >= 2U)
+                n += 72U; // skip field 2
+            if (i >= 4U)
+                n += 96U; // skip field 3
+            if (i >= 6U)
+                n += 72U; // skip field 4
 
-        bool b = READ_BIT(data, n);
-        WRITE_BIT(raw, i, b);
+            bool b = READ_BIT(data, n);
+            WRITE_BIT(raw, i, b);
+        }
+    } else {
+        // IEMI without sync: 72-bit field 1, then DUIDs
+        for (uint8_t i = 0U; i < 8U; i++) {
+            uint32_t n = i + 72U; // skip field 1
+            if (i >= 2U)
+                n += 72U; // skip field 2
+            if (i >= 4U)
+                n += 96U; // skip field 3
+            if (i >= 6U)
+                n += 72U; // skip field 4
+
+            bool b = READ_BIT(data, n);
+            WRITE_BIT(raw, i, b);
+        }
     }
 
     decodeP2_DUIDHamming(raw, duid);
 
     m_p2DUID = duid[0U] >> 4U;
 
-    if (m_p2DUID == P2_DUID::VTCH_4V || m_p2DUID == P2_DUID::VTCH_2V)
+    if (m_p2DUID == P2_DUID::VTCH_4V || m_p2DUID == P2_DUID::VTCH_2V || !sync)
         return true; // don't handle 4V or 2V voice PDUs here -- user code will handle
     else {
-        ::memset(raw, 0x00U, P25_P2_IEMI_LENGTH_BYTES);
+        ::memset(raw, 0x00U, lengthBytes);
 
-        for (uint32_t i = 0U; i < P25_P2_IEMI_LENGTH_BITS; i++) {
-            uint32_t n = i;
-            if (i >= 72U)
-                n += 2U; // skip DUID 1
-            if (i >= 146U)
-                n += 2U; // skip DUID 2
-            if (i >= 242U)
-                n += 2U; // skip DUID 3
+        // IEMI with sync: extract data bits (skip 14-bit sync and DUIDs)
+        for (uint32_t i = 0U; i < lengthBits; i++) {
+            uint32_t n = i + 14U; // Skip 14-bit sync
+            if (i >= 36U)
+                n += 2U; // skip DUID 1 after field 1 (36 bits)
+            if (i >= 108U)
+                n += 2U; // skip DUID 2 after field 2 (36+72)
+            if (i >= 204U)
+                n += 2U; // skip DUID 3 after field 3 (36+72+96)
 
             bool b = READ_BIT(data, n);
             WRITE_BIT(raw, i, b);
         }
 
 #if DEBUG_P25_MAC_PDU
-        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), MAC PDU", raw, lengthBytes);
 #endif
 
         // decode RS (46,26,21) FEC
@@ -543,12 +566,12 @@ bool LC::decodeVCH_MACPDU_IEMI(const uint8_t* data)
             }
         }
         catch (...) {
-            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), RS excepted with input data", raw, P25_P2_IEMI_LENGTH_BYTES);
+            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), RS excepted with input data", raw, lengthBytes);
             return false;
         }
 
 #if DEBUG_P25_MAC_PDU
-        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), MAC PDU", raw, lengthBytes);
 #endif
 
         // are we decoding a FACCH with scrambling?
@@ -561,7 +584,7 @@ bool LC::decodeVCH_MACPDU_IEMI(const uint8_t* data)
             /* TODO: if scrambled handle scrambling */
         }
 
-        return decodeMACPDU(raw);
+        return decodeMACPDU(raw, P25_P2_IEMI_MAC_LENGTH_BITS);
     }
 
     return true;
@@ -610,8 +633,8 @@ bool LC::decodeVCH_MACPDU_OEMI(const uint8_t* data, bool sync)
                 if (i >= 198U)
                     n += 2U; // skip DUID 3
 
-                bool b = READ_BIT(data, i);
-                WRITE_BIT(raw, n, b);
+                bool b = READ_BIT(data, n);
+                WRITE_BIT(raw, i, b);
             }
 
 #if DEBUG_P25_MAC_PDU
@@ -642,8 +665,8 @@ bool LC::decodeVCH_MACPDU_OEMI(const uint8_t* data, bool sync)
                 if (i >= 168U)
                     n += 2U; // skip DUID 3
 
-                bool b = READ_BIT(data, i);
-                WRITE_BIT(raw, n, b);
+                bool b = READ_BIT(data, n);
+                WRITE_BIT(raw, i, b);
             }
 
 #if DEBUG_P25_MAC_PDU
@@ -678,7 +701,7 @@ bool LC::decodeVCH_MACPDU_OEMI(const uint8_t* data, bool sync)
             /* TODO: if scrambled handle scrambling */
         }
 
-        return decodeMACPDU(raw);
+        return decodeMACPDU(raw, sync ? P25_P2_SOEMI_MAC_LENGTH_BITS : P25_P2_IOEMI_MAC_LENGTH_BITS);
     }
 
     return true;
@@ -694,7 +717,7 @@ void LC::encodeVCH_MACPDU(uint8_t* data, bool sync)
     ::memset(raw, 0x00U, P25_P2_IEMI_LENGTH_BYTES);
 
     if (m_p2DUID != P2_DUID::VTCH_4V && m_p2DUID != P2_DUID::VTCH_2V) {
-        encodeMACPDU(raw, sync);
+        encodeMACPDU(raw, sync ? P25_P2_SOEMI_MAC_LENGTH_BITS : P25_P2_IOEMI_MAC_LENGTH_BITS);
 
 #if DEBUG_P25_MAC_PDU
         Utils::dump(2U, "P25, LC::encodeVCH_MACPDU(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
@@ -1057,11 +1080,11 @@ void LC::encodeLC(uint8_t* rs)
 
 /* Decode MAC PDU. */
 
-bool LC::decodeMACPDU(const uint8_t* raw)
+bool LC::decodeMACPDU(const uint8_t* raw, uint32_t macLength)
 {
     assert(raw != nullptr);
 
-    bool ret = edac::CRC::checkCRC12(raw, P25_P2_IEMI_MAC_LENGTH_BITS);
+    bool ret = edac::CRC::checkCRC12(raw, macLength - 12U);
     if (!ret) {
         if (s_warnCRC) {
             LogWarning(LOG_P25, "TSBK::decode(), failed CRC CCITT-162 check");
@@ -1173,11 +1196,12 @@ bool LC::decodeMACPDU(const uint8_t* raw)
             if (p2MCOData != nullptr)
                 delete[] p2MCOData;
 
-            p2MCOData = new uint8_t[P25_P2_IOEMI_MAC_LENGTH_BYTES];
-            ::memset(p2MCOData, 0x00U, P25_P2_IOEMI_MAC_LENGTH_BYTES);
+            uint32_t macLengthBytes = (macLength / 8U) + ((macLength % 8U) ? 1U : 0U);
+            p2MCOData = new uint8_t[macLengthBytes];
+            ::memset(p2MCOData, 0x00U, macLengthBytes);
 
             // this will include the entire MCO (and depending on message length multiple MCOs)
-            ::memcpy(p2MCOData, raw + 1U, P25_P2_IEMI_MAC_LENGTH_BYTES - 3U); // excluding MAC PDU header and CRC
+            ::memcpy(p2MCOData, raw + 1U, macLengthBytes - 3U); // excluding MAC PDU header and CRC
         }
         break;
 
@@ -1191,7 +1215,7 @@ bool LC::decodeMACPDU(const uint8_t* raw)
 
 /* Encode MAC PDU. */
 
-void LC::encodeMACPDU(uint8_t* raw, bool sync)
+void LC::encodeMACPDU(uint8_t* raw, uint32_t macLength)
 {
     assert(raw != nullptr);
 
@@ -1267,11 +1291,8 @@ void LC::encodeMACPDU(uint8_t* raw, bool sync)
         } else {
             if (p2MCOData != nullptr) {
                 // this will include the entire MCO (and depending on message length multiple MCOs)
-                if (sync) {
-                    ::memcpy(raw + 1U, p2MCOData, P25_P2_IEMI_MAC_LENGTH_BYTES - 3U); // excluding MAC PDU header and CRC
-                } else {
-                    ::memcpy(raw + 1U, p2MCOData, P25_P2_IOEMI_MAC_LENGTH_BYTES - 3U); // excluding MAC PDU header and CRC
-                }
+                uint32_t macLengthBytes = (macLength / 8U) + ((macLength % 8U) ? 1U : 0U);
+                ::memcpy(raw + 1U, p2MCOData, macLengthBytes - 3U); // excluding MAC PDU header and CRC
             }
         }
         break;
@@ -1281,11 +1302,7 @@ void LC::encodeMACPDU(uint8_t* raw, bool sync)
         break;
     }
 
-    if (sync) {
-        edac::CRC::addCRC12(raw, P25_P2_IEMI_MAC_LENGTH_BITS);
-    } else {
-        edac::CRC::addCRC12(raw, P25_P2_IOEMI_MAC_LENGTH_BITS);
-    }
+    edac::CRC::addCRC12(raw, macLength - 12U);
 }
 
 /*

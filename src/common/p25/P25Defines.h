@@ -39,6 +39,7 @@ namespace p25
          */
 
         /** @name Frame Lengths and Misc Constants */
+        // TIA-102.BAAA-B Section 4 and 5; TIA-102.AABB-B Section 5
         const uint32_t  P25_HDU_FRAME_LENGTH_BYTES = 99U;
         const uint32_t  P25_HDU_FRAME_LENGTH_BITS = P25_HDU_FRAME_LENGTH_BYTES * 8U;
 
@@ -63,20 +64,28 @@ namespace p25
         const uint32_t  P25_TDULC_FRAME_LENGTH_BYTES = 54U;
         const uint32_t  P25_TDULC_FRAME_LENGTH_BITS = P25_TDULC_FRAME_LENGTH_BYTES * 8U;
 
+        const uint32_t  P25_NID_LENGTH_BYTES = 8U;
+        const uint32_t  P25_NID_LENGTH_BITS = P25_NID_LENGTH_BYTES * 8U;
+
+        // TIA-102.BBAC-A Section 4
         const uint32_t  P25_P2_FRAME_LENGTH_BYTES = 40U;
         const uint32_t  P25_P2_FRAME_LENGTH_BITS = P25_P2_FRAME_LENGTH_BYTES * 8U;
 
         const uint32_t  P25_P2_IEMI_LENGTH_BITS = 312U;
         const uint32_t  P25_P2_IEMI_LENGTH_BYTES = (P25_P2_IEMI_LENGTH_BITS / 8U) + 1U;
-        const uint32_t  P25_P2_IEMI_MAC_LENGTH_BITS = 148U;
+        const uint32_t  P25_P2_IEMI_WSYNC_LENGTH_BITS = 276U;
+        const uint32_t  P25_P2_IEMI_WSYNC_LENGTH_BYTES = (P25_P2_IEMI_WSYNC_LENGTH_BITS / 8U) + 1U;
+
+        const uint32_t  P25_P2_IEMI_MAC_LENGTH_BITS = 156U;
         const uint32_t  P25_P2_IEMI_MAC_LENGTH_BYTES = (P25_P2_IEMI_MAC_LENGTH_BITS / 8U) + 1U;
+
+        const uint32_t  P25_P2_SOEMI_MAC_LENGTH_BITS = 156U;
+        const uint32_t  P25_P2_SOEMI_MAC_LENGTH_BYTES = (P25_P2_SOEMI_MAC_LENGTH_BITS / 8U) + 1U;
         const uint32_t  P25_P2_SOEMI_LENGTH_BITS = 270U;
         const uint32_t  P25_P2_SOEMI_LENGTH_BYTES = (P25_P2_SOEMI_LENGTH_BITS / 8U) + 1U;
-        const uint32_t  P25_P2_IOEMI_MAC_LENGTH_BITS = 172U;
-        const uint32_t  P25_P2_IOEMI_MAC_LENGTH_BYTES = (P25_P2_IOEMI_MAC_LENGTH_BITS / 8U) + 1U;
 
-        const uint32_t  P25_NID_LENGTH_BYTES = 8U;
-        const uint32_t  P25_NID_LENGTH_BITS = P25_NID_LENGTH_BYTES * 8U;
+        const uint32_t  P25_P2_IOEMI_MAC_LENGTH_BITS = 180U;
+        const uint32_t  P25_P2_IOEMI_MAC_LENGTH_BYTES = (P25_P2_IOEMI_MAC_LENGTH_BITS / 8U) + 1U;
 
         // TIA-102.BAAA-B Section 7.3
         // 5     5      7     5      F     5      F     F      7     7      F     F

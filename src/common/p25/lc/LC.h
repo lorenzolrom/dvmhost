@@ -116,9 +116,10 @@ namespace p25
             /**
              * @brief Decode a IEMI VCH MAC PDU.
              * @param data Buffer containing the MAC PDU to decode.
+             * @param sync Flag indicating if sync is included (true=276 bits with RS, false=312 bits no RS).
              * @return bool True, if MAC PDU decoded, otherwise false.
              */
-            bool decodeVCH_MACPDU_IEMI(const uint8_t* data);
+            bool decodeVCH_MACPDU_IEMI(const uint8_t* data, bool sync);
             /**
              * @brief Decode a xOEMI VCH MAC PDU.
              * @param data Buffer containing the MAC PDU to decode.
@@ -155,15 +156,16 @@ namespace p25
             /**
              * @brief Decode MAC PDU.
              * @param[in] raw Buffer containing the decoded Reed-Solomon MAC PDU data.
+             * @param macLength MAC PDU length in bits (156 for IEMI/S-OEMI, 180 for I-OEMI).
              * @returns bool True, if MAC PDU is decoded, otherwise false.
              */
-            bool decodeMACPDU(const uint8_t* raw);
+            bool decodeMACPDU(const uint8_t* raw, uint32_t macLength = defines::P25_P2_IOEMI_MAC_LENGTH_BITS);
             /**
              * @brief Encode MAC PDU.
              * @param[out] raw Buffer to encode MAC PDU data.
-             * @param sync Flag indicating if sync is to be included.
+             * @param macLength MAC PDU length in bits (156 for IEMI/S-OEMI, 180 for I-OEMI).
              */
-            void encodeMACPDU(uint8_t* raw, bool sync);
+            void encodeMACPDU(uint8_t* raw, uint32_t macLength = defines::P25_P2_IOEMI_MAC_LENGTH_BITS);
 
             /** @name Encryption data */
             /**
