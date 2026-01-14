@@ -114,11 +114,18 @@ namespace p25
             /** Project 25 Phase II (TIA-102.BBAD-D Section 2) */
 
             /**
-             * @brief Decode a VCH MAC PDU.
+             * @brief Decode a IEMI VCH MAC PDU.
              * @param data Buffer containing the MAC PDU to decode.
              * @return bool True, if MAC PDU decoded, otherwise false.
              */
-            bool decodeVCH_MACPDU(const uint8_t* data);
+            bool decodeVCH_MACPDU_IEMI(const uint8_t* data);
+            /**
+             * @brief Decode a xOEMI VCH MAC PDU.
+             * @param data Buffer containing the MAC PDU to decode.
+             * @param sync Flag indicating if sync is included.
+             * @return bool True, if MAC PDU decoded, otherwise false.
+             */
+            bool decodeVCH_MACPDU_OEMI(const uint8_t* data, bool sync);
             /**
              * @brief Encode a VCH MAC PDU.
              * @param[out] data Buffer to encode a MAC PDU.

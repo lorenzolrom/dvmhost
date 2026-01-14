@@ -484,9 +484,9 @@ void LC::encodeLDU2(uint8_t* data)
 #endif
 }
 
-/* Decode a VCH MAC PDU. */
+/* Decode a IEMI VCH MAC PDU. */
 
-bool LC::decodeVCH_MACPDU(const uint8_t* data)
+bool LC::decodeVCH_MACPDU_IEMI(const uint8_t* data)
 {
     assert(data != nullptr);
 
@@ -513,7 +513,7 @@ bool LC::decodeVCH_MACPDU(const uint8_t* data)
     m_p2DUID = duid[0U] >> 4U;
 
     if (m_p2DUID == P2_DUID::VTCH_4V || m_p2DUID == P2_DUID::VTCH_2V)
-        return true; // don't hanvle 4V or 2V voice PDUs here -- user code will handle
+        return true; // don't handle 4V or 2V voice PDUs here -- user code will handle
     else {
         ::memset(raw, 0x00U, P25_P2_IEMI_LENGTH_BYTES);
 
@@ -531,28 +531,154 @@ bool LC::decodeVCH_MACPDU(const uint8_t* data)
         }
 
 #if DEBUG_P25_MAC_PDU
-        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
 #endif
 
         // decode RS (46,26,21) FEC
         try {
             bool ret = m_rs.decode462621(raw);
             if (!ret) {
-                LogError(LOG_P25, "LC::decodeVCH_MACPDU(), failed to decode RS (46,26,21) FEC");
+                LogError(LOG_P25, "LC::decodeVCH_MACPDU_IEMI(), failed to decode RS (46,26,21) FEC");
                 return false;
             }
         }
         catch (...) {
-            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU(), RS excepted with input data", raw, P25_P2_IEMI_LENGTH_BYTES);
+            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), RS excepted with input data", raw, P25_P2_IEMI_LENGTH_BYTES);
             return false;
         }
 
 #if DEBUG_P25_MAC_PDU
-        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+        Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_IEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
 #endif
 
-        if (m_p2DUID == P2_DUID::FACCH_SCRAMBLED || m_p2DUID == P2_DUID::FACCH_UNSCRAMBLED) {
+        // are we decoding a FACCH with scrambling?
+        if (m_p2DUID == P2_DUID::FACCH_SCRAMBLED) {
+            /* TODO: if scrambled handle scrambling */
         }
+
+        // are we decoding a SACCH with scrambling?
+        if (m_p2DUID == P2_DUID::SACCH_SCRAMBLED) {
+            /* TODO: if scrambled handle scrambling */
+        }
+
+        return decodeMACPDU(raw);
+    }
+
+    return true;
+}
+
+/* Decode a xOEMI VCH MAC PDU. */
+
+bool LC::decodeVCH_MACPDU_OEMI(const uint8_t* data, bool sync)
+{
+    assert(data != nullptr);
+
+    // decode the Phase 2 DUID
+    uint8_t duid[1U], raw[P25_P2_IEMI_LENGTH_BYTES];
+    ::memset(duid, 0x00U, 1U);
+    ::memset(raw, 0x00U, P25_P2_IEMI_LENGTH_BYTES);
+
+    for (uint8_t i = 0U; i < 8U; i++) {
+        uint32_t n = i;
+        if (i >= 2U)
+            n += 72U; // skip field 1
+        if (i >= 4U)
+            n += 168U; // skip field 2, sync and field 3 (or just field 2)
+        if (i >= 6U)
+            n += 72U; // skip field 3
+
+        bool b = READ_BIT(data, n);
+        WRITE_BIT(raw, i, b);
+    }
+
+    decodeP2_DUIDHamming(raw, duid);
+
+    m_p2DUID = duid[0U] >> 4U;
+
+    if (m_p2DUID == P2_DUID::VTCH_4V || m_p2DUID == P2_DUID::VTCH_2V)
+        return true; // don't handle 4V or 2V voice PDUs here -- user code will handle
+    else {
+        ::memset(raw, 0x00U, P25_P2_IEMI_LENGTH_BYTES);
+
+        if (sync) {
+            for (uint32_t i = 0U; i < P25_P2_SOEMI_LENGTH_BITS; i++) {
+                uint32_t n = i + 2U; // skip DUID 1
+                if (i >= 72U)
+                    n += 2U; // skip DUID 2
+                if (i >= 134U)
+                    n += 42U; // skip sync
+                if (i >= 198U)
+                    n += 2U; // skip DUID 3
+
+                bool b = READ_BIT(data, i);
+                WRITE_BIT(raw, n, b);
+            }
+
+#if DEBUG_P25_MAC_PDU
+            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_OEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+#endif
+
+            // decode RS (45,26,20) FEC
+            try {
+                bool ret = m_rs.decode452620(raw);
+                if (!ret) {
+                    LogError(LOG_P25, "LC::decodeVCH_MACPDU_OEMI(), failed to decode RS (45,26,20) FEC");
+                    return false;
+                }
+            }
+            catch (...) {
+                Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_OEMI(), RS excepted with input data", raw, P25_P2_IEMI_LENGTH_BYTES);
+                return false;
+            }
+
+#if DEBUG_P25_MAC_PDU
+            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_OEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+#endif
+        } else {
+            for (uint32_t i = 0U; i < P25_P2_IEMI_LENGTH_BITS; i++) {
+                uint32_t n = i + 2U; // skip DUID 1
+                if (i >= 72U)
+                    n += 2U; // skip DUID 2
+                if (i >= 168U)
+                    n += 2U; // skip DUID 3
+
+                bool b = READ_BIT(data, i);
+                WRITE_BIT(raw, n, b);
+            }
+
+#if DEBUG_P25_MAC_PDU
+            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_OEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+#endif
+
+            // decode RS (52,30,23) FEC
+            try {
+                bool ret = m_rs.decode523023(raw);
+                if (!ret) {
+                    LogError(LOG_P25, "LC::decodeVCH_MACPDU_OEMI(), failed to decode RS (52,30,23) FEC");
+                    return false;
+                }
+            }
+            catch (...) {
+                Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_OEMI(), RS excepted with input data", raw, P25_P2_IEMI_LENGTH_BYTES);
+                return false;
+            }
+
+#if DEBUG_P25_MAC_PDU
+            Utils::dump(2U, "P25, LC::decodeVCH_MACPDU_OEMI(), MAC PDU", raw, P25_P2_IEMI_LENGTH_BYTES);
+#endif
+        }
+
+        // are we decoding a FACCH with scrambling?
+        if (m_p2DUID == P2_DUID::FACCH_SCRAMBLED) {
+            /* TODO: if scrambled handle scrambling */
+        }
+
+        // are we decoding a SACCH with scrambling?
+        if (m_p2DUID == P2_DUID::SACCH_SCRAMBLED) {
+            /* TODO: if scrambled handle scrambling */
+        }
+
+        return decodeMACPDU(raw);
     }
 
     return true;
