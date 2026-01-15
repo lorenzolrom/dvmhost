@@ -1194,10 +1194,9 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                         }
                                     }
                                 } else {
-                                    // perform source address/port validation
-                                    if (connection->address() != udp::Socket::address(req->address) ||
-                                        connection->port() != udp::Socket::port(req->address)) {
-                                        LogError(LOG_MASTER, "PEER %u RPTL NAK, IP address/port mismatch on RPTL attempt while not running, old = %s:%u, new = %s:%u, connectionState = %u", peerId,
+                                    // perform source address validation
+                                    if (connection->address() != udp::Socket::address(req->address)) {
+                                        LogError(LOG_MASTER, "PEER %u RPTL NAK, IP address mismatch on RPTL attempt while not running, old = %s:%u, new = %s:%u, connectionState = %u", peerId,
                                             connection->address().c_str(), connection->port(), udp::Socket::address(req->address).c_str(), udp::Socket::port(req->address), connection->connectionState());
 
                                         network->writePeerNAK(peerId, TAG_REPEATER_LOGIN, NET_CONN_NAK_FNE_UNAUTHORIZED, req->address, req->addrLen);
