@@ -802,6 +802,15 @@ void TagP25Data::playbackParrot()
     auto& pkt = m_parrotFrames[0];
     m_parrotFrames.lock();
     if (pkt.buffer != nullptr) {
+        // has the override source ID been set?
+        if (m_network->m_parrotOverrideSrcId > 0U) {
+            pkt.srcId = m_network->m_parrotOverrideSrcId;
+
+            // override source ID
+            SET_UINT24(m_network->m_parrotOverrideSrcId, pkt.buffer, 5U);
+        }
+
+        // is this the first parrot frame?
         if (m_parrotFirstFrame) {
             if (m_network->m_parrotGrantDemand) {
                 uint32_t srcId = pkt.srcId;

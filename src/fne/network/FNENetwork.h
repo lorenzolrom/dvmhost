@@ -323,6 +323,7 @@ namespace network
         Timer m_parrotDelayTimer;
         bool m_parrotGrantDemand;
         bool m_parrotOnlyOriginating;
+        uint32_t m_parrotOverrideSrcId;
 
         bool m_kmfServicesEnabled;
 

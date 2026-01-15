@@ -86,6 +86,7 @@ FNENetwork::FNENetwork(HostFNE* host, const std::string& address, uint16_t port,
     m_parrotDelayTimer(1000U, 0U, parrotDelay),
     m_parrotGrantDemand(parrotGrantDemand),
     m_parrotOnlyOriginating(false),
+    m_parrotOverrideSrcId(0U),
     m_kmfServicesEnabled(false),
     m_ridLookup(nullptr),
     m_tidLookup(nullptr),
@@ -240,6 +241,11 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
     }
 
     m_parrotOnlyOriginating = conf["parrotOnlyToOrginiatingPeer"].as<bool>(false);
+    m_parrotOverrideSrcId = conf["parrotOverrideSrcId"].as<uint32_t>(0U);
+    if (m_parrotOverrideSrcId > 0U && m_parrotOverrideSrcId > 16777200U) {
+        LogWarning(LOG_MASTER, "Parrot Override Source ID %u is out of valid range (1 - 16777200), disabling override.", m_parrotOverrideSrcId);
+        m_parrotOverrideSrcId = 0U;
+    }
 
     // jitter buffer configuration
     yaml::Node jitterConf = conf["jitterBuffer"];
@@ -378,6 +384,9 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
             LogInfo("    Global Jitter Buffer Default Max Wait: %u microseconds", m_jitterMaxWait);
         }
         LogInfo("    Parrot Repeat to Only Originating Peer: %s", m_parrotOnlyOriginating ? "yes" : "no");
+        if (m_parrotOverrideSrcId != 0U) {
+            LogInfo("    Parrot Repeat Source ID Override: %u", m_parrotOverrideSrcId);
+        }
         LogInfo("    P25 OTAR KMF Services Enabled: %s", m_kmfServicesEnabled ? "yes" : "no");
         LogInfo("    P25 OTAR KMF Listening Address: %s", m_address.c_str());
         LogInfo("    P25 OTAR KMF Listening Port: %u", kmfOtarPort);

@@ -691,6 +691,21 @@ void TagDMRData::playbackParrot()
     auto& pkt = m_parrotFrames[0];
     m_parrotFrames.lock();
     if (pkt.buffer != nullptr) {
+        // has the override source ID been set?
+        if (m_network->m_parrotOverrideSrcId > 0U) {
+            pkt.srcId = m_network->m_parrotOverrideSrcId;
+
+            // override source ID
+            SET_UINT24(m_network->m_parrotOverrideSrcId, pkt.buffer, 5U);
+
+            /*
+            ** bryanb: DMR is problematic because the VOICE_LC_HEADER, TERMINATOR_WITH_LC,
+            ** and VOICE_PI_HEADER all contain the source ID in the LC portion of the frame
+            ** and because we are not updating that the parrot playback will appear to come from
+            ** the original source ID in those frames
+            */
+        }
+
         m_lastParrotPeerId = pkt.peerId;
         m_lastParrotSrcId = pkt.srcId;
         m_lastParrotDstId = pkt.dstId;

@@ -139,6 +139,8 @@ master:
     parrotGrantDemand: true
     # Flag indicating whether or not a parrot TG call will only be sent to the originating peer.
     parrotOnlyToOrginiatingPeer: false
+    # Source ID to override parrot TG calls with (0 for no override).
+    parrotOverrideSrcId: 0
 
     # Flag indicating whether or not P25 OTAR KMF services are enabled.
     kmfServicesEnabled: false
