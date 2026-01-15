@@ -98,6 +98,12 @@ void NetRPC::clock(uint32_t ms)
                 udp::Socket::address(address).c_str(), udp::Socket::port(address), rpcHeader.getFunction(), rpcHeader.getMessageLength());
         }
 
+        if (length < RPC_HEADER_LENGTH_BYTES + rpcHeader.getMessageLength()) {
+            LogError(LOG_NET, "NetRPC::clock(), message received from network is malformed! %u bytes != %u bytes", 
+                RPC_HEADER_LENGTH_BYTES + rpcHeader.getMessageLength(), length);
+            return;
+        }
+
         // copy message
         uint32_t messageLength = rpcHeader.getMessageLength();
         UInt8Array message = std::unique_ptr<uint8_t[]>(new uint8_t[messageLength]);
