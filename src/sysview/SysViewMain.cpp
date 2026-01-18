@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2024,2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2024-2026 Bryan Biedenkapp, N2PLL
  *
  */
 #include "Defines.h"
@@ -764,13 +764,16 @@ void* threadNetworkPump(void* arg)
                                     }
                                 }
                                 break;
-                                case P25DEF::TSBKO::ISP_EMERG_ALRM_REQ:
+                                case P25DEF::TSBKO::OSP_DENY_RSP:
                                 {
                                     // non-emergency mode is a TSBKO::OSP_DENY_RSP
                                     if (!tsbk->getEmergency()) {
-                                        lc::tsbk::OSP_DENY_RSP* osp = static_cast<lc::tsbk::OSP_DENY_RSP*>(tsbk.get());
-                                        LogInfoEx(LOG_NET, P25_TSDU_STR ", %s, AIV = %u, reason = $%02X, srcId = %u (%s), dstId = %u (%s)",
-                                            osp->toString().c_str(), osp->getAIV(), osp->getResponse(), 
+                                        // bryanb: because our TSBKFactory will emit ISP_EMERG_ALRM_REQ for emergency alarm requests, we decoding OSP_DENY_RSP here
+                                        lc::tsbk::OSP_DENY_RSP* osp = new lc::tsbk::OSP_DENY_RSP();
+                                        osp->decode(data.get());
+
+                                        LogInfoEx(LOG_NET, P25_TSDU_STR ", %s, AIV = %u, reason = $%02X (%s), srcId = %u (%s), dstId = %u (%s)",
+                                            osp->toString().c_str(), osp->getAIV(), osp->getResponse(), P25Utils::denyRsnToString(osp->getResponse()).c_str(),
                                             osp->getSrcId(), resolveRID(osp->getSrcId()).c_str(), osp->getDstId(), resolveTGID(osp->getDstId()).c_str());
 
                                         // generate a net event for this
@@ -787,6 +790,8 @@ void* threadNetworkPump(void* arg)
 
                                             g_netDataEvent(netEvent);
                                         }
+
+                                        delete osp;
                                     } else {
                                         LogInfoEx(LOG_NET, P25_TSDU_STR ", %s, srcId = %u (%s), dstId = %u (%s)", tsbk->toString().c_str(), 
                                             srcId, resolveRID(srcId).c_str(), dstId, resolveTGID(dstId).c_str());

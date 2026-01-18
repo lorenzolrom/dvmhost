@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2017-2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2017-2026 Bryan Biedenkapp, N2PLL
  *  Copyright (C) 2022 Jason-UWU
  *
  */
@@ -2762,6 +2762,7 @@ void ControlSignaling::writeRF_TSDU_ACK_FNE(uint32_t srcId, uint32_t service, bo
 void ControlSignaling::writeRF_TSDU_Deny(uint32_t srcId, uint32_t dstId, uint8_t reason, uint8_t service, bool grp, bool aiv)
 {
     std::unique_ptr<OSP_DENY_RSP> osp = std::make_unique<OSP_DENY_RSP>();
+    osp->setMFId(m_lastMFID);
     osp->setAIV(aiv);
     osp->setSrcId(srcId);
     osp->setDstId(dstId);
@@ -2962,6 +2963,7 @@ void ControlSignaling::writeRF_TSDU_U_Dereg_Ack(uint32_t srcId)
 void ControlSignaling::writeRF_TSDU_Queue(uint32_t srcId, uint32_t dstId, uint8_t reason, uint8_t service, bool grp, bool aiv)
 {
     std::unique_ptr<OSP_QUE_RSP> osp = std::make_unique<OSP_QUE_RSP>();
+    osp->setMFId(m_lastMFID);
     osp->setAIV(aiv);
     osp->setSrcId(srcId);
     osp->setDstId(dstId);
