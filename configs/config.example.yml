@@ -231,6 +231,8 @@ protocols:
             disableGrantSourceIdCheck: false
             # Flag indicating whether or not the adjacent site broadcasts are disabled.
             disableAdjSiteBroadcast: false
+            # Flag indicating a dedicated CC while process call TDUs and explicitly release grants when a call TDU occurs.
+            explicitTDUGrantRelease: true
             # Flag indicating immediate TSDUs will be sent twice.
             redundantImmediate: true
             # Flag indicating whether redundant grant responses should be transmitted.

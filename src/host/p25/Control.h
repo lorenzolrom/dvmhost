@@ -316,6 +316,7 @@ namespace p25
         bool m_dfsiFDX;
         bool m_forceAllowTG0;
         bool m_immediateCallTerm;
+        bool m_explicitTDUGrantRelease;
 
         uint32_t m_defaultNetIdleTalkgroup;
 

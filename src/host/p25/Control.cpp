@@ -86,6 +86,7 @@ Control::Control(bool authoritative, uint32_t nac, uint32_t callHang, uint32_t q
     m_dfsiFDX(false),
     m_forceAllowTG0(false),
     m_immediateCallTerm(true),
+    m_explicitTDUGrantRelease(true),
     m_defaultNetIdleTalkgroup(0U),
     m_idenTable(idenTable),
     m_ridLookup(ridLookup),
@@ -369,6 +370,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
     }
 
     m_immediateCallTerm = p25Protocol["immediateCallTerm"].as<bool>(true);
+    m_explicitTDUGrantRelease = p25Protocol["explicitTDUGrantRelease"].as<bool>(true);
 
     /*
     ** Voice Silence and Frame Loss Thresholds
@@ -565,6 +567,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
         LogInfo("    Demand Unit Registration for Refused Affiliation: %s", m_demandUnitRegForRefusedAff ? "yes" : "no");
 
         LogInfo("    Immediate Call Termination: %s", m_immediateCallTerm ? "yes" : "no");
+        LogInfo("    Explicit TDU Grant Release: %s", m_explicitTDUGrantRelease ? "yes" : "no");
 
         LogInfo("    Notify VCs of Active TGs: %s", m_ccNotifyActiveTG ? "yes" : "no");
 
@@ -1247,6 +1250,12 @@ void Control::permittedTG(uint32_t dstId, bool dataPermit)
             LogInfoEx(LOG_P25, "non-authoritative TG permit, dstId = %u", dstId);
     }
 
+    // if this a unpermit ensure we write TDUs
+    if (m_permittedDstId != 0U && dstId == 0U) {
+        for (uint8_t i = 0; i < 2; i++)
+            writeRF_TDU(true);
+    }
+
     m_permittedDstId = dstId;
 
     // is this a data permit?
@@ -1648,6 +1657,32 @@ void Control::processNetwork()
                 return;
             }
 
+            // if we're a control channel and this is a TDU trying to terminate a call release the channel
+            if (duid == DUID::TDU && m_enableControl && m_dedicatedControl && m_explicitTDUGrantRelease) {
+                if (srcId == 0U && dstId == 0U) {
+                    LogError(LOG_NET, "P25, invalid call, srcId = %u, dstId = %u", srcId, dstId);
+                    return;
+                }
+
+                if (m_affiliations->isGranted(dstId)) {
+                    // validate source RID
+                    if (!acl::AccessControl::validateSrcId(srcId)) {
+                        return;
+                    }
+
+                    // validate the target ID, if the target is a talkgroup
+                    if (!acl::AccessControl::validateTGId(dstId)) {
+                        return;
+                    }
+
+                    if (m_verbose) {
+                        LogInfoEx(LOG_NET, P25_TDU_STR ", srcId = %u", srcId);
+                    }
+
+                    m_affiliations->releaseGrant(dstId, false);
+                }
+            }
+
             m_voice->processNetwork(data.get(), frameLength, control, lsd, duid, frameType);
             break;
 
@@ -2040,11 +2075,13 @@ void Control::RPC_activeTG(json::object& req, json::object& reply)
                 continue;
             }
 
-            m_activeTG.push_back(entry.get<uint32_t>());
+            uint32_t dstId = entry.get<uint32_t>();
+            if (dstId != 0U) {
+                ::LogInfoEx(LOG_P25, "active TG update, dstId = %u", dstId);
+                m_activeTG.push_back(dstId);
+            }
         }
     }
-
-    ::LogInfoEx(LOG_P25, "active TG update, activeCnt = %u", m_activeTG.size());
 }
 
 /* (RPC Handler) Clear active TGID list from the authoritative CC host. */
