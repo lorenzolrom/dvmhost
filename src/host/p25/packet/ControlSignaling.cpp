@@ -1754,6 +1754,10 @@ void ControlSignaling::writeRF_TDULC_ChanRelease(bool grp, uint32_t srcId, uint3
     if (m_p25->m_enableControl) {
         writeNet_TSDU_Call_Term(srcId, dstId);
     }
+
+    if (m_p25->m_notifyCC) {
+        m_p25->notifyCC_ReleaseGrant(dstId);
+    }
 }
 
 /* Helper to write control channel packet data. */
