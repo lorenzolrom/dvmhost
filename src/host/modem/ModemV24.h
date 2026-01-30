@@ -85,7 +85,7 @@ namespace modem
             netLDU1(nullptr),
             netLDU2(nullptr),
             pduUserData(nullptr),
-            dataHeader(),
+            dataHeader(nullptr),
             dataCall(false),
             pduUserDataOffset(0U),
             pduTotalBlocks(0U),
@@ -140,6 +140,10 @@ namespace modem
                 delete[] pduUserData;
                 pduUserData = nullptr;
             }
+            if (dataHeader != nullptr) {
+                delete dataHeader;
+                dataHeader = nullptr;
+            }
         }
 
         /**
@@ -180,7 +184,8 @@ namespace modem
 
             if (pduUserData != nullptr)
                 ::memset(pduUserData, 0x00U, P25DEF::P25_MAX_PDU_BLOCKS * P25DEF::P25_PDU_CONFIRMED_LENGTH_BYTES + 2U);
-            dataHeader.reset();
+            if (dataHeader != nullptr)
+                dataHeader->reset();
 
             dataCall = false;
             pduUserDataOffset = 0U;
@@ -274,7 +279,7 @@ namespace modem
         /**
          * @brief Data call header.
          */
-        p25::data::DataHeader dataHeader;
+        p25::data::DataHeader* dataHeader;
 
         /**
          * @brief Flag indicating the current call is a data call.
@@ -620,7 +625,7 @@ namespace modem
          * @param dataHeader Instance of a PDU data header.
          * @param pduUserData Buffer containing user data to transmit.
          */
-        void storeConvertedRxPDU(p25::data::DataHeader& dataHeader, uint8_t* pduUserData);
+        void storeConvertedRxPDU(p25::data::DataHeader* dataHeader, uint8_t* pduUserData);
         /**
          * @brief Helper to generate a P25 TDU packet.
          * @param buffer Buffer to create TDU.

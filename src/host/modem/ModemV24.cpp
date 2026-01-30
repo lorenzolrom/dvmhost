@@ -553,13 +553,13 @@ void ModemV24::storeConvertedRx(const uint8_t* buffer, uint32_t length)
 
 /* Internal helper to store converted PDU Rx frames. */
 
-void ModemV24::storeConvertedRxPDU(data::DataHeader& dataHeader, uint8_t* pduUserData)
+void ModemV24::storeConvertedRxPDU(data::DataHeader* dataHeader, uint8_t* pduUserData)
 {
     assert(pduUserData != nullptr);
 
-    uint32_t bitLength = ((dataHeader.getBlocksToFollow() + 1U) * P25_PDU_FEC_LENGTH_BITS) + P25_PREAMBLE_LENGTH_BITS;
-    if (dataHeader.getPadLength() > 0U)
-        bitLength += (dataHeader.getPadLength() * 8U);
+    uint32_t bitLength = ((dataHeader->getBlocksToFollow() + 1U) * P25_PDU_FEC_LENGTH_BITS) + P25_PREAMBLE_LENGTH_BITS;
+    if (dataHeader->getPadLength() > 0U)
+        bitLength += (dataHeader->getPadLength() * 8U);
 
     uint32_t offset = P25_PREAMBLE_LENGTH_BITS;
 
@@ -568,21 +568,21 @@ void ModemV24::storeConvertedRxPDU(data::DataHeader& dataHeader, uint8_t* pduUse
     uint8_t block[P25_PDU_FEC_LENGTH_BYTES];
     ::memset(block, 0x00U, P25_PDU_FEC_LENGTH_BYTES);
 
-    uint32_t blocksToFollow = dataHeader.getBlocksToFollow();
+    uint32_t blocksToFollow = dataHeader->getBlocksToFollow();
 
     // generate the PDU header and 1/2 rate Trellis
-    dataHeader.encode(block);
+    dataHeader->encode(block);
     Utils::setBitRange(block, pdu, offset, P25_PDU_FEC_LENGTH_BITS);
     offset += P25_PDU_FEC_LENGTH_BITS;
 
     if (blocksToFollow > 0U) {
         uint32_t dataOffset = 0U;
-        uint32_t packetLength = dataHeader.getPDULength();
+        uint32_t packetLength = dataHeader->getPDULength();
 
         // generate the PDU data
         for (uint32_t i = 0U; i < blocksToFollow; i++) {
             data::DataBlock dataBlock = data::DataBlock();
-            dataBlock.setFormat(dataHeader);
+            dataBlock.setFormat(*dataHeader);
             dataBlock.setSerialNo(i);
             dataBlock.setData(pduUserData + dataOffset);
             dataBlock.setLastBlock((i + 1U) == blocksToFollow);
@@ -592,7 +592,7 @@ void ModemV24::storeConvertedRxPDU(data::DataHeader& dataHeader, uint8_t* pduUse
             Utils::setBitRange(block, pdu, offset, P25_PDU_FEC_LENGTH_BITS);
 
             offset += P25_PDU_FEC_LENGTH_BITS;
-            dataOffset += (dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_DATA_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES;
+            dataOffset += (dataHeader->getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_DATA_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES;
         }
     }
 
@@ -953,9 +953,10 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             uint8_t header[P25_PDU_HEADER_LENGTH_BYTES];
             ::memset(header, 0x00U, P25_PDU_HEADER_LENGTH_BYTES);
 
-            ::memcpy(header, dfsiData + 1U, P25_PDU_HEADER_LENGTH_BYTES);
-            data::DataHeader pduHeader = data::DataHeader();
-            bool ret = pduHeader.decode(header, true);
+            // skip the first 9 bytes (embedded start of stream)
+            ::memcpy(header, dfsiData + 9U, P25_PDU_HEADER_LENGTH_BYTES);
+            data::DataHeader* pduHeader = new data::DataHeader();
+            bool ret = pduHeader->decode(header, true);
             if (!ret) {
                 LogWarning(LOG_MODEM, P25_PDU_STR ", unfixable RF 1/2 rate header data");
                 Utils::dump(1U, "P25, Unfixable PDU Data", buffer, P25_PDU_FEC_LENGTH_BYTES);
@@ -964,21 +965,25 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
             if (m_debug) {
                 ::LogDebugEx(LOG_MODEM, "ModemV24::convertToAirV24()", "V.24 RX, PDU ISP, ack = %u, outbound = %u, fmt = $%02X, mfId = $%02X, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, S = %u, n = %u, seqNo = %u, lastFragment = %u, hdrOffset = %u, llId = %u",
-                    pduHeader.getAckNeeded(), pduHeader.getOutbound(), pduHeader.getFormat(), pduHeader.getMFId(), pduHeader.getSAP(), pduHeader.getFullMessage(),
-                    pduHeader.getBlocksToFollow(), pduHeader.getPadLength(), pduHeader.getPacketLength(), pduHeader.getSynchronize(), pduHeader.getNs(), pduHeader.getFSN(), pduHeader.getLastFragment(),
-                    pduHeader.getHeaderOffset(), pduHeader.getLLId());
+                    pduHeader->getAckNeeded(), pduHeader->getOutbound(), pduHeader->getFormat(), pduHeader->getMFId(), pduHeader->getSAP(), pduHeader->getFullMessage(),
+                    pduHeader->getBlocksToFollow(), pduHeader->getPadLength(), pduHeader->getPacketLength(), pduHeader->getSynchronize(), pduHeader->getNs(), pduHeader->getFSN(), pduHeader->getLastFragment(),
+                    pduHeader->getHeaderOffset(), pduHeader->getLLId());
             }
 
             m_rxCall->dataCall = true;
             m_rxCall->dataHeader = pduHeader;
 
-            for (uint8_t i = 0U; i < pduHeader.getBlocksToFollow() + 1U; i++) {
+            int skipBytes = 1U; // skip padding between PDU blocks
+            for (uint8_t i = 0U; i < pduHeader->getBlocksToFollow() + 1U; i++) {
+                uint32_t blockOffset = 9U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_UNCONFIRMED_LENGTH_BYTES) + skipBytes;
+
                 uint8_t dataBlock[P25_PDU_UNCONFIRMED_LENGTH_BYTES];
                 ::memset(dataBlock, 0x00U, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
-                ::memcpy(dataBlock, dfsiData + 1U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_UNCONFIRMED_LENGTH_BYTES), P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+                ::memcpy(dataBlock, dfsiData + blockOffset, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
 
                 uint32_t offset = i * P25_PDU_UNCONFIRMED_LENGTH_BYTES;
                 ::memcpy(m_rxCall->pduUserData + offset, dataBlock, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+                skipBytes++; // each block is separated by a padding byte
             }
 
             storeConvertedRxPDU(pduHeader, m_rxCall->pduUserData);
@@ -992,9 +997,10 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             uint8_t header[P25_PDU_HEADER_LENGTH_BYTES];
             ::memset(header, 0x00U, P25_PDU_HEADER_LENGTH_BYTES);
 
-            ::memcpy(header, dfsiData + 1U, P25_PDU_HEADER_LENGTH_BYTES);
-            data::DataHeader pduHeader = data::DataHeader();
-            bool ret = pduHeader.decode(header, true);
+            // skip the first 9 bytes (embedded start of stream)
+            ::memcpy(header, dfsiData + 9U, P25_PDU_HEADER_LENGTH_BYTES);
+            data::DataHeader* pduHeader = new data::DataHeader();
+            bool ret = pduHeader->decode(header, true);
             if (!ret) {
                 LogWarning(LOG_MODEM, P25_PDU_STR ", unfixable RF 1/2 rate header data");
                 Utils::dump(1U, "P25, Unfixable PDU Data", buffer, P25_PDU_FEC_LENGTH_BYTES);
@@ -1003,14 +1009,14 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
             if (m_debug) {
                 ::LogDebugEx(LOG_MODEM, "ModemV24::convertToAirV24()", "V.24 RX, PDU ISP, ack = %u, outbound = %u, fmt = $%02X, mfId = $%02X, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, S = %u, n = %u, seqNo = %u, lastFragment = %u, hdrOffset = %u, llId = %u",
-                    pduHeader.getAckNeeded(), pduHeader.getOutbound(), pduHeader.getFormat(), pduHeader.getMFId(), pduHeader.getSAP(), pduHeader.getFullMessage(),
-                    pduHeader.getBlocksToFollow(), pduHeader.getPadLength(), pduHeader.getPacketLength(), pduHeader.getSynchronize(), pduHeader.getNs(), pduHeader.getFSN(), pduHeader.getLastFragment(),
-                    pduHeader.getHeaderOffset(), pduHeader.getLLId());
+                    pduHeader->getAckNeeded(), pduHeader->getOutbound(), pduHeader->getFormat(), pduHeader->getMFId(), pduHeader->getSAP(), pduHeader->getFullMessage(),
+                    pduHeader->getBlocksToFollow(), pduHeader->getPadLength(), pduHeader->getPacketLength(), pduHeader->getSynchronize(), pduHeader->getNs(), pduHeader->getFSN(), pduHeader->getLastFragment(),
+                    pduHeader->getHeaderOffset(), pduHeader->getLLId());
             }
 
             // make sure we don't get a PDU with more blocks then we support
-            if (pduHeader.getBlocksToFollow() >= P25_MAX_PDU_BLOCKS) {
-                LogError(LOG_MODEM, P25_PDU_STR ", ISP, too many PDU blocks to process, %u > %u", pduHeader.getBlocksToFollow(), P25_MAX_PDU_BLOCKS);
+            if (pduHeader->getBlocksToFollow() >= P25_MAX_PDU_BLOCKS) {
+                LogError(LOG_MODEM, P25_PDU_STR ", ISP, too many PDU blocks to process, %u > %u", pduHeader->getBlocksToFollow(), P25_MAX_PDU_BLOCKS);
 
                 m_rxCall->resetCallData();
                 break;
@@ -1020,14 +1026,18 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             m_rxCall->dataHeader = pduHeader;
 
             // PDU_UNCONF_HEADER only contains 3 blocks
+            int skipBytes = 1U; // skip padding between PDU blocks
             for (uint8_t i = 0U; i < 3U; i++) {
+                uint32_t blockOffset = 9U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_UNCONFIRMED_LENGTH_BYTES) + skipBytes;
+
                 uint8_t dataBlock[P25_PDU_UNCONFIRMED_LENGTH_BYTES];
                 ::memset(dataBlock, 0x00U, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
-                ::memcpy(dataBlock, dfsiData + 1U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_UNCONFIRMED_LENGTH_BYTES), P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+                ::memcpy(dataBlock, dfsiData + blockOffset, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
 
                 ::memcpy(m_rxCall->pduUserData + m_rxCall->pduUserDataOffset, dataBlock, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
                 m_rxCall->pduUserDataOffset += P25_PDU_UNCONFIRMED_LENGTH_BYTES;
                 m_rxCall->pduTotalBlocks++;
+                skipBytes++; // each block is separated by a padding byte
             }
         }
         break;
@@ -1045,7 +1055,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
             // PDU_UNCONF_END are variable length depending on the message
             if (frameType == DFSIFrameType::MOT_PDU_UNCONF_END) {
-                blockCnt = m_rxCall->dataHeader.getBlocksToFollow() - m_rxCall->pduTotalBlocks;
+                blockCnt = m_rxCall->dataHeader->getBlocksToFollow() - m_rxCall->pduTotalBlocks;
 
                 // bryanb: I wonder if there's a chance somehow the calculation will be less then zero...reasonably
                 //  as far as I can tell that should never happen as PDU_UNCONF_BLOCK_X should *always* contain
@@ -1053,14 +1063,18 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             }
 
             // PDU_UNCONF_BLOCK_X and PDU_UNCONF_END only contains 4 blocks each
+            int skipBytes = 0U; // skip padding between PDU blocks
             for (uint8_t i = 0U; i < blockCnt; i++) {
+                uint32_t blockOffset = 9U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_UNCONFIRMED_LENGTH_BYTES) + skipBytes;
+
                 uint8_t dataBlock[P25_PDU_UNCONFIRMED_LENGTH_BYTES];
                 ::memset(dataBlock, 0x00U, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
-                ::memcpy(dataBlock, dfsiData + 1U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_UNCONFIRMED_LENGTH_BYTES), P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+                ::memcpy(dataBlock, dfsiData + blockOffset, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
 
                 ::memcpy(m_rxCall->pduUserData + m_rxCall->pduUserDataOffset, dataBlock, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
                 m_rxCall->pduUserDataOffset += P25_PDU_UNCONFIRMED_LENGTH_BYTES;
                 m_rxCall->pduTotalBlocks++;
+                skipBytes++; // each block is separated by a padding byte
             }
 
             if (frameType == DFSIFrameType::MOT_PDU_UNCONF_END) {
@@ -1076,9 +1090,10 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             uint8_t header[P25_PDU_HEADER_LENGTH_BYTES];
             ::memset(header, 0x00U, P25_PDU_HEADER_LENGTH_BYTES);
 
-            ::memcpy(header, dfsiData + 1U, P25_PDU_HEADER_LENGTH_BYTES);
-            data::DataHeader pduHeader = data::DataHeader();
-            bool ret = pduHeader.decode(header, true);
+            // skip the first 9 bytes (embedded start of stream)
+            ::memcpy(header, dfsiData + 9U, P25_PDU_HEADER_LENGTH_BYTES);
+            data::DataHeader* pduHeader = new data::DataHeader();
+            bool ret = pduHeader->decode(header, true);
             if (!ret) {
                 LogWarning(LOG_MODEM, P25_PDU_STR ", unfixable RF 1/2 rate header data");
                 Utils::dump(1U, "P25, Unfixable PDU Data", buffer, P25_PDU_FEC_LENGTH_BYTES);
@@ -1087,21 +1102,25 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
             if (m_debug) {
                 ::LogDebugEx(LOG_MODEM, "ModemV24::convertToAirV24()", "V.24 RX, PDU ISP, ack = %u, outbound = %u, fmt = $%02X, mfId = $%02X, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, S = %u, n = %u, seqNo = %u, lastFragment = %u, hdrOffset = %u, llId = %u",
-                    pduHeader.getAckNeeded(), pduHeader.getOutbound(), pduHeader.getFormat(), pduHeader.getMFId(), pduHeader.getSAP(), pduHeader.getFullMessage(),
-                    pduHeader.getBlocksToFollow(), pduHeader.getPadLength(), pduHeader.getPacketLength(), pduHeader.getSynchronize(), pduHeader.getNs(), pduHeader.getFSN(), pduHeader.getLastFragment(),
-                    pduHeader.getHeaderOffset(), pduHeader.getLLId());
+                    pduHeader->getAckNeeded(), pduHeader->getOutbound(), pduHeader->getFormat(), pduHeader->getMFId(), pduHeader->getSAP(), pduHeader->getFullMessage(),
+                    pduHeader->getBlocksToFollow(), pduHeader->getPadLength(), pduHeader->getPacketLength(), pduHeader->getSynchronize(), pduHeader->getNs(), pduHeader->getFSN(), pduHeader->getLastFragment(),
+                    pduHeader->getHeaderOffset(), pduHeader->getLLId());
             }
 
             m_rxCall->dataCall = true;
             m_rxCall->dataHeader = pduHeader;
 
-            for (uint8_t i = 0U; i < pduHeader.getBlocksToFollow() + 1U; i++) {
+            int skipBytes = 1U; // skip padding between PDU blocks
+            for (uint8_t i = 0U; i < pduHeader->getBlocksToFollow() + 1U; i++) {
+                uint32_t blockOffset = 9U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_CONFIRMED_LENGTH_BYTES) + skipBytes;
+
                 uint8_t dataBlock[P25_PDU_CONFIRMED_LENGTH_BYTES];
                 ::memset(dataBlock, 0x00U, P25_PDU_CONFIRMED_LENGTH_BYTES);
-                ::memcpy(dataBlock, dfsiData + 1U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_CONFIRMED_LENGTH_BYTES), P25_PDU_CONFIRMED_LENGTH_BYTES);
+                ::memcpy(dataBlock, dfsiData + blockOffset, P25_PDU_CONFIRMED_LENGTH_BYTES);
 
                 uint32_t offset = i * P25_PDU_CONFIRMED_LENGTH_BYTES;
                 ::memcpy(m_rxCall->pduUserData + offset, dataBlock, P25_PDU_CONFIRMED_LENGTH_BYTES);
+                skipBytes++; // each block is separated by a padding byte
             }
 
             storeConvertedRxPDU(pduHeader, m_rxCall->pduUserData);
@@ -1115,9 +1134,10 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             uint8_t header[P25_PDU_HEADER_LENGTH_BYTES];
             ::memset(header, 0x00U, P25_PDU_HEADER_LENGTH_BYTES);
 
-            ::memcpy(header, dfsiData + 1U, P25_PDU_HEADER_LENGTH_BYTES);
-            data::DataHeader pduHeader = data::DataHeader();
-            bool ret = pduHeader.decode(header, true);
+            // skip the first 9 bytes (embedded start of stream)
+            ::memcpy(header, dfsiData + 9U, P25_PDU_HEADER_LENGTH_BYTES);
+            data::DataHeader* pduHeader = new data::DataHeader();
+            bool ret = pduHeader->decode(header, true);
             if (!ret) {
                 LogWarning(LOG_MODEM, P25_PDU_STR ", unfixable RF 1/2 rate header data");
                 Utils::dump(1U, "P25, Unfixable PDU Data", buffer, P25_PDU_FEC_LENGTH_BYTES);
@@ -1126,14 +1146,14 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
             if (m_debug) {
                 ::LogDebugEx(LOG_MODEM, "ModemV24::convertToAirV24()", "V.24 RX, PDU ISP, ack = %u, outbound = %u, fmt = $%02X, mfId = $%02X, sap = $%02X, fullMessage = %u, blocksToFollow = %u, padLength = %u, packetLength = %u, S = %u, n = %u, seqNo = %u, lastFragment = %u, hdrOffset = %u, llId = %u",
-                    pduHeader.getAckNeeded(), pduHeader.getOutbound(), pduHeader.getFormat(), pduHeader.getMFId(), pduHeader.getSAP(), pduHeader.getFullMessage(),
-                    pduHeader.getBlocksToFollow(), pduHeader.getPadLength(), pduHeader.getPacketLength(), pduHeader.getSynchronize(), pduHeader.getNs(), pduHeader.getFSN(), pduHeader.getLastFragment(),
-                    pduHeader.getHeaderOffset(), pduHeader.getLLId());
+                    pduHeader->getAckNeeded(), pduHeader->getOutbound(), pduHeader->getFormat(), pduHeader->getMFId(), pduHeader->getSAP(), pduHeader->getFullMessage(),
+                    pduHeader->getBlocksToFollow(), pduHeader->getPadLength(), pduHeader->getPacketLength(), pduHeader->getSynchronize(), pduHeader->getNs(), pduHeader->getFSN(), pduHeader->getLastFragment(),
+                    pduHeader->getHeaderOffset(), pduHeader->getLLId());
             }
 
             // make sure we don't get a PDU with more blocks then we support
-            if (pduHeader.getBlocksToFollow() >= P25_MAX_PDU_BLOCKS) {
-                LogError(LOG_MODEM, P25_PDU_STR ", ISP, too many PDU blocks to process, %u > %u", pduHeader.getBlocksToFollow(), P25_MAX_PDU_BLOCKS);
+            if (pduHeader->getBlocksToFollow() >= P25_MAX_PDU_BLOCKS) {
+                LogError(LOG_MODEM, P25_PDU_STR ", ISP, too many PDU blocks to process, %u > %u", pduHeader->getBlocksToFollow(), P25_MAX_PDU_BLOCKS);
 
                 m_rxCall->resetCallData();
                 break;
@@ -1143,14 +1163,18 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             m_rxCall->dataHeader = pduHeader;
 
             // PDU_CONF_HEADER only contains 3 blocks
+            int skipBytes = 1U; // skip padding between PDU blocks
             for (uint8_t i = 0U; i < 3U; i++) {
+                uint32_t blockOffset = 9U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_CONFIRMED_LENGTH_BYTES) + skipBytes;
+
                 uint8_t dataBlock[P25_PDU_CONFIRMED_LENGTH_BYTES];
                 ::memset(dataBlock, 0x00U, P25_PDU_CONFIRMED_LENGTH_BYTES);
-                ::memcpy(dataBlock, dfsiData + 1U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_CONFIRMED_LENGTH_BYTES), P25_PDU_CONFIRMED_LENGTH_BYTES);
+                ::memcpy(dataBlock, dfsiData + blockOffset, P25_PDU_CONFIRMED_LENGTH_BYTES);
 
                 ::memcpy(m_rxCall->pduUserData + m_rxCall->pduUserDataOffset, dataBlock, P25_PDU_CONFIRMED_LENGTH_BYTES);
                 m_rxCall->pduUserDataOffset += P25_PDU_CONFIRMED_LENGTH_BYTES;
                 m_rxCall->pduTotalBlocks++;
+                skipBytes++; // each block is separated by a padding byte
             }
         }
         break;
@@ -1168,7 +1192,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
             // PDU_CONF_END are variable length depending on the message
             if (frameType == DFSIFrameType::MOT_PDU_CONF_END) {
-                blockCnt = m_rxCall->dataHeader.getBlocksToFollow() - m_rxCall->pduTotalBlocks;
+                blockCnt = m_rxCall->dataHeader->getBlocksToFollow() - m_rxCall->pduTotalBlocks;
 
                 // bryanb: I wonder if there's a chance somehow the calculation will be less then zero...reasonably
                 //  as far as I can tell that should never happen as PDU_CONF_BLOCK_X should *always* contain
@@ -1176,14 +1200,17 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
             }
 
             // PDU_CONF_BLOCK_X only contains 4 blocks each
+            int skipBytes = 0U; // skip padding between PDU blocks
             for (uint8_t i = 0U; i < blockCnt; i++) {
+                uint32_t blockOffset = 9U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_CONFIRMED_LENGTH_BYTES) + skipBytes;
+
                 uint8_t dataBlock[P25_PDU_CONFIRMED_LENGTH_BYTES];
                 ::memset(dataBlock, 0x00U, P25_PDU_CONFIRMED_LENGTH_BYTES);
-                ::memcpy(dataBlock, dfsiData + 1U + P25_PDU_HEADER_LENGTH_BYTES + (i * P25_PDU_CONFIRMED_LENGTH_BYTES), P25_PDU_CONFIRMED_LENGTH_BYTES);
-
+                ::memcpy(dataBlock, dfsiData + blockOffset, P25_PDU_CONFIRMED_LENGTH_BYTES);
                 ::memcpy(m_rxCall->pduUserData + m_rxCall->pduUserDataOffset, dataBlock, P25_PDU_CONFIRMED_LENGTH_BYTES);
                 m_rxCall->pduUserDataOffset += P25_PDU_CONFIRMED_LENGTH_BYTES;
                 m_rxCall->pduTotalBlocks++;
+                skipBytes++; // each block is separated by a padding byte
             }
 
             if (frameType == DFSIFrameType::MOT_PDU_CONF_END) {
@@ -2807,15 +2834,23 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
                     offset += P25_PDU_FEC_LENGTH_BITS;
                 }
 
+                // assemble V.24 PDU frames
                 if (blocksToFollow <= 3U) {
-                    DECLARE_UINT8_ARRAY(pduBuf, ((blocksToFollow + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)) + 1U);
-                    uint32_t pduLen = (blocksToFollow + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+                    DECLARE_UINT8_ARRAY(pduBuf, ((blocksToFollow + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)) + 9U);
+                    uint32_t pduLen = ((blocksToFollow + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)) + 9U;
 
                     pduBuf[0U] = (dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? DFSIFrameType::MOT_PDU_SINGLE_CONF : DFSIFrameType::MOT_PDU_SINGLE_UNCONF;
 
-                    dataHeader.encode(pduBuf + 1U, true);
+                    // header block contains the embedded start of stream
+                    MotStartOfStream embedded = MotStartOfStream();
+                    embedded.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
+                    embedded.setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
+                    embedded.setArgument1((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? MotStreamPayload::DATA_18 : MotStreamPayload::DATA_12);
+                    embedded.encode(pduBuf + 1U);
+
+                    dataHeader.encode(pduBuf + 9U, true);
                     for (uint32_t i = 0U; i < blocksToFollow; i++) {
-                        dataBlocks[i].encode(pduBuf + 1U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
+                        dataBlocks[i].encode(pduBuf + 9U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
                     }
 
                     MotStartOfStream start = MotStartOfStream();
@@ -2856,8 +2891,8 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
                     uint32_t baseBlockCnt = (blocksToFollow - 3U) / DFSI_PDU_BLOCK_CNT;
                     uint32_t currentBlock = 0U;
 
-                    DECLARE_UINT8_ARRAY(pduBuf, ((DFSI_PDU_BLOCK_CNT + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)) + 1U);
-                    uint32_t pduLen = ((DFSI_PDU_BLOCK_CNT + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)) + 1U;
+                    DECLARE_UINT8_ARRAY(pduBuf, ((DFSI_PDU_BLOCK_CNT + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)) + 9U);
+                    uint32_t pduLen = ((DFSI_PDU_BLOCK_CNT + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)) + 9U;
 
                     MotStartOfStream start = MotStartOfStream();
                     start.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
@@ -2867,9 +2902,16 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
                     // assemble the first frame
                     pduBuf[0U] = (dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? DFSIFrameType::MOT_PDU_CONF_HEADER : DFSIFrameType::MOT_PDU_UNCONF_HEADER;
 
-                    dataHeader.encode(pduBuf + 1U, true);
+                    // header block contains the embedded start of stream
+                    MotStartOfStream embedded = MotStartOfStream();
+                    embedded.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
+                    embedded.setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
+                    embedded.setArgument1((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? MotStreamPayload::DATA_18 : MotStreamPayload::DATA_12);
+                    embedded.encode(pduBuf + 1U);
+
+                    dataHeader.encode(pduBuf + 9U, true);
                     for (uint32_t i = 0U; i < DFSI_PDU_BLOCK_CNT - 1U; i++) {
-                        dataBlocks[currentBlock].encode(pduBuf + 1U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
+                        dataBlocks[currentBlock].encode(pduBuf + 9U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
                         currentBlock++;
                     }
 
@@ -2894,9 +2936,10 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
                         // reset buffer and set data
                         ::memset(pduBuf, 0x00U, pduLen);
                         pduBuf[0U] = currentOpcode;
+                        embedded.encode(pduBuf + 1U);
 
                         for (uint32_t i = 0U; i < DFSI_PDU_BLOCK_CNT - 1U; i++) {
-                            dataBlocks[currentBlock].encode(pduBuf + 1U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
+                            dataBlocks[currentBlock].encode(pduBuf + 9U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
                             currentBlock++;
                         }
 
@@ -2915,9 +2958,11 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
                         // reset buffer and set data
                         ::memset(pduBuf, 0x00U, pduLen);
                         pduBuf[0U] = (dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? DFSIFrameType::MOT_PDU_CONF_END : DFSIFrameType::MOT_PDU_UNCONF_END;
+                        embedded.encode(pduBuf + 1U);
+
                         pduLen = 0U;
                         for (uint32_t i = 0U; i < remainderBlocks; i++) {
-                            dataBlocks[currentBlock].encode(pduBuf + 1U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
+                            dataBlocks[currentBlock].encode(pduBuf + 9U + ((i + 1U) * ((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES)), true);
                             pduLen += 1U + (dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? P25_PDU_CONFIRMED_LENGTH_BYTES : P25_PDU_UNCONFIRMED_LENGTH_BYTES;
                             currentBlock++;
                         }
