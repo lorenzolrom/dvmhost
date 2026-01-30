@@ -2701,8 +2701,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
         break;
 
         case DUID::TDU:
-            if (m_txCallInProgress)
-                endOfStreamV24();
+            endOfStreamV24(); // this may incorrectly sent STOP ICW's with the VOICE payload, but it's better than nothing for now
             break;
 
         case DUID::TDULC:
