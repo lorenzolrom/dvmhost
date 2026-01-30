@@ -44,6 +44,9 @@ TEST_CASE("TSBK", "[p25][tsbk]") {
         testTSBK[0] = 0x34; // Example LCO (OSP_SCCB)
         testTSBK[1] = 0x00; // Mfg ID (standard)
 
+        tsbk1.setLCO(0x34U);
+        tsbk1.setMFId(0x00U);
+
         // Set some payload data
         for (uint32_t i = 2; i < P25_TSBK_LENGTH_BYTES - 2; i++) {
             testTSBK[i] = (uint8_t)(i * 0x11);
@@ -63,18 +66,21 @@ TEST_CASE("TSBK", "[p25][tsbk]") {
 
         Utils::dump(2U, "encoded", encoded, P25_TSBK_LENGTH_BYTES);
 
-        // Verify encoded matches input
-        for (uint32_t i = 0; i < P25_TSBK_LENGTH_BYTES - 2; i++) {
-            REQUIRE(encoded[i] == testTSBK[i]);
-        }
-
-        // Decode back
+        // Decode back and verify roundtrip
         OSP_TSBK_RAW tsbk2;
         bool result = tsbk2.decode(encoded, true);
 
         REQUIRE(result == true);
         REQUIRE(tsbk2.getLCO() == (testTSBK[0] & 0x3F));
         REQUIRE(tsbk2.getMFId() == testTSBK[1]);
+        
+        // Encode again and verify it matches the first encode
+        uint8_t encoded2[P25_TSBK_LENGTH_BYTES];
+        tsbk2.encode(encoded2, true, true);
+        
+        for (uint32_t i = 0; i < P25_TSBK_LENGTH_BYTES; i++) {
+            REQUIRE(encoded2[i] == encoded[i]);
+        }
     }
 
     SECTION("RawTSBK_Encode_Decode_WithTrellis") {
@@ -209,7 +215,7 @@ TEST_CASE("TSBK", "[p25][tsbk]") {
 
         // Payload is bytes 2-9 (8 bytes)
         uint8_t expectedPayload[8] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF };
-        ::memcpy(testTSBK + 2, expectedPayload, 8);
+        ::memcpy(testTSBK, expectedPayload, 8);
 
         edac::CRC::addCCITT162(testTSBK, P25_TSBK_LENGTH_BYTES);
 

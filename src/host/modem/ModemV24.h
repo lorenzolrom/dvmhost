@@ -42,9 +42,9 @@ namespace modem
      */
     enum SERIAL_TX_TYPE {
         STT_NO_DATA,                        //!< No Data
-        STT_NON_IMBE,                       //!< Non-IMBE Data/Signalling Frame
-        STT_NON_IMBE_NO_JITTER,             //!< Non-IMBE Data/Signalling Frame with Jitter Disabled
-        STT_IMBE                            //!< IMBE Voice Frame
+        STT_START_STOP,                     //!< Start/Stop Signalling Frame
+        STT_START_STOP_NO_JITTER,           //!< Start/Stop Signalling Frame with Jitter Disabled
+        STT_DATA                            //!< Paced Data/Signalling Frame or IMBE Voice Frame
     };
 
     /** @} */
