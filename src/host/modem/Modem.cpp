@@ -65,7 +65,7 @@ using namespace modem;
 
 Modem::Modem(port::IModemPort* port, bool duplex, bool rxInvert, bool txInvert, bool pttInvert, bool dcBlocker, bool cosLockout,
     uint8_t fdmaPreamble, uint8_t dmrRxDelay, uint8_t p25CorrCount, uint32_t dmrQueueSize, uint32_t p25QueueSize, uint32_t nxdnQueueSize,
-    bool disableOFlowReset, bool ignoreModemConfigArea, bool dumpModemStatus, bool trace, bool debug) :
+    bool disableOFlowReset, bool ignoreModemConfigArea, bool dumpModemStatus, bool displayDebugMessages, bool trace, bool debug) :
     m_port(port),
     m_protoVer(0U),
     m_dmrColorCode(0U),
@@ -158,6 +158,7 @@ Modem::Modem(port::IModemPort* port, bool duplex, bool rxInvert, bool txInvert, 
     m_flashDisabled(false),
     m_gotModemStatus(false),
     m_dumpModemStatus(dumpModemStatus),
+    m_displayModemDebugMessages(displayDebugMessages),
     m_respTrace(false),
     m_trace(trace),
     m_debug(debug)
@@ -2316,6 +2317,9 @@ void Modem::processFlashConfig(const uint8_t *buffer)
 
 void Modem::printDebug(const uint8_t* buffer, uint16_t len)
 {
+    if (!m_displayModemDebugMessages)
+        return;
+
     if (m_rspDoubleLength && buffer[3U] == CMD_DEBUG_DUMP) {
         uint8_t data[512U];
         ::memset(data, 0x00U, 512U);

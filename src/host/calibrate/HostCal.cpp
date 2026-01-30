@@ -211,6 +211,7 @@ int HostCal::run(int argc, char **argv)
         {
             m_debug = !m_debug;
             LogInfoEx(LOG_CAL, " - Modem Debug: %s", m_debug ? "On" : "Off");
+            m_modem->m_displayModemDebugMessages = m_debug;
             writeConfig();
         }
         break;

@@ -748,10 +748,12 @@ int Host::run()
 
         ::LogInfoEx(LOG_HOST, "[WAIT] Host is performing late initialization and warmup");
 
-        m_modem->clearNXDNFrame();
         m_modem->clearP25Frame();
-        m_modem->clearDMRFrame2();
-        m_modem->clearDMRFrame1();
+        if (!m_isModemDFSI) {
+            m_modem->clearDMRFrame2();
+            m_modem->clearDMRFrame1();
+            m_modem->clearNXDNFrame();
+        }
 
         // perform early pumping of the modem clock (this is so the DSP has time to setup its buffers),
         // and clock the network (so it may perform early connect)

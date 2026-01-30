@@ -689,6 +689,8 @@ system:
         ignoreModemConfigArea: false
         # Flag indicating whether verbose dumping of the modem status is enabled.
         dumpModemStatus: false
+        # Flag indicating whether or not modem debug messages are displayed to the log.
+        displayModemDebugMessages: false
         # Flag indicating whether or not trace logging is enabled.
         trace: false
         # Flag indicating whether or not debug logging is enabled.

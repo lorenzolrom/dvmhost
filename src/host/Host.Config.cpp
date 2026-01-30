@@ -542,13 +542,16 @@ bool Host::createModem()
     bool disableOFlowReset = modemConf["disableOFlowReset"].as<bool>(false);
     bool ignoreModemConfigArea = modemConf["ignoreModemConfigArea"].as<bool>(false);
     bool dumpModemStatus = modemConf["dumpModemStatus"].as<bool>(false);
+    bool displayModemDebugMessages = modemConf["displayModemDebugMessages"].as<bool>(false);
     bool respTrace = modemConf["respTrace"].as<bool>(false);
     bool trace = modemConf["trace"].as<bool>(false);
     bool debug = modemConf["debug"].as<bool>(false);
 
     // if modem debug is being forced from the commandline -- enable modem debug
-    if (g_modemDebug)
+    if (g_modemDebug) {
+        displayModemDebugMessages = true;
         debug = true;
+    }
 
     if (rfPower == 0U) { // clamp to 1
         rfPower = 1U;
@@ -707,6 +710,10 @@ bool Host::createModem()
         if (dumpModemStatus) {
             LogInfo("    Dump Modem Status: yes");
         }
+
+        if (displayModemDebugMessages) {
+            LogInfo("    Display Modem Debug Messages: yes");
+        }
     }
 
     if (debug) {
@@ -715,12 +722,12 @@ bool Host::createModem()
 
     if (m_isModemDFSI) {
         m_modem = new ModemV24(modemPort, m_duplex, m_p25QueueSizeBytes, m_p25QueueSizeBytes, rtrt, jitter,
-            dumpModemStatus, trace, debug);
+            dumpModemStatus, displayModemDebugMessages, trace, debug);
         ((ModemV24*)m_modem)->setCallTimeout(dfsiCallTimeout);
         ((ModemV24*)m_modem)->setTIAFormat(dfsiTIAMode);
     } else {
         m_modem = new Modem(modemPort, m_duplex, rxInvert, txInvert, pttInvert, dcBlocker, cosLockout, fdmaPreamble, dmrRxDelay, p25CorrCount,
-            m_dmrQueueSizeBytes, m_p25QueueSizeBytes, m_nxdnQueueSizeBytes, disableOFlowReset, ignoreModemConfigArea, dumpModemStatus, trace, debug);
+            m_dmrQueueSizeBytes, m_p25QueueSizeBytes, m_nxdnQueueSizeBytes, disableOFlowReset, ignoreModemConfigArea, dumpModemStatus, displayModemDebugMessages, trace, debug);
     }
     if (!m_modemRemote) {
         m_modem->setModeParams(m_dmrEnabled, m_p25Enabled, m_nxdnEnabled);
@@ -757,7 +764,8 @@ bool Host::createModem()
         return false;
     }
 
-    m_modem->setFifoLength(dmrFifoLength, p25FifoLength, nxdnFifoLength);
+    if (!m_isModemDFSI)
+        m_modem->setFifoLength(dmrFifoLength, p25FifoLength, nxdnFifoLength);
 
     // are we on a protocol version older then 3?
     if (m_modem->getVersion() < 3U) {

@@ -79,6 +79,9 @@ namespace modem
             kId(0U),
             VHDR1(nullptr),
             VHDR2(nullptr),
+            LDULC(nullptr),
+            seqNo(0U),
+            n(0U),
             netLDU1(nullptr),
             netLDU2(nullptr),
             pduUserData(nullptr),
@@ -89,8 +92,8 @@ namespace modem
             errors(0U)
         {
             MI = new uint8_t[P25DEF::MI_LENGTH_BYTES];
-            VHDR1 = new uint8_t[P25DFSIDEF::DFSI_TIA_VHDR_LEN];
-            VHDR2 = new uint8_t[P25DFSIDEF::DFSI_TIA_VHDR_LEN];
+            VHDR1 = new uint8_t[P25DFSIDEF::DFSI_MOT_VHDR_1_LEN];
+            VHDR2 = new uint8_t[P25DFSIDEF::DFSI_MOT_VHDR_2_LEN];
             LDULC = new uint8_t[P25DEF::P25_LDU_LC_FEC_LENGTH_BYTES];
 
             netLDU1 = new uint8_t[9U * 25U];
@@ -109,20 +112,34 @@ namespace modem
          */
         ~DFSICallData()
         {
-            if (MI != nullptr)
+            if (MI != nullptr) {
                 delete[] MI;
-            if (VHDR1 != nullptr)
+                MI = nullptr;
+            }
+            if (VHDR1 != nullptr) {
                 delete[] VHDR1;
-            if (VHDR2 != nullptr)
+                VHDR1 = nullptr;
+            }
+            if (VHDR2 != nullptr) {
                 delete[] VHDR2;
-            if (LDULC != nullptr)
+                VHDR2 = nullptr;
+            }
+            if (LDULC != nullptr) {
                 delete[] LDULC;
-            if (netLDU1 != nullptr)
+                LDULC = nullptr;
+            }
+            if (netLDU1 != nullptr) {
                 delete[] netLDU1;
-            if (netLDU2 != nullptr)
+                netLDU1 = nullptr;
+            }
+            if (netLDU2 != nullptr) {
                 delete[] netLDU2;
-            if (pduUserData != nullptr)
+                netLDU2 = nullptr;
+            }
+            if (pduUserData != nullptr) {
                 delete[] pduUserData;
+                pduUserData = nullptr;
+            }
         }
 
         /**
@@ -146,9 +163,9 @@ namespace modem
             kId = 0U;
 
             if (VHDR1 != nullptr)
-                ::memset(VHDR1, 0x00U, P25DFSIDEF::DFSI_TIA_VHDR_LEN);
+                ::memset(VHDR1, 0x00U, P25DFSIDEF::DFSI_MOT_VHDR_1_LEN);
             if (VHDR2 != nullptr)
-                ::memset(VHDR2, 0x00U, P25DFSIDEF::DFSI_TIA_VHDR_LEN);
+                ::memset(VHDR2, 0x00U, P25DFSIDEF::DFSI_MOT_VHDR_2_LEN);
 
             if (LDULC != nullptr)
                 ::memset(LDULC, 0x00U, P25DEF::P25_LDU_LC_FEC_LENGTH_BYTES);
@@ -500,11 +517,12 @@ namespace modem
          * @param diu Flag indicating whether or not V.24 communications are to a DIU.
          * @param jitter 
          * @param dumpModemStatus Flag indicating whether the modem status is dumped to the log.
+         * @param displayDebugMessages Flag indicating whether or not modem debug messages are displayed in the log.
          * @param trace Flag indicating whether air interface modem trace is enabled.
          * @param debug Flag indicating whether air interface modem debug is enabled.
          */
         ModemV24(port::IModemPort* port, bool duplex, uint32_t p25QueueSize, uint32_t p25TxQueueSize,
-            bool rtrt, uint16_t jitter, bool dumpModemStatus, bool trace, bool debug);
+            bool rtrt, uint16_t jitter, bool dumpModemStatus, bool displayDebugMessages, bool trace, bool debug);
         /**
          * @brief Finalizes a instance of the ModemV24 class.
          */

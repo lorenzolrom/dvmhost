@@ -40,9 +40,9 @@ using namespace p25::dfsi::frames;
 /* Initializes a new instance of the ModemV24 class. */
 
 ModemV24::ModemV24(port::IModemPort* port, bool duplex, uint32_t p25QueueSize, uint32_t p25TxQueueSize,
-    bool rtrt, uint16_t jitter, bool dumpModemStatus, bool trace, bool debug) :
+    bool rtrt, uint16_t jitter, bool dumpModemStatus, bool displayDebugMessages, bool trace, bool debug) :
     Modem(port, duplex, false, false, false, false, false, 80U, 7U, 8U, 1U, p25QueueSize, 1U,
-        false, false, dumpModemStatus, trace, debug),
+        false, false, dumpModemStatus, displayDebugMessages, trace, debug),
     m_rtrt(rtrt),
     m_superFrameCnt(0U),
     m_audio(),
