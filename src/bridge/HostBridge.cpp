@@ -173,6 +173,7 @@ HostBridge::HostBridge(const std::string& confFile) :
     m_udpUseULaw(false),
     m_udpUsrp(false),
     m_udpFrameTiming(false),
+    m_udpFrameTimeout(40U),
     m_udpFrameCnt(0U),
     m_tekAlgoId(P25DEF::ALGO_UNENCRYPT),
     m_tekKeyId(0U),
@@ -1041,6 +1042,7 @@ bool HostBridge::createNetwork()
     m_udpReceiveAddress = networkConf["udpReceiveAddress"].as<std::string>();
     m_udpUsrp = networkConf["udpUsrp"].as<bool>(false);
     m_udpFrameTiming = networkConf["udpFrameTiming"].as<bool>(false);
+    m_udpFrameTimeout = (uint16_t)networkConf["udpFrameTimeout"].as<uint32_t>(40U);
 
     if (m_udpUsrp) {
         m_udpMetadata = false;          // USRP disables metadata due to USRP always having metadata
@@ -1209,6 +1211,9 @@ bool HostBridge::createNetwork()
         }
         LogInfo("    UDP Audio USRP: %s", m_udpUsrp ? "yes" : "no");
         LogInfo("    UDP Frame Timing: %s", m_udpFrameTiming ? "yes" : "no");
+        if (m_udpFrameTiming) {
+            LogInfo("    UDP Frame Timeout: %u ms", m_udpFrameTimeout);
+        }
     }
 
     LogInfo("    Traffic Encrypted: %s", tekEnable ? "yes" : "no");
@@ -1304,6 +1309,11 @@ void HostBridge::processUDPAudio()
     ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
     int length = m_udpAudioSocket->read(buffer, DATA_PACKET_LENGTH, addr, addrLen);
     if (length < 0) {
+        return;
+    }
+
+    if (length > AUDIO_SAMPLES_LENGTH_BYTES * 2U) {
+        LogWarning(LOG_NET, "UDP audio packet too large (%d bytes), dropping", length);
         return;
     }
 
@@ -1405,6 +1415,7 @@ void HostBridge::processUDPAudio()
         }
 
         req->dstId = m_dstId;
+
         m_udpPackets.push_back(req);
     }
 }
@@ -2118,7 +2129,7 @@ void* HostBridge::threadUDPAudioProcess(void* arg)
         stopWatch.start();
 
         ulong64_t lastFrameTime = 0U;
-        Timer frameTimeout = Timer(1000U, 0U, 22U);
+        Timer frameTimeout = Timer(1000U, 0U, bridge->m_udpFrameTimeout);
 
         while (!g_killed) {
             if (!HostBridge::s_running) {
@@ -2133,6 +2144,8 @@ void* HostBridge::threadUDPAudioProcess(void* arg)
             // don't consider frame timeouts for RTP or USRP UDP streams (these will be properly timed anyway, we hope)
             if (!bridge->m_udpRTPFrames && !bridge->m_udpUsrp) {
                 frameTimeout.clock(ms);
+                if (frameTimeout.isRunning() && bridge->m_udpPackets.size() > 0)
+                    frameTimeout.start(); // clock the frame timeout timer
                 if (frameTimeout.isRunning() && frameTimeout.hasExpired()) {
                     frameTimeout.stop();
                     bridge->padSilenceAudio(bridge->m_udpSrcId, bridge->m_udpDstId);

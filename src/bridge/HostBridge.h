@@ -164,6 +164,7 @@ private:
     bool m_udpUseULaw;
     bool m_udpUsrp;
     bool m_udpFrameTiming;
+    uint32_t m_udpFrameTimeout;
     uint32_t m_udpFrameCnt;
 
     uint8_t m_tekAlgoId;
