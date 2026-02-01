@@ -2164,10 +2164,12 @@ void* HostBridge::threadUDPAudioProcess(void* arg)
                             // RTP timestamps increment by samples per frame
                             uint32_t expectedTimestamp = (uint32_t)lastFrameTime + (RTP_GENERIC_CLOCK_RATE / AUDIO_SAMPLES_LENGTH);
                             if (rtpTimestamp < expectedTimestamp) {
-                                // Frame is too early, already processed a more recent frame
+                                // frame is too early, already processed a more recent frame
+                                /*
                                 if (bridge->m_debug)
                                     LogDebugEx(LOG_HOST, "HostBridge::threadUDPAudioProcess()", "RTP frame too early, rtpTs = %u, expected >= %u, pktSeq = %u",
                                         rtpTimestamp, expectedTimestamp, pktSeq);
+                                */
                                 shouldProcess = false;
                             } else {
                                 // frame is ready to process - update RTP timestamp marker
@@ -2183,7 +2185,7 @@ void* HostBridge::threadUDPAudioProcess(void* arg)
                         
                         // check if enough time has passed since last frame (10ms for P25 LDUs)
                         if (now < lastFrameTime + 10U) {
-                            // Too early, don't process yet - keep frame in queue
+                            // too early, don't process yet - keep frame in queue
                             shouldProcess = false;
                         }
                     }
