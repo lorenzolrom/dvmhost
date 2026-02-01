@@ -99,8 +99,6 @@ network:
     #   (This allows the sending source to send audio as fast as it wants. This should not be used in combination
     #    with 'udpRTPFrames'.)
     udpFrameTiming: false
-    # Amount of time (ms) to wait for UDP audio frames before missing a audio frame.
-    udpFrameTimeout: 40
 
     #
     # Traffic Encryption Key (TEK) Configuration
