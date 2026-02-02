@@ -59,6 +59,9 @@
 #define RCD_FNE_SAVE_PEER_ACL           "fne-peer-commit"
 
 #define RCD_FNE_GET_STATS               "fne-stats"
+#define RCD_FNE_PUT_RESET_TOTAL_CALLS   "fne-reset-total-calls"
+#define RCD_FNE_PUT_RESET_ACTIVE_CALLS  "fne-reset-active-calls"
+#define RCD_FNE_PUT_RESET_CALL_COLLISIONS "fne-reset-call-collisions"
 
 #define RCD_FNE_GET_SPANNINGTREE        "fne-spanning-tree"
 
@@ -235,6 +238,9 @@ void usage(const char* message, const char* arg)
     reply += "  fne-peer-commit             Saves the current peer ACL to permenant storage (Converged FNE only)\r\n";
     reply += "\r\n";
     reply += "  fne-stats                   Retrieves current FNE statistics (Converged FNE only)\r\n";
+    reply += "  fne-reset-total-calls       Resets the total call statistics counters (Converged FNE only)\r\n";
+    reply += "  fne-reset-active-calls      Resets the active call statistics counters (Converged FNE only)\r\n";
+    reply += "  fne-reset-call-collisions   Resets the call collision statistics counters (Converged FNE only)\r\n";
     reply += "\r\n";
     reply += "  fne-spanning-tree           Retrieves the current FNE spanning tree (Converged FNE only)\r\n";
     reply += "\r\n";
@@ -975,6 +981,15 @@ int main(int argc, char** argv)
         }
         else if (rcom == RCD_FNE_GET_STATS) {
             retCode = client->send(HTTP_GET, FNE_GET_STATS, json::object(), response);
+        }
+        else if (rcom == RCD_FNE_PUT_RESET_TOTAL_CALLS) {
+            retCode = client->send(HTTP_PUT, FNE_PUT_RESET_TOTAL_CALLS, json::object(), response);
+        }
+        else if (rcom == RCD_FNE_PUT_RESET_ACTIVE_CALLS) {
+            retCode = client->send(HTTP_PUT, FNE_PUT_RESET_ACTIVE_CALLS, json::object(), response);
+        }
+        else if (rcom == RCD_FNE_PUT_RESET_CALL_COLLISIONS) {
+            retCode = client->send(HTTP_PUT, FNE_PUT_RESET_CALL_COLLISIONS, json::object(), response);
         }
         else if (rcom == RCD_FNE_GET_SPANNINGTREE) {
             retCode = client->send(HTTP_GET, FNE_GET_SPANNING_TREE, json::object(), response);

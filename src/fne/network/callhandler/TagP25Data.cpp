@@ -411,6 +411,9 @@ bool TagP25Data::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
                                     else {
                                         LogWarning((fromUpstream) ? LOG_PEER : LOG_MASTER, "P25, Call Collision, peer = %u, ssrc = %u, sysId = $%03X, netId = $%05X, srcId = %u, dstId = %u, streamId = %u, rxPeer = %u, rxSrcId = %u, rxDstId = %u, rxStreamId = %u, fromUpstream = %u",
                                             peerId, ssrc, sysId, netId, srcId, dstId, streamId, status.peerId, status.srcId, status.dstId, status.streamId, fromUpstream);
+
+                                        m_network->m_totalCallCollisions++;
+
                                         return false;
                                     }
                                 } else {

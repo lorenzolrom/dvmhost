@@ -218,6 +218,9 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                             else {
                                 LogWarning((fromUpstream) ? LOG_PEER : LOG_MASTER, "Analog, Call Collision, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, rxPeer = %u, rxSrcId = %u, rxDstId = %u, rxStreamId = %u, fromUpstream = %u",
                                     peerId, ssrc, srcId, dstId, streamId, status.peerId, status.srcId, status.dstId, status.streamId, fromUpstream);
+
+                                m_network->m_totalCallCollisions++;
+
                                 return false;
                             }
                         } else {

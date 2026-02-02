@@ -60,6 +60,9 @@
 #define FNE_GET_RELOAD_CRYPTO           "/reload-crypto"
 
 #define FNE_GET_STATS                   "/stats"
+#define FNE_PUT_RESET_TOTAL_CALLS       "/stats/reset-total-calls"
+#define FNE_PUT_RESET_ACTIVE_CALLS      "/stats/reset-active-calls"
+#define FNE_PUT_RESET_CALL_COLLISIONS   "/stats/reset-call-collisions"
 #define FNE_GET_AFF_LIST                "/report-affiliations"
 
 #define FNE_GET_SPANNING_TREE           "/spanning-tree"

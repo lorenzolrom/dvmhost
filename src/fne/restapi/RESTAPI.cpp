@@ -673,6 +673,9 @@ void RESTAPI::initializeEndpoints()
     m_dispatcher.match(FNE_GET_RELOAD_CRYPTO).get(REST_API_BIND(RESTAPI::restAPI_GetReloadCrypto, this));
 
     m_dispatcher.match(FNE_GET_STATS).get(REST_API_BIND(RESTAPI::restAPI_GetStats, this));
+    m_dispatcher.match(FNE_PUT_RESET_TOTAL_CALLS).put(REST_API_BIND(RESTAPI::restAPI_PutResetTotalCalls, this));
+    m_dispatcher.match(FNE_PUT_RESET_ACTIVE_CALLS).put(REST_API_BIND(RESTAPI::restAPI_PutResetActiveCalls, this));
+    m_dispatcher.match(FNE_PUT_RESET_CALL_COLLISIONS).put(REST_API_BIND(RESTAPI::restAPI_PutResetCallCollisions, this));
     m_dispatcher.match(FNE_GET_AFF_LIST).get(REST_API_BIND(RESTAPI::restAPI_GetAffList, this));
 
     m_dispatcher.match(FNE_GET_SPANNING_TREE).get(REST_API_BIND(RESTAPI::restAPI_GetSpanningTree, this));
@@ -1948,6 +1951,8 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
         // total calls processed
         uint32_t totalCallsProcessed = m_network->m_totalCallsProcessed;
         response["totalCallsProcessed"].set<uint32_t>(totalCallsProcessed);
+        uint32_t totalCallCollisions = m_network->m_totalCallCollisions;
+        response["totalCallCollisions"].set<uint32_t>(totalCallCollisions);
         int32_t totalActiveCalls = m_network->m_totalActiveCalls;
         response["totalActiveCalls"].set<int32_t>(totalActiveCalls);
 
@@ -1962,6 +1967,63 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
         response["adjSiteMapTotalEntries"].set<uint32_t>(adjSiteMapTotalEntries);
         uint32_t cryptoKeyTotalEntries = m_cryptoLookup->keys().size();
         response["cryptoKeyTotalEntries"].set<uint32_t>(cryptoKeyTotalEntries);
+    }
+
+    reply.payload(response);
+}
+
+/* REST API endpoint; implements put reset total calls request. */
+
+void RESTAPI::restAPI_PutResetTotalCalls(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object response = json::object();
+    setResponseDefaultStatus(response);
+
+    LogInfoEx(LOG_REST, "request to reset total calls processed");
+    if (m_network != nullptr) {
+        m_network->m_totalCallsProcessed = 0U;
+    }
+
+    reply.payload(response);
+}
+
+/* REST API endpoint; implements put reset active calls request. */
+
+void RESTAPI::restAPI_PutResetActiveCalls(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object response = json::object();
+    setResponseDefaultStatus(response);
+
+    LogInfoEx(LOG_REST, "request to reset total active calls");
+    if (m_network != nullptr) {
+        m_network->m_totalActiveCalls = 0U;
+    }
+
+    reply.payload(response);
+}
+
+/* REST API endpoint; implements put reset call collisions request. */
+
+void RESTAPI::restAPI_PutResetCallCollisions(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+{
+    if (!validateAuth(request, reply)) {
+        return;
+    }
+
+    json::object response = json::object();
+    setResponseDefaultStatus(response);
+
+    LogInfoEx(LOG_REST, "request to reset total call collisions");
+    if (m_network != nullptr) {
+        m_network->m_totalCallCollisions = 0U;
     }
 
     reply.payload(response);

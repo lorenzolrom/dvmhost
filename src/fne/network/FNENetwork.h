@@ -409,6 +409,7 @@ namespace network
 
         int32_t m_totalActiveCalls;
         uint64_t m_totalCallsProcessed;
+        uint64_t m_totalCallCollisions;
 
         bool m_logDenials;
         bool m_logUpstreamCallStartEnd;

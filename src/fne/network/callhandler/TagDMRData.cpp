@@ -316,6 +316,9 @@ bool TagDMRData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
                                 } else {
                                     LogWarning((fromUpstream) ? LOG_PEER : LOG_MASTER, "DMR, Call Collision, peer = %u, ssrc = %u, srcId = %u, dstId = %u, slotNo = %u, streamId = %u, rxPeer = %u, rxSrcId = %u, rxDstId = %u, rxSlotNo = %u, rxStreamId = %u, fromUpstream = %u",
                                         peerId, ssrc, srcId, dstId, slotNo, streamId, status.peerId, status.srcId, status.dstId, status.slotNo, status.streamId, fromUpstream);
+
+                                    m_network->m_totalCallCollisions++;
+
                                     return false;
                                 }
                             } else {
