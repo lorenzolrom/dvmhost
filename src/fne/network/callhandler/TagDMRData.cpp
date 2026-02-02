@@ -229,6 +229,12 @@ bool TagDMRData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
                 }
 
                 m_network->eraseStreamPktSeq(peerId, streamId);
+            } else {
+                #define NONCALL_END_LOG "DMR, Non-Call Terminator, peer = %u, ssrc = %u, srcId = %u, dstId = %u, slot = %u, duration = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, slotNo, duration / 1000, streamId, fromUpstream
+                if (m_network->m_logUpstreamCallStartEnd && fromUpstream)
+                    LogInfoEx(LOG_PEER, NONCALL_END_LOG);
+                else if (!fromUpstream)
+                    LogInfoEx(LOG_MASTER, NONCALL_END_LOG);
             }
         }
 
