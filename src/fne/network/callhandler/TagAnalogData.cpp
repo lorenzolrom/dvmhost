@@ -127,9 +127,11 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                 else if (!fromUpstream)
                     LogInfoEx(LOG_MASTER, CALL_END_LOG);
 
-                m_network->m_totalActiveCalls--;
-                if (m_network->m_totalActiveCalls < 0)
-                    m_network->m_totalActiveCalls = 0;
+                if (!tg.config().parrot()) {
+                    m_network->m_totalActiveCalls--;
+                    if (m_network->m_totalActiveCalls < 0)
+                        m_network->m_totalActiveCalls = 0;
+                }
 
                 // report call event to InfluxDB
                 if (m_network->m_enableInfluxDB) {
@@ -269,8 +271,10 @@ bool TagAnalogData::processFrame(const uint8_t* data, uint32_t len, uint32_t pee
                 m_status[dstId].activeCall = true;
                 m_status.unlock();
 
-                m_network->m_totalCallsProcessed++;
-                m_network->m_totalActiveCalls++;
+                if (!tg.config().parrot()) {
+                    m_network->m_totalCallsProcessed++;
+                    m_network->m_totalActiveCalls++;
+                }
 
                 #define CALL_START_LOG "Analog, Call Start, peer = %u, ssrc = %u, srcId = %u, dstId = %u, streamId = %u, fromUpstream = %u", peerId, ssrc, srcId, dstId, streamId, fromUpstream
                 if (m_network->m_logUpstreamCallStartEnd && fromUpstream)

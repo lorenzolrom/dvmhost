@@ -207,9 +207,11 @@ bool TagDMRData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
                         LogInfoEx(LOG_MASTER, CALL_END_LOG);
                 }
 
-                m_network->m_totalActiveCalls--;
-                if (m_network->m_totalActiveCalls < 0)
-                    m_network->m_totalActiveCalls = 0;
+                if (!tg.config().parrot()) {
+                    m_network->m_totalActiveCalls--;
+                    if (m_network->m_totalActiveCalls < 0)
+                        m_network->m_totalActiveCalls = 0;
+                }
 
                 // report call event to InfluxDB
                 if (m_network->m_enableInfluxDB) {
@@ -370,8 +372,10 @@ bool TagDMRData::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
                 m_status[dstId].activeCall = true;
                 m_status.unlock();
 
-                m_network->m_totalCallsProcessed++;
-                m_network->m_totalActiveCalls++;
+                if (!tg.config().parrot()) {
+                    m_network->m_totalCallsProcessed++;
+                    m_network->m_totalActiveCalls++;
+                }
 
                 // is this a private call?
                 if (flco == FLCO::PRIVATE) {
