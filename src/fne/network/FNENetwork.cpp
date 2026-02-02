@@ -631,6 +631,9 @@ void FNENetwork::clock(uint32_t ms)
         m_tagDMR->packetData()->cleanupStale();
         m_tagP25->packetData()->cleanupStale();
 
+        m_totalActiveCalls = 0U; // bryanb: this is techincally incorrect and should be better implemented
+                                 // but for now it will suffice to reset the active call count on maintainence cycle
+
         m_maintainenceTimer.start();
     }
 
