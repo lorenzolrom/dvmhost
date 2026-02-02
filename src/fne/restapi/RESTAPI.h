@@ -382,7 +382,7 @@ private:
      * @param reply HTTP reply.
      * @param match HTTP request matcher.
      */
-    void restAPI_PutResetTotalCalls(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
+    void restAPI_GetResetTotalCalls(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
 
     /**
      * @brief REST API endpoint; implements put reset active calls request.
@@ -390,7 +390,7 @@ private:
      * @param reply HTTP reply.
      * @param match HTTP request matcher.
      */
-    void restAPI_PutResetActiveCalls(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
+    void restAPI_GetResetActiveCalls(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
 
     /**
      * @brief REST API endpoint; implements put reset call collisions request.
@@ -398,7 +398,7 @@ private:
      * @param reply HTTP reply.
      * @param match HTTP request matcher.
      */
-    void restAPI_PutResetCallCollisions(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
+    void restAPI_GetResetCallCollisions(const HTTPPayload& request, HTTPPayload& reply, const restapi::RequestMatch& match);
 
     /**
      * @brief REST API endpoint; implements get affiliation list request.

@@ -673,9 +673,9 @@ void RESTAPI::initializeEndpoints()
     m_dispatcher.match(FNE_GET_RELOAD_CRYPTO).get(REST_API_BIND(RESTAPI::restAPI_GetReloadCrypto, this));
 
     m_dispatcher.match(FNE_GET_STATS).get(REST_API_BIND(RESTAPI::restAPI_GetStats, this));
-    m_dispatcher.match(FNE_PUT_RESET_TOTAL_CALLS).put(REST_API_BIND(RESTAPI::restAPI_PutResetTotalCalls, this));
-    m_dispatcher.match(FNE_PUT_RESET_ACTIVE_CALLS).put(REST_API_BIND(RESTAPI::restAPI_PutResetActiveCalls, this));
-    m_dispatcher.match(FNE_PUT_RESET_CALL_COLLISIONS).put(REST_API_BIND(RESTAPI::restAPI_PutResetCallCollisions, this));
+    m_dispatcher.match(FNE_GET_RESET_TOTAL_CALLS).get(REST_API_BIND(RESTAPI::restAPI_GetResetTotalCalls, this));
+    m_dispatcher.match(FNE_GET_RESET_ACTIVE_CALLS).get(REST_API_BIND(RESTAPI::restAPI_GetResetActiveCalls, this));
+    m_dispatcher.match(FNE_GET_RESET_CALL_COLLISIONS).get(REST_API_BIND(RESTAPI::restAPI_GetResetCallCollisions, this));
     m_dispatcher.match(FNE_GET_AFF_LIST).get(REST_API_BIND(RESTAPI::restAPI_GetAffList, this));
 
     m_dispatcher.match(FNE_GET_SPANNING_TREE).get(REST_API_BIND(RESTAPI::restAPI_GetSpanningTree, this));
@@ -1972,9 +1972,9 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
     reply.payload(response);
 }
 
-/* REST API endpoint; implements put reset total calls request. */
+/* REST API endpoint; implements get reset total calls request. */
 
-void RESTAPI::restAPI_PutResetTotalCalls(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+void RESTAPI::restAPI_GetResetTotalCalls(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
 {
     if (!validateAuth(request, reply)) {
         return;
@@ -1991,9 +1991,9 @@ void RESTAPI::restAPI_PutResetTotalCalls(const HTTPPayload& request, HTTPPayload
     reply.payload(response);
 }
 
-/* REST API endpoint; implements put reset active calls request. */
+/* REST API endpoint; implements get reset active calls request. */
 
-void RESTAPI::restAPI_PutResetActiveCalls(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+void RESTAPI::restAPI_GetResetActiveCalls(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
 {
     if (!validateAuth(request, reply)) {
         return;
@@ -2010,9 +2010,9 @@ void RESTAPI::restAPI_PutResetActiveCalls(const HTTPPayload& request, HTTPPayloa
     reply.payload(response);
 }
 
-/* REST API endpoint; implements put reset call collisions request. */
+/* REST API endpoint; implements get reset call collisions request. */
 
-void RESTAPI::restAPI_PutResetCallCollisions(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
+void RESTAPI::restAPI_GetResetCallCollisions(const HTTPPayload& request, HTTPPayload& reply, const RequestMatch& match)
 {
     if (!validateAuth(request, reply)) {
         return;

@@ -983,13 +983,13 @@ int main(int argc, char** argv)
             retCode = client->send(HTTP_GET, FNE_GET_STATS, json::object(), response);
         }
         else if (rcom == RCD_FNE_PUT_RESET_TOTAL_CALLS) {
-            retCode = client->send(HTTP_PUT, FNE_PUT_RESET_TOTAL_CALLS, json::object(), response);
+            retCode = client->send(HTTP_GET, FNE_GET_RESET_TOTAL_CALLS, json::object(), response);
         }
         else if (rcom == RCD_FNE_PUT_RESET_ACTIVE_CALLS) {
-            retCode = client->send(HTTP_PUT, FNE_PUT_RESET_ACTIVE_CALLS, json::object(), response);
+            retCode = client->send(HTTP_GET, FNE_GET_RESET_ACTIVE_CALLS, json::object(), response);
         }
         else if (rcom == RCD_FNE_PUT_RESET_CALL_COLLISIONS) {
-            retCode = client->send(HTTP_PUT, FNE_PUT_RESET_CALL_COLLISIONS, json::object(), response);
+            retCode = client->send(HTTP_GET, FNE_GET_RESET_CALL_COLLISIONS, json::object(), response);
         }
         else if (rcom == RCD_FNE_GET_SPANNINGTREE) {
             retCode = client->send(HTTP_GET, FNE_GET_SPANNING_TREE, json::object(), response);
