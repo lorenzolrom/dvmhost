@@ -2333,8 +2333,11 @@ void ModemV24::queueP25Frame(uint8_t* data, uint16_t len, SERIAL_TX_TYPE msgType
         // otherwise, we time out messages as required by the message type
         else {
             if (msgType == STT_DATA) {
-                // IMBEs must go out at 20ms intervals
+                // data must go out at 20ms intervals
                 msgTime = m_lastP25Tx + 20U;
+            } else if (msgType == STT_DATA_FAST) {
+                // fast data must go out at 10ms intervals
+                msgTime = m_lastP25Tx + 10U;
             } else {
                 // Otherwise we don't care, we use 5ms since that's the theoretical minimum time a 9600 baud message can take
                 msgTime = m_lastP25Tx + 5U;
@@ -3128,7 +3131,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
             if (m_trace)
                 Utils::dump(1U, "ModemV24::convertFromAirV24(), MotTSBKFrame", tsbkBuf, DFSI_MOT_TSBK_LEN);
 
-            queueP25Frame(tsbkBuf, DFSI_MOT_TSBK_LEN, STT_DATA);
+            queueP25Frame(tsbkBuf, DFSI_MOT_TSBK_LEN, STT_DATA_FAST);
         }
         break;
 
