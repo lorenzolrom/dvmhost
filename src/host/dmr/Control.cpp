@@ -372,15 +372,15 @@ bool Control::isQueueFull(uint32_t slotNo)
 
 /* Get a data frame for slot, from data ring buffer. */
 
-uint32_t Control::getFrame(uint32_t slotNo, uint8_t* data)
+uint32_t Control::getFrame(uint32_t slotNo, uint8_t* data, bool *imm)
 {
     assert(data != nullptr);
 
     switch (slotNo) {
     case 1U:
-        return m_slot1->getFrame(data);
+        return m_slot1->getFrame(data, imm);
     case 2U:
-        return m_slot2->getFrame(data);
+        return m_slot2->getFrame(data, imm);
     default:
         LogError(LOG_DMR, "DMR, invalid slot, slotNo = %u", slotNo);
         return 0U;

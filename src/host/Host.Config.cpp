@@ -721,7 +721,7 @@ bool Host::createModem()
     }
 
     if (m_isModemDFSI) {
-        m_modem = new ModemV24(modemPort, m_duplex, m_p25QueueSizeBytes, m_p25QueueSizeBytes, rtrt, jitter,
+        m_modem = new ModemV24(modemPort, m_duplex, m_p25QueueSizeBytes, p25FifoLength, rtrt, jitter,
             dumpModemStatus, displayModemDebugMessages, trace, debug);
         ((ModemV24*)m_modem)->setCallTimeout(dfsiCallTimeout);
         ((ModemV24*)m_modem)->setTIAFormat(dfsiTIAMode);

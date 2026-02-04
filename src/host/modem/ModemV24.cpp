@@ -47,7 +47,8 @@ ModemV24::ModemV24(port::IModemPort* port, bool duplex, uint32_t p25QueueSize, u
     m_superFrameCnt(0U),
     m_audio(),
     m_nid(nullptr),
-    m_txP25Queue(p25TxQueueSize, "TX P25 Queue"),
+    m_txP25Queue(p25TxQueueSize, "V.24 TX P25 Queue"),
+    m_txImmP25Queue(p25TxQueueSize, "V.24 TX Immediate P25 Queue"),
     m_txCall(),
     m_rxCall(),
     m_txCallInProgress(false),
@@ -58,7 +59,8 @@ ModemV24::ModemV24(port::IModemPort* port, bool duplex, uint32_t p25QueueSize, u
     m_jitter(jitter),
     m_lastP25Tx(0U),
     m_rs(),
-    m_useTIAFormat(false)
+    m_useTIAFormat(false),
+    m_txP25QueueLock()
 {
     m_v24Connected = false; // defaulted to false for V.24 modems
 
@@ -389,8 +391,13 @@ void ModemV24::clock(uint32_t ms)
         reset();
     }
 
+    int len = 0;
+
     // write anything waiting to the serial port
-    int len = writeSerial();
+    if (!m_txImmP25Queue.isEmpty())
+        len = writeSerial(&m_txImmP25Queue);
+    else
+        len = writeSerial(&m_txP25Queue);
     if (m_debug && len > 0) {
         LogDebug(LOG_MODEM, "Wrote %u-byte message to the serial V24 device", len);
     } else if (len < 0) {
@@ -430,7 +437,7 @@ bool ModemV24::hasP25Space(uint32_t length) const
 
 /* Writes raw data to the air interface modem. */
 
-int ModemV24::write(const uint8_t* data, uint32_t length)
+int ModemV24::write(const uint8_t* data, uint32_t length, bool imm)
 {
     assert(data != nullptr);
 
@@ -446,12 +453,12 @@ int ModemV24::write(const uint8_t* data, uint32_t length)
         ::memcpy(buffer, data + 2U, length);
 
         if (m_useTIAFormat)
-            convertFromAirTIA(buffer, length);
+            convertFromAirTIA(buffer, length, imm);
         else
-            convertFromAirV24(buffer, length);
+            convertFromAirV24(buffer, length, imm);
         return length;
     } else {
-        return Modem::write(data, length);
+        return Modem::write(data, length, imm);
     }
 }
 
@@ -461,7 +468,7 @@ int ModemV24::write(const uint8_t* data, uint32_t length)
 
 /* Helper to write data from the P25 Tx queue to the serial interface. */
 
-int ModemV24::writeSerial()
+int ModemV24::writeSerial(RingBuffer<uint8_t>* queue)
 {
     /*
      *  Serial TX ringbuffer format:
@@ -471,32 +478,38 @@ int ModemV24::writeSerial()
      */
 
     // check empty
-    if (m_txP25Queue.isEmpty())
+    if (queue->isEmpty())
         return 0U;
 
     // get length
     uint8_t length[2U];
     ::memset(length, 0x00U, 2U);
-    m_txP25Queue.peek(length, 2U);
+    queue->peek(length, 2U);
 
     // convert length byets to int
     uint16_t len = 0U;
     len = (length[0U] << 8) + length[1U];
 
     // this ensures we never get in a situation where we have length & type bytes stuck in the queue by themselves
-    if (m_txP25Queue.dataSize() == 2U && len > m_txP25Queue.dataSize()) {
-        m_txP25Queue.get(length, 2U); // ensure we pop bytes off
+    if (queue->dataSize() == 2U && len > queue->dataSize()) {
+        queue->get(length, 2U); // ensure we pop bytes off
         return 0U;
     }
+
+    // check available modem space
+    if (m_p25Space < len)
+        return 0U;
+
+    std::lock_guard<std::mutex> lock(m_txP25QueueLock);
 
     // get current timestamp
     int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
     // peek the timestamp to see if we should wait
-    if (m_txP25Queue.dataSize() >= 11U) {
+    if (queue->dataSize() >= 11U) {
         uint8_t lengthTagTs[11U];
         ::memset(lengthTagTs, 0x00U, 11U);
-        m_txP25Queue.peek(lengthTagTs, 11U);
+        queue->peek(lengthTagTs, 11U);
 
         // get the timestamp
         int64_t ts;
@@ -510,14 +523,14 @@ int ModemV24::writeSerial()
     }
 
     // check if we have enough data to get everything - len + 2U (length bytes) + 1U (tag) + 8U (timestamp)
-    if (m_txP25Queue.dataSize() >= len + 11U) {
+    if (queue->dataSize() >= len + 11U) {
         // Get the length, tag and timestamp
         uint8_t lengthTagTs[11U];
-        m_txP25Queue.get(lengthTagTs, 11U);
+        queue->get(lengthTagTs, 11U);
         
         // Get the actual data
         DECLARE_UINT8_ARRAY(buffer, len);
-        m_txP25Queue.get(buffer, len);
+        queue->get(buffer, len);
         
         // Sanity check on data tag
         uint8_t tag = lengthTagTs[2U];
@@ -2300,7 +2313,7 @@ void ModemV24::convertToAirTIA(const uint8_t *data, uint32_t length)
 
 /* Helper to add a V.24 data frame to the P25 TX queue with the proper timestamp and formatting */
 
-void ModemV24::queueP25Frame(uint8_t* data, uint16_t len, SERIAL_TX_TYPE msgType)
+bool ModemV24::queueP25Frame(uint8_t* data, uint16_t len, SERIAL_TX_TYPE msgType, bool imm)
 {
     assert(data != nullptr);
     assert(len > 0U);
@@ -2347,6 +2360,17 @@ void ModemV24::queueP25Frame(uint8_t* data, uint16_t len, SERIAL_TX_TYPE msgType
 
     len += 4U;
 
+    std::lock_guard<std::mutex> lock(m_txP25QueueLock);
+
+    // check available ringbuffer space
+    if (imm) {
+        if (m_txImmP25Queue.freeSpace() < (len + 11U))
+            return false;
+    } else {
+        if (m_txP25Queue.freeSpace() < (len + 11U))
+            return false;
+    }
+
     // convert 16-bit length to 2 bytes
     uint8_t length[2U];
     if (len > 255U)
@@ -2355,17 +2379,26 @@ void ModemV24::queueP25Frame(uint8_t* data, uint16_t len, SERIAL_TX_TYPE msgType
         length[0U] = 0x00U;
     length[1U] = len & 0xFFU;
 
-    m_txP25Queue.addData(length, 2U);
+    if (imm)
+        m_txImmP25Queue.addData(length, 2U);
+    else
+        m_txP25Queue.addData(length, 2U);
 
     // add the data tag
     uint8_t tag = TAG_DATA;
-    m_txP25Queue.addData(&tag, 1U);
+    if (imm)
+        m_txImmP25Queue.addData(&tag, 1U);
+    else
+        m_txP25Queue.addData(&tag, 1U);
 
     // convert 64-bit timestamp to 8 bytes and add
     uint8_t tsBytes[8U];
     assert(sizeof msgTime == 8U);
     ::memcpy(tsBytes, &msgTime, 8U);
-    m_txP25Queue.addData(tsBytes, 8U);
+    if (imm)
+        m_txImmP25Queue.addData(tsBytes, 8U);
+    else
+        m_txP25Queue.addData(tsBytes, 8U);
 
     // add the DVM start byte, length byte, CMD byte, and padding 0
     uint8_t header[4U];
@@ -2373,13 +2406,21 @@ void ModemV24::queueP25Frame(uint8_t* data, uint16_t len, SERIAL_TX_TYPE msgType
     header[1U] = len & 0xFFU;
     header[2U] = CMD_P25_DATA;
     header[3U] = 0x00U;
-    m_txP25Queue.addData(header, 4U);
+    if (imm)
+        m_txImmP25Queue.addData(header, 4U);
+    else
+        m_txP25Queue.addData(header, 4U);
 
     // add the data
-    m_txP25Queue.addData(data, len - 4U);
+    if (imm)
+        m_txImmP25Queue.addData(data, len - 4U);
+    else
+        m_txP25Queue.addData(data, len - 4U);
 
     // update the last message time
     m_lastP25Tx = msgTime;
+
+    return true;
 }
 
 /* Send a start of stream sequence (HDU, etc) to the connected serial V.24 device */
@@ -2680,7 +2721,7 @@ void ModemV24::ackStartOfStreamTIA()
 
 /* Internal helper to convert from TIA-102 air interface to V.24/DFSI. */
 
-void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
+void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
 {
     assert(data != nullptr);
     assert(length > 0U);
@@ -3131,7 +3172,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
             if (m_trace)
                 Utils::dump(1U, "ModemV24::convertFromAirV24(), MotTSBKFrame", tsbkBuf, DFSI_MOT_TSBK_LEN);
 
-            queueP25Frame(tsbkBuf, DFSI_MOT_TSBK_LEN, STT_DATA_FAST);
+            queueP25Frame(tsbkBuf, DFSI_MOT_TSBK_LEN, STT_DATA_FAST, imm);
         }
         break;
 
@@ -3322,7 +3363,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length)
 
 /* Internal helper to convert from TIA-102 air interface to TIA-102 DFSI. */
 
-void ModemV24::convertFromAirTIA(uint8_t* data, uint32_t length)
+void ModemV24::convertFromAirTIA(uint8_t* data, uint32_t length, bool imm)
 {
     assert(data != nullptr);
     assert(length > 0U);

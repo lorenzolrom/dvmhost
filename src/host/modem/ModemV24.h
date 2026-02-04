@@ -578,9 +578,10 @@ namespace modem
          * @brief Writes raw data to the air interface modem.
          * @param data Data to write to modem.
          * @param length Length of data to write.
+         * @param imm Flag indicating whether the frame is immediate.
          * @returns int Actual length of data written.
          */
-        int write(const uint8_t* data, uint32_t length) override;
+        int write(const uint8_t* data, uint32_t length, bool imm = false) override;
 
     private:
         bool m_rtrt;
@@ -592,6 +593,7 @@ namespace modem
         p25::NID* m_nid;
 
         RingBuffer<uint8_t> m_txP25Queue;
+        RingBuffer<uint8_t> m_txImmP25Queue;
 
         DFSICallData* m_txCall;
         DFSICallData* m_rxCall;
@@ -609,11 +611,14 @@ namespace modem
 
         bool m_useTIAFormat;
 
+        std::mutex m_txP25QueueLock;
+
         /**
          * @brief Helper to write data from the P25 Tx queue to the serial interface.
+         * @param[in] queue Pointer to the ring buffer containing data to write.
          * @return int Actual number of bytes written to the serial interface.
          */
-        int writeSerial();
+        int writeSerial(RingBuffer<uint8_t>* queue);
 
         /**
          * @brief Helper to store converted Rx frames.
@@ -651,8 +656,10 @@ namespace modem
          * @param data Buffer containing V.24 data frame to send.
          * @param len Length of buffer.
          * @param msgType Type of message to send (used for proper jitter clocking).
+         * @param imm Flag indicating whether the frame is immediate.
+         * @returns bool True, if data is queued, otherwise false.
          */
-        void queueP25Frame(uint8_t* data, uint16_t length, SERIAL_TX_TYPE msgType);
+        bool queueP25Frame(uint8_t* data, uint16_t length, SERIAL_TX_TYPE msgType, bool imm = false);
 
         /**
          * @brief Send a start of stream sequence (HDU, etc) to the connected serial V24 device.
@@ -689,14 +696,16 @@ namespace modem
          * @brief Internal helper to convert from TIA-102 air interface to V.24/DFSI.
          * @param data Buffer containing data to convert.
          * @param length Length of buffer.
+         * @param imm Flag indicating whether the frame is immediate.
          */
-        void convertFromAirV24(uint8_t* data, uint32_t length);
+        void convertFromAirV24(uint8_t* data, uint32_t length, bool imm);
         /**
          * @brief Internal helper to convert from TIA-102 air interface to TIA-102 DFSI.
          * @param data Buffer containing data to convert.
          * @param length Length of buffer.
+         * @param imm Flag indicating whether the frame is immediate.
          */
-        void convertFromAirTIA(uint8_t* data, uint32_t length);
+        void convertFromAirTIA(uint8_t* data, uint32_t length, bool imm);
     };
 } // namespace modem
 

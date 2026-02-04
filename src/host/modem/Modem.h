@@ -602,30 +602,34 @@ namespace modem
          * @brief Writes DMR Slot 1 frame data to the DMR Slot 1 ring buffer.
          * @param[in] data Data to write to ring buffer.
          * @param length Length of data to write.
+         * @param imm Flag indicating whether the frame is immediate.
          * @returns bool True, if data is written, otherwise false.
          */
-        bool writeDMRFrame1(const uint8_t* data, uint32_t length);
+        bool writeDMRFrame1(const uint8_t* data, uint32_t length, bool imm = false);
         /**
          * @brief Writes DMR Slot 2 frame data to the DMR Slot 2 ring buffer.
          * @param[in] data Data to write to ring buffer.
          * @param length Length of data to write.
+         * @param imm Flag indicating whether the frame is immediate.
          * @returns bool True, if data is written, otherwise false.
          */
-        bool writeDMRFrame2(const uint8_t* data, uint32_t length);
+        bool writeDMRFrame2(const uint8_t* data, uint32_t length, bool imm = false);
         /**
          * @brief Writes P25 frame data to the P25 ring buffer.
          * @param[in] data Data to write to ring buffer.
          * @param length Length of data to write.
+         * @param imm Flag indicating whether the frame is immediate.
          * @returns bool True, if data is written, otherwise false.
          */
-        bool writeP25Frame(const uint8_t* data, uint32_t length);
+        bool writeP25Frame(const uint8_t* data, uint32_t length, bool imm = false);
         /**
          * @brief Writes NXDN frame data to the NXDN ring buffer.
          * @param[in] data Data to write to ring buffer.
          * @param length Length of data to write.
+         * @param imm Flag indicating whether the frame is immediate.
          * @returns bool True, if data is written, otherwise false.
          */
-        bool writeNXDNFrame(const uint8_t* data, uint32_t length);
+        bool writeNXDNFrame(const uint8_t* data, uint32_t length, bool imm = false);
 
         /**
          * @brief Triggers the start of DMR transmit.
@@ -656,9 +660,10 @@ namespace modem
          * @brief Writes raw data to the air interface modem.
          * @param data Data to write to modem.
          * @param length Length of data to write.
+         * @param imm Flag indicating whether the frame is immediate.
          * @returns int Actual length of data written.
          */
-        virtual int write(const uint8_t* data, uint32_t length);
+        virtual int write(const uint8_t* data, uint32_t length, bool imm = false);
 
         /**
          * @brief Gets the flag for the V.24 connection state.
