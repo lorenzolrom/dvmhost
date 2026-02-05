@@ -295,6 +295,11 @@ protocols:
         unitToUnitAvailCheck: false
         # Flag indicating explicit source ID support is enabled.
         allowExplicitSourceId: false
+        # Flag indicating whether or not the host will disable sending deny responses when operating in conventional.
+        #   (Some subscriber radios do not handle deny responses in conventional, and rather interpret them as
+        #   a emergency call trigger, this option allows the deny response to be disabled to prevent errant emergency
+        #   call triggers.)
+        disableDenyResponse: false
         # Flag indicating whether or not the host will respond to SNDCP data requests.
         sndcpSupport: false
         # BER/Error threshold for silencing voice packets. (0 or 1233 disables)

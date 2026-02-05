@@ -2780,6 +2780,13 @@ void ControlSignaling::writeRF_TSDU_Deny(uint32_t srcId, uint32_t dstId, uint8_t
             osp->getSrcId(), osp->getDstId());
     }
 
+    // are deny responses disabled?
+    if (!m_p25->m_dedicatedControl && !m_p25->m_controlOnly && m_p25->m_disableDenyResponse) {
+        // at least ACK the request to try to silence the sender
+        writeRF_TSDU_ACK_FNE(srcId, service, aiv, false);
+        return;
+    }
+
     writeRF_TSDU_SBF_Imm(osp.get(), false);
 }
 

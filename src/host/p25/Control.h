@@ -318,6 +318,7 @@ namespace p25
         bool m_forceAllowTG0;
         bool m_immediateCallTerm;
         bool m_explicitTDUGrantRelease;
+        bool m_disableDenyResponse;
 
         uint32_t m_defaultNetIdleTalkgroup;
 

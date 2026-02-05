@@ -87,6 +87,7 @@ Control::Control(bool authoritative, uint32_t nac, uint32_t callHang, uint32_t q
     m_forceAllowTG0(false),
     m_immediateCallTerm(true),
     m_explicitTDUGrantRelease(true),
+    m_disableDenyResponse(false),
     m_defaultNetIdleTalkgroup(0U),
     m_idenTable(idenTable),
     m_ridLookup(ridLookup),
@@ -371,6 +372,7 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
 
     m_immediateCallTerm = p25Protocol["immediateCallTerm"].as<bool>(true);
     m_explicitTDUGrantRelease = p25Protocol["explicitTDUGrantRelease"].as<bool>(true);
+    m_disableDenyResponse = p25Protocol["disableDenyResponse"].as<bool>(false);
 
     /*
     ** Voice Silence and Frame Loss Thresholds
