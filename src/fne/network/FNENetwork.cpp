@@ -1668,9 +1668,6 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                     break;
                                 }
                             }
-                            else {
-                                network->writePeerNAK(peerId, streamId, TAG_REPEATER_GRANT, NET_CONN_NAK_FNE_UNAUTHORIZED);
-                            }
                         }
                     }
                 }
@@ -1693,9 +1690,6 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                 uint8_t slot = req->buffer[14U];
 
                                 network->processInCallCtrl(command, req->fneHeader.getSubFunction(), dstId, slot, peerId, ssrc, streamId);
-                            }
-                            else {
-                                network->writePeerNAK(peerId, streamId, TAG_INCALL_CTRL, NET_CONN_NAK_FNE_UNAUTHORIZED);
                             }
                         }
                     }
