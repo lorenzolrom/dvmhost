@@ -348,9 +348,9 @@ bool Voice::process(uint8_t* data, uint32_t len)
                 }
             }
 
-            // bryanb: due to moronic reasons -- if this case happens, default the RID to something sane
-            if (srcId == 0U && !lc.isStandardMFId()) {
-                LogInfoEx(LOG_RF, P25_HDU_STR " ** source RID was 0 with non-standard MFId defaulting source RID, dstId = %u, mfId = $%02X", dstId, lc.getMFId());
+            // bryanb: due to moronic reasons (mostly our favorite neighborhood OEM...) -- if this case happens, default the RID to something sane
+            if (srcId == 0U) {
+                LogInfoEx(LOG_RF, P25_HDU_STR " ** source RID was 0, defaulting source RID, dstId = %u, mfId = $%02X", dstId, lc.getMFId());
                 srcId = WUID_FNE;
             }
 
