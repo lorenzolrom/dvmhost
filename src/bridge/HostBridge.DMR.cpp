@@ -138,8 +138,10 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
             return;
         }
 
+        m_networkWatchdog.start();
+
         // is this a new call stream?
-        if (m_network->getDMRStreamId(slotNo) != m_rxStreamId) {
+        if (m_network->getDMRStreamId(slotNo) != m_rxStreamId && !m_callInProgress) {
             m_callInProgress = true;
             m_callAlgoId = 0U;
 
@@ -181,6 +183,7 @@ void HostBridge::processDMRNetwork(uint8_t* buffer, uint32_t length)
         // process call termination
         if (dataSync && (dataType == DataType::TERMINATOR_WITH_LC)) {
             m_callInProgress = false;
+            m_networkWatchdog.stop();
             m_ignoreCall = false;
             m_callAlgoId = 0U;
 

@@ -239,6 +239,7 @@ HostBridge::HostBridge(const std::string& confFile) :
     m_rxStreamId(0U),
     m_txStreamId(0U),
     m_detectedSampleCnt(0U),
+    m_networkWatchdog(1000U, 0U, 1500U),
     m_trace(false),
     m_debug(false),
     m_rtsPttEnable(false),
@@ -612,6 +613,46 @@ int HostBridge::run()
         if (m_network != nullptr) {
             std::lock_guard<std::mutex> lock(HostBridge::s_networkMutex);
             m_network->clock(ms);
+
+            if (m_callInProgress) {
+                m_networkWatchdog.clock(ms);
+
+                if (m_networkWatchdog.isRunning() && m_networkWatchdog.hasExpired()) {
+                    if (m_rxStartTime > 0U) {
+                        uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                        uint64_t diff = now - m_rxStartTime;
+
+                        // send USRP end of transmission
+                        if (m_udpUsrp) {
+                            sendUsrpEot();
+                        }
+
+                        LogInfoEx(LOG_HOST, "Network watchdog, call end, dur = %us", diff / 1000U);
+                    }
+
+                    m_networkWatchdog.stop();
+
+                    m_callInProgress = false;
+                    m_ignoreCall = false;
+                    m_callAlgoId = P25DEF::ALGO_UNENCRYPT;
+
+                    m_rxDMRLC = dmr::lc::LC();
+                    m_rxDMRPILC = dmr::lc::PrivacyLC();
+                    m_rxP25LC = p25::lc::LC();
+                    m_rxStartTime = 0U;
+                    m_rxStreamId = 0U;
+
+                    m_rtpSeqNo = 0U;
+                    m_rtpTimestamp = INVALID_TS;
+
+                    m_network->resetDMR(0U);
+                    m_network->resetDMR(1U);
+
+                    m_network->resetP25();
+
+                    m_network->resetAnalog();
+                }
+            }
         }
 
         if (m_udpAudio && m_udpAudioSocket != nullptr)
@@ -2446,27 +2487,45 @@ void* HostBridge::threadNetworkProcess(void* arg)
             bool netReadRet = false;
             // is the bridge in DMR mode?
             if (bridge->m_txMode == TX_MODE_DMR) {
-                std::lock_guard<std::mutex> lock(HostBridge::s_networkMutex);
-                UInt8Array dmrBuffer = bridge->m_network->readDMR(netReadRet, length);
-                if (netReadRet) {
+                UInt8Array dmrBuffer = nullptr;
+
+                // scope is intentional to limit lock duration
+                {
+                    std::lock_guard<std::mutex> lock(HostBridge::s_networkMutex);
+                    dmrBuffer = bridge->m_network->readDMR(netReadRet, length);
+                }
+
+                if (netReadRet && dmrBuffer != nullptr) {
                     bridge->processDMRNetwork(dmrBuffer.get(), length);
                 }
             }
 
             // is the bridge in P25 mode?
             if (bridge->m_txMode == TX_MODE_P25) {
-                std::lock_guard<std::mutex> lock(HostBridge::s_networkMutex);
-                UInt8Array p25Buffer = bridge->m_network->readP25(netReadRet, length);
-                if (netReadRet) {
+                UInt8Array p25Buffer = nullptr;
+
+                // scope is intentional to limit lock duration
+                {
+                    std::lock_guard<std::mutex> lock(HostBridge::s_networkMutex);
+                    p25Buffer = bridge->m_network->readP25(netReadRet, length);
+                }
+
+                if (netReadRet && p25Buffer != nullptr) {
                     bridge->processP25Network(p25Buffer.get(), length);
                 }
             }
 
             // is the bridge in analog mode?
             if (bridge->m_txMode == TX_MODE_ANALOG) {
-                std::lock_guard<std::mutex> lock(HostBridge::s_networkMutex);
-                UInt8Array analogBuffer = bridge->m_network->readAnalog(netReadRet, length);
-                if (netReadRet) {
+                UInt8Array analogBuffer = nullptr;
+
+                // scope is intentional to limit lock duration
+                {
+                    std::lock_guard<std::mutex> lock(HostBridge::s_networkMutex);
+                    analogBuffer = bridge->m_network->readAnalog(netReadRet, length);
+                }
+
+                if (netReadRet && analogBuffer != nullptr) {
                     bridge->processAnalogNetwork(analogBuffer.get(), length);
                 }
             }

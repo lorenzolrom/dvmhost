@@ -82,8 +82,10 @@ void HostBridge::processAnalogNetwork(uint8_t* buffer, uint32_t length)
         if (dstId != m_dstId)
             return;
 
+        m_networkWatchdog.start();
+
         // is this a new call stream?
-        if (m_network->getAnalogStreamId() != m_rxStreamId) {
+        if (m_network->getAnalogStreamId() != m_rxStreamId && !m_callInProgress) {
             m_callInProgress = true;
             m_callAlgoId = 0U;
 
@@ -98,6 +100,7 @@ void HostBridge::processAnalogNetwork(uint8_t* buffer, uint32_t length)
         // process call termination
         if (frameType == AudioFrameType::TERMINATOR) {
             m_callInProgress = false;
+            m_networkWatchdog.stop();
             m_ignoreCall = false;
             m_callAlgoId = 0U;
 
@@ -113,6 +116,7 @@ void HostBridge::processAnalogNetwork(uint8_t* buffer, uint32_t length)
 
             m_rtpSeqNo = 0U;
             m_rtpTimestamp = INVALID_TS;
+            m_network->resetAnalog();
             return;
         }
 

@@ -144,9 +144,11 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
             return;
         }
 
+        m_networkWatchdog.start();
+
         // is this a new call stream?
         uint16_t callKID = 0U;
-        if (m_network->getP25StreamId() != m_rxStreamId && ((duid != DUID::TDU) && (duid != DUID::TDULC))) {
+        if (m_network->getP25StreamId() != m_rxStreamId && ((duid != DUID::TDU) && (duid != DUID::TDULC)) && !m_callInProgress) {
             m_callInProgress = true;
             m_callAlgoId = ALGO_UNENCRYPT;
 
@@ -189,6 +191,7 @@ void HostBridge::processP25Network(uint8_t* buffer, uint32_t length)
         // process call termination
         if ((duid == DUID::TDU) || (duid == DUID::TDULC)) {
             m_callInProgress = false;
+            m_networkWatchdog.stop();
             m_ignoreCall = false;
             m_callAlgoId = ALGO_UNENCRYPT;
 

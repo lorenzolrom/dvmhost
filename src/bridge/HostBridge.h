@@ -255,6 +255,8 @@ private:
 
     uint8_t m_detectedSampleCnt;
 
+    Timer m_networkWatchdog;
+
     static bool s_running;
     bool m_trace;
     bool m_debug;
