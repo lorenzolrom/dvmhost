@@ -2475,8 +2475,6 @@ void FNENetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::NET_
                     }
                 }
             } else {
-                LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request to Neighbors, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, dstId, slotNo, ssrc, streamId);
-
                 // send ICC request to any peers connected to us that are neighbor FNEs
                 m_peers.shared_lock();
                 for (auto& peer : m_peers) {
@@ -2484,12 +2482,14 @@ void FNENetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::NET_
                         continue;
                     if (peerId != peer.first) {
                         FNEPeerConnection* conn = peer.second;
-                        if (peerId == peer.first) {
+                        if (peerId == ssrc) {
                             // skip the peer if it is the source peer
                             continue;
                         }
 
                         if (conn->isNeighborFNEPeer()) {
+                            LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request to Neighbors, peerId = %u, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, peer.first, dstId, slotNo, ssrc, streamId);
+
                             // send ICC request to local peer
                             writePeerICC(peer.first, streamId, subFunc, command, dstId, slotNo, true, false, ssrc);
                         }
@@ -3162,7 +3162,13 @@ bool FNENetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUNC::E
         if (m_host->m_peerNetworks.size() > 0U) {
             for (auto& peer : m_host->m_peerNetworks) {
                 if (peer.second != nullptr) {
+                    if (peer.first == ssrc) {
+                        // skip the peer if it is the source peer
+                        continue;
+                    }
+
                     if (peer.second->isEnabled()) {
+                        LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request to Upstream, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, dstId, slotNo, ssrc, streamId);
                         peer.second->writeMaster({ NET_FUNC::INCALL_CTRL, subFunc }, buffer, 15U, RTP_END_OF_CALL_SEQ, streamId, false, 0U, ssrc);
                     }
                 }
