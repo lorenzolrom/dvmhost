@@ -2519,8 +2519,8 @@ void FNENetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::NET_
                     break;
                 }
 
-                // send further up the network tree
-                if (m_host->m_peerNetworks.size() > 0) {
+                // send further up the network tree (only if ICC request came from a local peer)
+                if (m_host->m_peerNetworks.size() > 0 && m_peers.find(peerId) != m_peers.end()) {
                     writePeerICC(peerId, streamId, subFunc, command, dstId, slotNo, true, true, ssrc);
                 }
             }
