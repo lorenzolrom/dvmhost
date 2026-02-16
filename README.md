@@ -90,12 +90,21 @@ sudo apt-get install libdw-dev:arm64
         dvmhost/build # sudo make old_install
         ```        
 
-If cross-compiling is required (for either ARM 32bit, 64bit or old Raspberry Pi ARM 32bit), the CMake build system has some options:
+If cross-compiling is required (ARM 32-bit or ARM64), the CMake build system provides the following options:
 
-- `-DCROSS_COMPILE_ARM=1` - This will cross-compile dvmhost for generic ARM 32bit. (RPi4+ running 32-bit distro's can fall into this category [on Debian/Rasbpian anything bullseye or newer])
-- `-DCROSS_COMPILE_AARCH64=1` - This will cross-compile dvmhost for generic ARM 64bit. (RPi4+ running 64-bit distro's can fall into this category [on Debian/Rasbpian anything bullseye or newer])
+- `-DCROSS_COMPILE_ARM=1` - Cross-compile **dvmhost** for generic ARM 32-bit  
+  (ex: Raspberry Pi running a 32-bit OS; Debian/Raspbian Bullseye or newer)
 
-Please note cross-compliation requires you to have the appropriate development packages installed for your system. For ARM 32-bit, on Debian/Ubuntu OS install the "arm-linux-gnueabihf-gcc" and "arm-linux-gnueabihf-g++" packages. For ARM 64-bit, on Debian/Ubuntu OS install the "aarch64-linux-gnu-gcc" and "aarch64-linux-gnu-g++" packages.
+- `-DCROSS_COMPILE_AARCH64=1` - Cross-compile **dvmhost** for generic ARM 64-bit  
+  (ex: Raspberry Pi 4+ or other ARM64 systems; Debian/Raspbian Bullseye or newer)
+
+Please note cross-compilation requires you to have the appropriate development packages installed for your system.:
+
+- **ARM 32-bit (Debian/Ubuntu):**  
+  `arm-linux-gnueabihf-gcc`, `arm-linux-gnueabihf-g++`
+
+- **ARM 64-bit (Debian/Ubuntu):**  
+  `aarch64-linux-gnu-gcc`, `aarch64-linux-gnu-g++`
 
 [See project notes](#project-notes).
 
