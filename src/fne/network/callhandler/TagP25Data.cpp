@@ -15,7 +15,7 @@
 #include "common/Log.h"
 #include "common/Thread.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/callhandler/TagP25Data.h"
 #include "HostFNE.h"
 #include "FNEMain.h"
@@ -42,7 +42,7 @@ const uint32_t GRANT_TIMER_TIMEOUT = 15U;
 
 /* Initializes a new instance of the TagP25Data class. */
 
-TagP25Data::TagP25Data(FNENetwork* network, bool debug) :
+TagP25Data::TagP25Data(TrafficNetwork* network, bool debug) :
     m_network(network),
     m_parrotFrames(),
     m_parrotFramesReady(false),

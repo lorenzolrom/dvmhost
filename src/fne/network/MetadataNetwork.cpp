@@ -11,7 +11,7 @@
 #include "common/zlib/Compression.h"
 #include "common/Log.h"
 #include "common/Utils.h"
-#include "network/DiagNetwork.h"
+#include "network/MetadataNetwork.h"
 #include "fne/ActivityLog.h"
 #include "HostFNE.h"
 
@@ -25,11 +25,11 @@ using namespace compress;
 //  Public Class Members
 // ---------------------------------------------------------------------------
 
-/* Initializes a new instance of the DiagNetwork class. */
+/* Initializes a new instance of the MetadataNetwork class. */
 
-DiagNetwork::DiagNetwork(HostFNE* host, FNENetwork* fneNetwork, const std::string& address, uint16_t port, uint16_t workerCnt) :
-    BaseNetwork(fneNetwork->m_peerId, true, fneNetwork->m_debug, true, true, fneNetwork->m_allowActivityTransfer, fneNetwork->m_allowDiagnosticTransfer),
-    m_fneNetwork(fneNetwork),
+MetadataNetwork::MetadataNetwork(HostFNE* host, TrafficNetwork* trafficNetwork, const std::string& address, uint16_t port, uint16_t workerCnt) :
+    BaseNetwork(trafficNetwork->m_peerId, true, trafficNetwork->m_debug, true, true, trafficNetwork->m_allowActivityTransfer, trafficNetwork->m_allowDiagnosticTransfer),
+    m_trafficNetwork(trafficNetwork),
     m_host(host),
     m_address(address),
     m_port(port),
@@ -38,26 +38,26 @@ DiagNetwork::DiagNetwork(HostFNE* host, FNENetwork* fneNetwork, const std::strin
     m_peerTreeListPkt(),
     m_threadPool(workerCnt, "diag")
 {
-    assert(fneNetwork != nullptr);
+    assert(trafficNetwork != nullptr);
     assert(host != nullptr);
     assert(!address.empty());
     assert(port > 0U);
 }
 
-/* Finalizes a instance of the DiagNetwork class. */
+/* Finalizes a instance of the MetadataNetwork class. */
 
-DiagNetwork::~DiagNetwork() = default;
+MetadataNetwork::~MetadataNetwork() = default;
 
 /* Sets endpoint preshared encryption key. */
 
-void DiagNetwork::setPresharedKey(const uint8_t* presharedKey)
+void MetadataNetwork::setPresharedKey(const uint8_t* presharedKey)
 {
     m_socket->setPresharedKey(presharedKey);
 }
 
 /* Process a data frames from the network. */
 
-void DiagNetwork::processNetwork()
+void MetadataNetwork::processNetwork()
 {
     if (m_status != NET_STAT_MST_RUNNING) {
         return;
@@ -73,13 +73,13 @@ void DiagNetwork::processNetwork()
     UInt8Array buffer = m_frameQueue->read(length, address, addrLen, &rtpHeader, &fneHeader);
     if (length > 0) {
         if (m_debug)
-            Utils::dump(1U, "DiagNetwork::processNetwork(), Network Message", buffer.get(), length);
+            Utils::dump(1U, "MetadataNetwork::processNetwork(), Network Message", buffer.get(), length);
 
         uint32_t peerId = fneHeader.getPeerId();
 
         NetPacketRequest* req = new NetPacketRequest();
-        req->obj = m_fneNetwork;
-        req->diagObj = this;
+        req->obj = m_trafficNetwork;
+        req->metadataObj = this;
         req->peerId = peerId;
 
         req->address = address;
@@ -105,7 +105,7 @@ void DiagNetwork::processNetwork()
 
 /* Updates the timer by the passed number of milliseconds. */
 
-void DiagNetwork::clock(uint32_t ms)
+void MetadataNetwork::clock(uint32_t ms)
 {
     if (m_status != NET_STAT_MST_RUNNING) {
         return;
@@ -114,7 +114,7 @@ void DiagNetwork::clock(uint32_t ms)
 
 /* Opens connection to the network. */
 
-bool DiagNetwork::open()
+bool MetadataNetwork::open()
 {
     if (m_debug)
         LogInfoEx(LOG_DIAG, "Opening Network");
@@ -143,7 +143,7 @@ bool DiagNetwork::open()
 
 /* Closes connection to the network. */
 
-void DiagNetwork::close()
+void MetadataNetwork::close()
 {
     if (m_debug)
         LogInfoEx(LOG_DIAG, "Closing Network");
@@ -162,10 +162,10 @@ void DiagNetwork::close()
 
 /* Process a data frames from the network. */
 
-void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
+void MetadataNetwork::taskNetworkRx(NetPacketRequest* req)
 {
     if (req != nullptr) {
-        FNENetwork* network = static_cast<FNENetwork*>(req->obj);
+        TrafficNetwork* network = static_cast<TrafficNetwork*>(req->obj);
         if (network == nullptr) {
             if (req != nullptr) {
                 if (req->buffer != nullptr)
@@ -176,8 +176,8 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
             return;
         }
 
-        DiagNetwork* diagNetwork = static_cast<DiagNetwork*>(req->diagObj);
-        if (diagNetwork == nullptr) {
+        MetadataNetwork* mdNetwork = static_cast<MetadataNetwork*>(req->metadataObj);
+        if (mdNetwork == nullptr) {
             if (req != nullptr) {
                 if (req->buffer != nullptr)
                     delete[] req->buffer;
@@ -396,18 +396,18 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                 DECLARE_UINT8_ARRAY(rawPayload, req->length);
                                 ::memcpy(rawPayload, req->buffer, req->length);
 
-                                // Utils::dump(1U, "DiagNetwork::taskNetworkRx(), REPL_ACT_PEER_LIST, Raw Payload", rawPayload, req->length);
+                                // Utils::dump(1U, "MetadataNetwork::taskNetworkRx(), REPL_ACT_PEER_LIST, Raw Payload", rawPayload, req->length);
 
-                                if (diagNetwork->m_peerReplicaActPkt.find(peerId) == diagNetwork->m_peerReplicaActPkt.end()) {
-                                    diagNetwork->m_peerReplicaActPkt.insert(peerId, DiagNetwork::PacketBufferEntry());
+                                if (mdNetwork->m_peerReplicaActPkt.find(peerId) == mdNetwork->m_peerReplicaActPkt.end()) {
+                                    mdNetwork->m_peerReplicaActPkt.insert(peerId, MetadataNetwork::PacketBufferEntry());
 
-                                    DiagNetwork::PacketBufferEntry& pkt = diagNetwork->m_peerReplicaActPkt[peerId];
+                                    MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerReplicaActPkt[peerId];
                                     pkt.buffer = new PacketBuffer(true, "Peer Replication, Active Peer List");
                                     pkt.streamId = streamId;
 
                                     pkt.locked = false;
                                 } else {
-                                    DiagNetwork::PacketBufferEntry& pkt = diagNetwork->m_peerReplicaActPkt[peerId];
+                                    MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerReplicaActPkt[peerId];
                                     if (!pkt.locked && pkt.streamId != streamId) {
                                         LogError(LOG_REPL, "PEER %u (%s) Peer Replication, Active Peer List, stream ID mismatch, expected %u, got %u", peerId,
                                             connection->identWithQualifier().c_str(), pkt.streamId, streamId);
@@ -421,7 +421,7 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                     }
                                 }
 
-                                DiagNetwork::PacketBufferEntry& pkt = diagNetwork->m_peerReplicaActPkt[peerId];
+                                MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerReplicaActPkt[peerId];
                                 if (pkt.locked) {
                                     while (pkt.locked)
                                         Thread::sleep(1U);
@@ -433,7 +433,7 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                 uint8_t* decompressed = nullptr;
 
                                 if (pkt.buffer->decode(rawPayload, &decompressed, &decompressedLen)) {
-                                    diagNetwork->m_peerReplicaActPkt.lock();
+                                    mdNetwork->m_peerReplicaActPkt.lock();
                                     std::string payload(decompressed + 8U, decompressed + decompressedLen);
 
                                     // parse JSON body
@@ -446,8 +446,8 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                         if (decompressed != nullptr) {
                                             delete[] decompressed;
                                         }
-                                        diagNetwork->m_peerReplicaActPkt.unlock();
-                                        diagNetwork->m_peerReplicaActPkt.erase(peerId);
+                                        mdNetwork->m_peerReplicaActPkt.unlock();
+                                        mdNetwork->m_peerReplicaActPkt.erase(peerId);
                                         break;
                                     }
                                     else  {
@@ -460,8 +460,8 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                             if (decompressed != nullptr) {
                                                 delete[] decompressed;
                                             }
-                                            diagNetwork->m_peerReplicaActPkt.unlock();
-                                            diagNetwork->m_peerReplicaActPkt.erase(peerId);
+                                            mdNetwork->m_peerReplicaActPkt.unlock();
+                                            mdNetwork->m_peerReplicaActPkt.erase(peerId);
                                             break;
                                         }
                                         else {
@@ -477,8 +477,8 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                     if (decompressed != nullptr) {
                                         delete[] decompressed;
                                     }
-                                    diagNetwork->m_peerReplicaActPkt.unlock();
-                                    diagNetwork->m_peerReplicaActPkt.erase(peerId);
+                                    mdNetwork->m_peerReplicaActPkt.unlock();
+                                    mdNetwork->m_peerReplicaActPkt.erase(peerId);
                                 } else {
                                     pkt.locked = false;
                                 }
@@ -535,7 +535,7 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         if (network->m_debug) {
                                             std::string address = __IP_FROM_UINT(rxEntry.masterIP);
-                                            LogDebugEx(LOG_REPL, "DiagNetwork::taskNetworkRx", "PEER %u (%s) Peer Replication, HA Parameters, %s:%u", peerId, connection->identWithQualifier().c_str(),
+                                            LogDebugEx(LOG_REPL, "MetadataNetwork::taskNetworkRx", "PEER %u (%s) Peer Replication, HA Parameters, %s:%u", peerId, connection->identWithQualifier().c_str(),
                                                 address.c_str(), rxEntry.masterPort);
                                         }
                                     }
@@ -585,18 +585,18 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                 DECLARE_UINT8_ARRAY(rawPayload, req->length);
                                 ::memcpy(rawPayload, req->buffer, req->length);
 
-                                // Utils::dump(1U, "DiagNetwork::taskNetworkRx(), NET_TREE_LIST, Raw Payload", rawPayload, req->length);
+                                // Utils::dump(1U, "MetadataNetwork::taskNetworkRx(), NET_TREE_LIST, Raw Payload", rawPayload, req->length);
 
-                                if (diagNetwork->m_peerTreeListPkt.find(peerId) == diagNetwork->m_peerTreeListPkt.end()) {
-                                    diagNetwork->m_peerTreeListPkt.insert(peerId, DiagNetwork::PacketBufferEntry());
+                                if (mdNetwork->m_peerTreeListPkt.find(peerId) == mdNetwork->m_peerTreeListPkt.end()) {
+                                    mdNetwork->m_peerTreeListPkt.insert(peerId, MetadataNetwork::PacketBufferEntry());
 
-                                    DiagNetwork::PacketBufferEntry& pkt = diagNetwork->m_peerTreeListPkt[peerId];
+                                    MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerTreeListPkt[peerId];
                                     pkt.buffer = new PacketBuffer(true, "Network Tree, Tree List");
                                     pkt.streamId = streamId;
 
                                     pkt.locked = false;
                                 } else {
-                                    DiagNetwork::PacketBufferEntry& pkt = diagNetwork->m_peerTreeListPkt[peerId];
+                                    MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerTreeListPkt[peerId];
                                     if (!pkt.locked && pkt.streamId != streamId) {
                                         LogError(LOG_STP, "PEER %u (%s) Network Tree, Tree List, stream ID mismatch, expected %u, got %u", peerId,
                                             connection->identWithQualifier().c_str(), pkt.streamId, streamId);
@@ -610,7 +610,7 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                     }
                                 }
 
-                                DiagNetwork::PacketBufferEntry& pkt = diagNetwork->m_peerTreeListPkt[peerId];
+                                MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerTreeListPkt[peerId];
                                 if (pkt.locked) {
                                     while (pkt.locked)
                                         Thread::sleep(1U);
@@ -622,7 +622,7 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                 uint8_t* decompressed = nullptr;
 
                                 if (pkt.buffer->decode(rawPayload, &decompressed, &decompressedLen)) {
-                                    diagNetwork->m_peerTreeListPkt.lock();
+                                    mdNetwork->m_peerTreeListPkt.lock();
                                     std::string payload(decompressed + 8U, decompressed + decompressedLen);
 
                                     // parse JSON body
@@ -635,8 +635,8 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                         if (decompressed != nullptr) {
                                             delete[] decompressed;
                                         }
-                                        diagNetwork->m_peerTreeListPkt.unlock();
-                                        diagNetwork->m_peerTreeListPkt.erase(peerId);
+                                        mdNetwork->m_peerTreeListPkt.unlock();
+                                        mdNetwork->m_peerTreeListPkt.erase(peerId);
                                         break;
                                     }
                                     else  {
@@ -649,8 +649,8 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                             if (decompressed != nullptr) {
                                                 delete[] decompressed;
                                             }
-                                            diagNetwork->m_peerTreeListPkt.unlock();
-                                            diagNetwork->m_peerTreeListPkt.erase(peerId);
+                                            mdNetwork->m_peerTreeListPkt.unlock();
+                                            mdNetwork->m_peerTreeListPkt.erase(peerId);
                                             break;
                                         }
                                         else {
@@ -680,8 +680,8 @@ void DiagNetwork::taskNetworkRx(NetPacketRequest* req)
                                     if (decompressed != nullptr) {
                                         delete[] decompressed;
                                     }
-                                    diagNetwork->m_peerTreeListPkt.unlock();
-                                    diagNetwork->m_peerTreeListPkt.erase(peerId);
+                                    mdNetwork->m_peerTreeListPkt.unlock();
+                                    mdNetwork->m_peerTreeListPkt.erase(peerId);
                                 } else {
                                     pkt.locked = false;
                                 }

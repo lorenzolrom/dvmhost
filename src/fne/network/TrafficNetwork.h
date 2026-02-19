@@ -16,13 +16,13 @@
  * @brief Implementation for the FNE call handlers.
  * @ingroup fne_network
  *
- * @file FNENetwork.h
+ * @file TrafficNetwork.h
  * @ingroup fne_network
- * @file FNENetwork.cpp
+ * @file TrafficNetwork.cpp
  * @ingroup fne_network
  */
-#if !defined(__FNE_NETWORK_H__)
-#define __FNE_NETWORK_H__
+#if !defined(__TRAFFIC_NETWORK_H__)
+#define __TRAFFIC_NETWORK_H__
 
 #include "fne/Defines.h"
 #include "common/concurrent/unordered_map.h"
@@ -95,8 +95,8 @@ namespace network
     //  Class Prototypes
     // ---------------------------------------------------------------------------
 
-    class HOST_SW_API DiagNetwork;
-    class HOST_SW_API FNENetwork;
+    class HOST_SW_API MetadataNetwork;
+    class HOST_SW_API TrafficNetwork;
 
     // ---------------------------------------------------------------------------
     //  Structure Declaration
@@ -120,7 +120,7 @@ namespace network
      */
     struct NetPacketRequest : thread_t {
         uint32_t peerId;                    //!< Peer ID for this request.
-        void* diagObj;                      //!< Network diagnostics network object.
+        void* metadataObj;                  //!< Network metadata network object.
 
         sockaddr_storage address;           //!< IP Address and Port. 
         uint32_t addrLen;                   //!< 
@@ -137,13 +137,13 @@ namespace network
     // ---------------------------------------------------------------------------
 
     /**
-     * @brief Implements the core FNE networking logic.
+     * @brief Implements the core traffic networking logic.
      * @ingroup fne_network
      */
-    class HOST_SW_API FNENetwork : public BaseNetwork {
+    class HOST_SW_API TrafficNetwork : public BaseNetwork {
     public:
         /**
-         * @brief Initializes a new instance of the FNENetwork class.
+         * @brief Initializes a new instance of the TrafficNetwork class.
          * @param host Instance of the HostFNE class.
          * @param address Network Hostname/IP address to listen on.
          * @param port Network port number.
@@ -166,15 +166,15 @@ namespace network
          * @param updateLookupTime 
          * @param workerCnt Number of worker threads.
          */
-        FNENetwork(HostFNE* host, const std::string& address, uint16_t port, uint32_t peerId, const std::string& password,
+        TrafficNetwork(HostFNE* host, const std::string& address, uint16_t port, uint32_t peerId, const std::string& password,
             std::string identity, bool debug, bool kmfDebug, bool verbose, bool reportPeerPing,
             bool dmr, bool p25, bool nxdn, bool analog,
             uint32_t parrotDelay, bool parrotGrantDemand, bool allowActivityTransfer, bool allowDiagnosticTransfer, 
             uint32_t pingTime, uint32_t updateLookupTime, uint16_t workerCnt);
         /**
-         * @brief Finalizes a instance of the FNENetwork class.
+         * @brief Finalizes a instance of the TrafficNetwork class.
          */
-        ~FNENetwork() override;
+        ~TrafficNetwork() override;
 
         /**
          * @brief Helper to set configuration options.
@@ -289,7 +289,7 @@ namespace network
         void setPeerReplica(bool replica);
 
     private:
-        friend class DiagNetwork;
+        friend class MetadataNetwork;
         friend class callhandler::TagDMRData;
         friend class callhandler::packetdata::DMRPacketData;
         callhandler::TagDMRData* m_tagDMR;
@@ -804,4 +804,4 @@ namespace network
     };
 } // namespace network
 
-#endif // __FNE_NETWORK_H__
+#endif // __TRAFFIC_NETWORK_H__

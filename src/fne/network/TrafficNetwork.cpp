@@ -15,7 +15,7 @@
 #include "common/Log.h"
 #include "common/StopWatch.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/callhandler/TagDMRData.h"
 #include "network/callhandler/TagP25Data.h"
 #include "network/callhandler/TagNXDNData.h"
@@ -54,15 +54,15 @@ const uint32_t FIXED_HA_UPDATE_INTERVAL = 30U; // 30s
 //  Static Class Members
 // ---------------------------------------------------------------------------
 
-std::timed_mutex FNENetwork::s_keyQueueMutex;
+std::timed_mutex TrafficNetwork::s_keyQueueMutex;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
 // ---------------------------------------------------------------------------
 
-/* Initializes a new instance of the FNENetwork class. */
+/* Initializes a new instance of the TrafficNetwork class. */
 
-FNENetwork::FNENetwork(HostFNE* host, const std::string& address, uint16_t port, uint32_t peerId, const std::string& password,
+TrafficNetwork::TrafficNetwork(HostFNE* host, const std::string& address, uint16_t port, uint32_t peerId, const std::string& password,
     std::string identity, bool debug, bool kmfDebug, bool verbose, bool reportPeerPing,
     bool dmr, bool p25, bool nxdn, bool analog,
     uint32_t parrotDelay, bool parrotGrantDemand, bool allowActivityTransfer, bool allowDiagnosticTransfer, 
@@ -180,9 +180,9 @@ FNENetwork::FNENetwork(HostFNE* host, const std::string& address, uint16_t port,
     Thread::runAsThread(this, threadParrotHandler);
 }
 
-/* Finalizes a instance of the FNENetwork class. */
+/* Finalizes a instance of the TrafficNetwork class. */
 
-FNENetwork::~FNENetwork()
+TrafficNetwork::~TrafficNetwork()
 {
     if (m_kmfServicesEnabled) {
         m_p25OTARService->close();
@@ -198,7 +198,7 @@ FNENetwork::~FNENetwork()
 
 /* Helper to set configuration options. */
 
-void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
+void TrafficNetwork::setOptions(yaml::Node& conf, bool printOptions)
 {
     m_disallowAdjStsBcast = conf["disallowAdjStsBcast"].as<bool>(false);
     m_disallowExtAdjStsBcast = conf["disallowExtAdjStsBcast"].as<bool>(true);
@@ -401,7 +401,7 @@ void FNENetwork::setOptions(yaml::Node& conf, bool printOptions)
 
 /* Sets the instances of the Radio ID, Talkgroup ID Peer List, and Crypto lookup tables. */
 
-void FNENetwork::setLookups(lookups::RadioIdLookup* ridLookup, lookups::TalkgroupRulesLookup* tidLookup, lookups::PeerListLookup* peerListLookup,
+void TrafficNetwork::setLookups(lookups::RadioIdLookup* ridLookup, lookups::TalkgroupRulesLookup* tidLookup, lookups::PeerListLookup* peerListLookup,
     CryptoContainer* cryptoLookup, lookups::AdjSiteMapLookup* adjSiteMapLookup)
 {
     m_ridLookup = ridLookup;
@@ -413,14 +413,14 @@ void FNENetwork::setLookups(lookups::RadioIdLookup* ridLookup, lookups::Talkgrou
 
 /* Sets endpoint preshared encryption key. */
 
-void FNENetwork::setPresharedKey(const uint8_t* presharedKey)
+void TrafficNetwork::setPresharedKey(const uint8_t* presharedKey)
 {
     m_socket->setPresharedKey(presharedKey);
 }
 
 /* Process a data frames from the network. */
 
-void FNENetwork::processNetwork()
+void TrafficNetwork::processNetwork()
 {
     if (m_status != NET_STAT_MST_RUNNING) {
         return;
@@ -436,13 +436,13 @@ void FNENetwork::processNetwork()
     UInt8Array buffer = m_frameQueue->read(length, address, addrLen, &rtpHeader, &fneHeader);
     if (length > 0) {
         if (m_debug)
-            Utils::dump(1U, "FNENetwork::processNetwork(), Network Message", buffer.get(), length);
+            Utils::dump(1U, "TrafficNetwork::processNetwork(), Network Message", buffer.get(), length);
 
         uint32_t peerId = fneHeader.getPeerId();
 
         NetPacketRequest* req = new NetPacketRequest();
         req->obj = this;
-        req->diagObj = m_host->m_diagNetwork;
+        req->metadataObj = m_host->m_mdNetwork;
         req->peerId = peerId;
 
         req->address = address;
@@ -471,14 +471,14 @@ void FNENetwork::processNetwork()
 
 /* Process network tree disconnect notification. */
 
-void FNENetwork::processNetworkTreeDisconnect(uint32_t peerId, uint32_t offendingPeerId)
+void TrafficNetwork::processNetworkTreeDisconnect(uint32_t peerId, uint32_t offendingPeerId)
 {
     if (m_status != NET_STAT_MST_RUNNING) {
         return;
     }
 
     if (!m_enableSpanningTree) {
-        LogWarning(LOG_STP, "FNENetwork::processNetworkTreeDisconnect(), ignoring disconnect request for PEER %u, spanning tree is disabled", offendingPeerId);
+        LogWarning(LOG_STP, "TrafficNetwork::processNetworkTreeDisconnect(), ignoring disconnect request for PEER %u, spanning tree is disabled", offendingPeerId);
         return;
     }
 
@@ -513,7 +513,7 @@ void FNENetwork::processNetworkTreeDisconnect(uint32_t peerId, uint32_t offendin
 
 /* Helper to process an downstream peer In-Call Control message. */
 
-void FNENetwork::processDownstreamInCallCtrl(network::NET_ICC::ENUM command, network::NET_SUBFUNC::ENUM subFunc, uint32_t dstId, 
+void TrafficNetwork::processDownstreamInCallCtrl(network::NET_ICC::ENUM command, network::NET_SUBFUNC::ENUM subFunc, uint32_t dstId, 
     uint8_t slotNo, uint32_t peerId, uint32_t ssrc, uint32_t streamId)
 {
     if (m_disallowInCallCtrl)
@@ -524,7 +524,7 @@ void FNENetwork::processDownstreamInCallCtrl(network::NET_ICC::ENUM command, net
 
 /* Updates the timer by the passed number of milliseconds. */
 
-void FNENetwork::clock(uint32_t ms)
+void TrafficNetwork::clock(uint32_t ms)
 {
     if (m_status != NET_STAT_MST_RUNNING) {
         return;
@@ -706,7 +706,7 @@ void FNENetwork::clock(uint32_t ms)
 
 /* Opens connection to the network. */
 
-bool FNENetwork::open()
+bool TrafficNetwork::open()
 {
     if (m_debug)
         LogInfoEx(LOG_MASTER, "Opening Network");
@@ -747,7 +747,7 @@ bool FNENetwork::open()
 
 /* Closes connection to the network. */
 
-void FNENetwork::close()
+void TrafficNetwork::close()
 {
     if (m_debug)
         LogInfoEx(LOG_MASTER, "Closing Network");
@@ -787,7 +787,7 @@ void FNENetwork::close()
 
 /* Entry point to parrot handler thread. */
 
-void* FNENetwork::threadParrotHandler(void* arg)
+void* TrafficNetwork::threadParrotHandler(void* arg)
 {
     thread_t* th = (thread_t*)arg;
     if (th != nullptr) {
@@ -798,7 +798,7 @@ void* FNENetwork::threadParrotHandler(void* arg)
 #endif // defined(_WIN32)
 
         std::string threadName("fne:parrot");
-        FNENetwork* fne = static_cast<FNENetwork*>(th->obj);
+        TrafficNetwork* fne = static_cast<TrafficNetwork*>(th->obj);
         if (fne == nullptr) {
             g_killed = true;
             LogError(LOG_HOST, "[FAIL] %s", threadName.c_str());
@@ -897,12 +897,12 @@ void* FNENetwork::threadParrotHandler(void* arg)
 
 /* Process a data frames from the network. */
 
-void FNENetwork::taskNetworkRx(NetPacketRequest* req)
+void TrafficNetwork::taskNetworkRx(NetPacketRequest* req)
 {
     if (req != nullptr) {
         uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-        FNENetwork* network = static_cast<FNENetwork*>(req->obj);
+        TrafficNetwork* network = static_cast<TrafficNetwork*>(req->obj);
         if (network == nullptr) {
             if (req != nullptr) {
                 if (req->buffer != nullptr)
@@ -1387,10 +1387,9 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                         // attach extra notification data to the RPTC ACK to notify the peer of 
                                         // the use of the alternate diagnostic port
                                         uint8_t buffer[1U];
-                                        buffer[0U] = 0x00U;
-                                        if (network->m_host->m_useAlternatePortForDiagnostics) {
-                                            buffer[0U] = 0x80U;
-                                        }
+                                        buffer[0U] = 0x80U; // this should really be a defined constant -- but
+                                                            // because this is the only option and its *always* sent now
+                                                            // we can just hardcode this for now
 
                                         json::object peerConfig = connection->config();
 
@@ -1442,14 +1441,9 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                             lookups::PeerId peerEntry = network->m_peerListLookup->find(req->peerId);
                                             if (!peerEntry.peerDefault()) {
                                                 if (peerEntry.peerReplica()) {
-                                                    if (network->m_host->m_useAlternatePortForDiagnostics) {
-                                                        connection->isReplica(true);
-                                                        if (neighbor)
-                                                            LogInfoEx(LOG_MASTER, "PEER %u >> Participates in Peer Replication", peerId);
-                                                    } else {
-                                                        LogError(LOG_MASTER, "PEER %u, Peer replication operations *require* the alternate diagnostics port option to be enabled.", peerId);
-                                                        LogError(LOG_MASTER, "PEER %u, will not receive peer replication ACL updates.", peerId);
-                                                    }
+                                                    connection->isReplica(true);
+                                                    if (neighbor)
+                                                        LogInfoEx(LOG_MASTER, "PEER %u >> Participates in Peer Replication", peerId);
                                                 }
                                             }
 
@@ -1741,8 +1735,8 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
                                                 uint8_t keyLength = keyItem.getKey(key);
 
                                                 if (network->m_debug) {
-                                                    LogDebugEx(LOG_HOST, "FNENetwork::threadedNetworkRx()", "keyLength = %u", keyLength);
-                                                    Utils::dump(1U, "FNENetwork::taskNetworkRx(), Key", key, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
+                                                    LogDebugEx(LOG_HOST, "TrafficNetwork::threadedNetworkRx()", "keyLength = %u", keyLength);
+                                                    Utils::dump(1U, "TrafficNetwork::taskNetworkRx(), Key", key, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
                                                 }
 
                                                 LogInfoEx(LOG_MASTER, "PEER %u (%s) local enc. key, algId = $%02X, kID = $%04X", peerId, connection->identWithQualifier().c_str(),
@@ -2089,7 +2083,7 @@ void FNENetwork::taskNetworkRx(NetPacketRequest* req)
 
 /* Checks if the passed peer ID is blocked from unit-to-unit traffic. */
 
-bool FNENetwork::checkU2UDroppedPeer(uint32_t peerId)
+bool TrafficNetwork::checkU2UDroppedPeer(uint32_t peerId)
 {
     if (m_dropU2UPeerTable.empty())
         return false;
@@ -2103,7 +2097,7 @@ bool FNENetwork::checkU2UDroppedPeer(uint32_t peerId)
 
 /* Helper to dump the current spanning tree configuration to the log. */
 
-void FNENetwork::logSpanningTree(FNEPeerConnection* connection)
+void TrafficNetwork::logSpanningTree(FNEPeerConnection* connection)
 {
     if (!m_enableSpanningTree)
         return;
@@ -2119,7 +2113,7 @@ void FNENetwork::logSpanningTree(FNEPeerConnection* connection)
 
 /* Applies jitter buffer configuration to a peer connection. */
 
-void FNENetwork::applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* connection)
+void TrafficNetwork::applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* connection)
 {
     if (connection == nullptr) {
         return;
@@ -2147,7 +2141,7 @@ void FNENetwork::applyJitterBufferConfig(uint32_t peerId, FNEPeerConnection* con
 
 /* Erases a stream ID from the given peer ID connection. */
 
-void FNENetwork::eraseStreamPktSeq(uint32_t peerId, uint32_t streamId)
+void TrafficNetwork::eraseStreamPktSeq(uint32_t peerId, uint32_t streamId)
 {
     if (peerId > 0 && (m_peers.find(peerId) != m_peers.end())) {
         FNEPeerConnection* connection = m_peers[peerId];
@@ -2159,7 +2153,7 @@ void FNENetwork::eraseStreamPktSeq(uint32_t peerId, uint32_t streamId)
 
 /* Helper to create a peer on the peers affiliations list. */
 
-void FNENetwork::createPeerAffiliations(uint32_t peerId, std::string peerName)
+void TrafficNetwork::createPeerAffiliations(uint32_t peerId, std::string peerName)
 {
     erasePeerAffiliations(peerId);
 
@@ -2170,7 +2164,7 @@ void FNENetwork::createPeerAffiliations(uint32_t peerId, std::string peerName)
 
 /* Helper to erase the peer from the peers affiliations list. */
 
-bool FNENetwork::erasePeerAffiliations(uint32_t peerId)
+bool TrafficNetwork::erasePeerAffiliations(uint32_t peerId)
 {
     auto it = std::find_if(m_peerAffiliations.begin(), m_peerAffiliations.end(), [&](PeerAffiliationMapPair x) { return x.first == peerId; });
     if (it != m_peerAffiliations.end()) {
@@ -2191,7 +2185,7 @@ bool FNENetwork::erasePeerAffiliations(uint32_t peerId)
 
 /* Helper to disconnect a downstream peer. */
 
-void FNENetwork::disconnectPeer(uint32_t peerId, FNEPeerConnection* connection)
+void TrafficNetwork::disconnectPeer(uint32_t peerId, FNEPeerConnection* connection)
 {
     if (peerId == 0U)
         return;
@@ -2211,7 +2205,7 @@ void FNENetwork::disconnectPeer(uint32_t peerId, FNEPeerConnection* connection)
 
 /* Helper to erase the peer from the peers list. */
 
-void FNENetwork::erasePeer(uint32_t peerId)
+void TrafficNetwork::erasePeer(uint32_t peerId)
 {
     bool neighborFNE = false;
     {
@@ -2273,7 +2267,7 @@ void FNENetwork::erasePeer(uint32_t peerId)
 
 /* Helper to determine if the peer is local to this master. */
 
-bool FNENetwork::isPeerLocal(uint32_t peerId)
+bool TrafficNetwork::isPeerLocal(uint32_t peerId)
 {
     m_peers.shared_lock();
     auto it = std::find_if(m_peers.begin(), m_peers.end(), [&](PeerMapPair x) { return x.first == peerId; });
@@ -2288,7 +2282,7 @@ bool FNENetwork::isPeerLocal(uint32_t peerId)
 
 /* Helper to find the unit registration for the given source ID. */
 
-uint32_t FNENetwork::findPeerUnitReg(uint32_t srcId)
+uint32_t TrafficNetwork::findPeerUnitReg(uint32_t srcId)
 {
     for (auto it = m_peerAffiliations.begin(); it != m_peerAffiliations.end(); ++it) {
         fne_lookups::AffiliationLookup* aff = it->second;
@@ -2304,7 +2298,7 @@ uint32_t FNENetwork::findPeerUnitReg(uint32_t srcId)
 
 /* Helper to create a JSON representation of a FNE peer connection. */
 
-json::object FNENetwork::fneConnObject(uint32_t peerId, FNEPeerConnection *conn)
+json::object TrafficNetwork::fneConnObject(uint32_t peerId, FNEPeerConnection *conn)
 {
     json::object peerObj = json::object();
     peerObj["peerId"].set<uint32_t>(peerId);
@@ -2344,7 +2338,7 @@ json::object FNENetwork::fneConnObject(uint32_t peerId, FNEPeerConnection *conn)
 
 /* Helper to reset a peer connection. */
 
-bool FNENetwork::resetPeer(uint32_t peerId)
+bool TrafficNetwork::resetPeer(uint32_t peerId)
 {
     if (peerId > 0 && (m_peers.find(peerId) != m_peers.end())) {
         FNEPeerConnection* connection = m_peers[peerId];
@@ -2370,7 +2364,7 @@ bool FNENetwork::resetPeer(uint32_t peerId)
 
 /* Helper to set the master is upstream peer replica flag. */
 
-void FNENetwork::setPeerReplica(bool replica)
+void TrafficNetwork::setPeerReplica(bool replica)
 {
     if (!m_isReplica && replica) {
         LogInfoEx(LOG_MASTER, "Set as upstream peer replica, receiving ACL updates from upstream master");
@@ -2388,7 +2382,7 @@ void FNENetwork::setPeerReplica(bool replica)
 
 /* Helper to resolve the peer ID to its identity string. */
 
-std::string FNENetwork::resolvePeerIdentity(uint32_t peerId)
+std::string TrafficNetwork::resolvePeerIdentity(uint32_t peerId)
 {
     auto it = std::find_if(m_peers.begin(), m_peers.end(), [&](PeerMapPair x) { return x.first == peerId; });
     if (it != m_peers.end()) {
@@ -2403,7 +2397,7 @@ std::string FNENetwork::resolvePeerIdentity(uint32_t peerId)
 
 /* Helper to complete setting up a repeater login request. */
 
-void FNENetwork::setupRepeaterLogin(uint32_t peerId, uint32_t streamId, FNEPeerConnection* connection)
+void TrafficNetwork::setupRepeaterLogin(uint32_t peerId, uint32_t streamId, FNEPeerConnection* connection)
 {
     std::uniform_int_distribution<uint32_t> dist(DVM_RAND_MIN, DVM_RAND_MAX);
     connection->salt(dist(m_random));
@@ -2424,11 +2418,11 @@ void FNENetwork::setupRepeaterLogin(uint32_t peerId, uint32_t streamId, FNEPeerC
 
 /* Helper to process an In-Call Control message. */
 
-void FNENetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::NET_SUBFUNC::ENUM subFunc, uint32_t dstId, 
+void TrafficNetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::NET_SUBFUNC::ENUM subFunc, uint32_t dstId, 
     uint8_t slotNo, uint32_t peerId, uint32_t ssrc, uint32_t streamId)
 {
     if (m_debug)
-        LogDebugEx(LOG_HOST, "FNENetwork::processInCallCtrl()", "peerId = %u, command = $%02X, subFunc = $%02X, dstId = %u, slot = %u, ssrc = %u, streamId = %u", 
+        LogDebugEx(LOG_HOST, "TrafficNetwork::processInCallCtrl()", "peerId = %u, command = $%02X, subFunc = $%02X, dstId = %u, slot = %u, ssrc = %u, streamId = %u", 
             peerId, command, subFunc, dstId, slotNo, ssrc, streamId);
 
     if (m_disallowInCallCtrl) {
@@ -2534,7 +2528,7 @@ void FNENetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::NET_
 
 /* Helper to send the network metadata to the specified peer in a separate thread. */
 
-void FNENetwork::peerMetadataUpdate(uint32_t peerId)
+void TrafficNetwork::peerMetadataUpdate(uint32_t peerId)
 {
     MetadataUpdateRequest* req = new MetadataUpdateRequest();
     req->obj = this;
@@ -2550,10 +2544,10 @@ void FNENetwork::peerMetadataUpdate(uint32_t peerId)
 
 /* Helper to send the network metadata to the specified peer in a separate thread. */
 
-void FNENetwork::taskMetadataUpdate(MetadataUpdateRequest* req)
+void TrafficNetwork::taskMetadataUpdate(MetadataUpdateRequest* req)
 {
     if (req != nullptr) {
-        FNENetwork* network = static_cast<FNENetwork*>(req->obj);
+        TrafficNetwork* network = static_cast<TrafficNetwork*>(req->obj);
         if (network == nullptr) {
             if (req != nullptr)
                 delete req;
@@ -2607,7 +2601,7 @@ void FNENetwork::taskMetadataUpdate(MetadataUpdateRequest* req)
 
 /* Helper to send the list of whitelisted RIDs to the specified peer. */
 
-void FNENetwork::writeWhitelistRIDs(uint32_t peerId, uint32_t streamId, bool sendReplica)
+void TrafficNetwork::writeWhitelistRIDs(uint32_t peerId, uint32_t streamId, bool sendReplica)
 {
     uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -2737,7 +2731,7 @@ void FNENetwork::writeWhitelistRIDs(uint32_t peerId, uint32_t streamId, bool sen
 
 /* Helper to send the list of whitelisted RIDs to the specified peer. */
 
-void FNENetwork::writeBlacklistRIDs(uint32_t peerId, uint32_t streamId)
+void TrafficNetwork::writeBlacklistRIDs(uint32_t peerId, uint32_t streamId)
 {
     uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -2807,7 +2801,7 @@ void FNENetwork::writeBlacklistRIDs(uint32_t peerId, uint32_t streamId)
 
 /* Helper to send the list of active TGIDs to the specified peer. */
 
-void FNENetwork::writeTGIDs(uint32_t peerId, uint32_t streamId, bool sendReplica)
+void TrafficNetwork::writeTGIDs(uint32_t peerId, uint32_t streamId, bool sendReplica)
 {
     if (!m_tidLookup->sendTalkgroups()) {
         return;
@@ -2946,7 +2940,7 @@ void FNENetwork::writeTGIDs(uint32_t peerId, uint32_t streamId, bool sendReplica
 
 /* Helper to send the list of deactivated TGIDs to the specified peer. */
 
-void FNENetwork::writeDeactiveTGIDs(uint32_t peerId, uint32_t streamId)
+void TrafficNetwork::writeDeactiveTGIDs(uint32_t peerId, uint32_t streamId)
 {
     if (!m_tidLookup->sendTalkgroups()) {
         return;
@@ -3004,7 +2998,7 @@ void FNENetwork::writeDeactiveTGIDs(uint32_t peerId, uint32_t streamId)
 
 /* Helper to send the list of peers to the specified peer. */
 
-void FNENetwork::writePeerList(uint32_t peerId, uint32_t streamId)
+void TrafficNetwork::writePeerList(uint32_t peerId, uint32_t streamId)
 {
     // sending REPL style PID list to replica neighbor FNE peers
     FNEPeerConnection* connection = m_peers[peerId];
@@ -3066,7 +3060,7 @@ void FNENetwork::writePeerList(uint32_t peerId, uint32_t streamId)
 
 /* Helper to send the HA parameters to the specified peer. */
 
-void FNENetwork::writeHAParameters(uint32_t peerId, uint32_t streamId, bool sendReplica)
+void TrafficNetwork::writeHAParameters(uint32_t peerId, uint32_t streamId, bool sendReplica)
 {
     if (!m_haEnabled) {
         return;
@@ -3108,7 +3102,7 @@ void FNENetwork::writeHAParameters(uint32_t peerId, uint32_t streamId, bool send
 
 /* Helper to send a network tree disconnect to the specified peer. */
 
-void FNENetwork::writeTreeDisconnect(uint32_t peerId, uint32_t offendingPeerId)
+void TrafficNetwork::writeTreeDisconnect(uint32_t peerId, uint32_t offendingPeerId)
 {
     if (!m_enableSpanningTree)
         return;
@@ -3128,7 +3122,7 @@ void FNENetwork::writeTreeDisconnect(uint32_t peerId, uint32_t offendingPeerId)
 
 /* Helper to send a In-Call Control command to the specified peer. */
 
-bool FNENetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUNC::ENUM subFunc, NET_ICC::ENUM command, uint32_t dstId, uint8_t slotNo,
+bool TrafficNetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUNC::ENUM subFunc, NET_ICC::ENUM command, uint32_t dstId, uint8_t slotNo,
     bool systemReq, bool toUpstream, uint32_t ssrc)
 {
     if (peerId == 0)
@@ -3142,7 +3136,7 @@ bool FNENetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUNC::E
         ssrc = peerId;
 
     if (m_debug)
-        LogDebugEx(LOG_HOST, "FNENetwork::writePeerICC()", "peerId = %u, command = $%02X, subFunc = $%02X, dstId = %u, slot = %u, ssrc = %u, streamId = %u", 
+        LogDebugEx(LOG_HOST, "TrafficNetwork::writePeerICC()", "peerId = %u, command = $%02X, subFunc = $%02X, dstId = %u, slot = %u, ssrc = %u, streamId = %u", 
             peerId, command, subFunc, dstId, slotNo, ssrc, streamId);
 
     uint8_t buffer[DATA_PACKET_LENGTH];
@@ -3187,7 +3181,7 @@ bool FNENetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUNC::E
 
 /* Helper to send a data message to the specified peer with a explicit packet sequence. */
 
-bool FNENetwork::writePeer(uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePair opcode, const uint8_t* data,
+bool TrafficNetwork::writePeer(uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePair opcode, const uint8_t* data,
     uint32_t length, uint16_t pktSeq, uint32_t streamId, bool incPktSeq) const
 {
     return writePeerQueue(nullptr, peerId, ssrc, opcode, data, length, pktSeq, streamId, incPktSeq);
@@ -3195,7 +3189,7 @@ bool FNENetwork::writePeer(uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePai
 
 /* Helper to queue a data message to the specified peer with a explicit packet sequence. */
 
-bool FNENetwork::writePeerQueue(udp::BufferQueue* buffers, uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePair opcode, 
+bool TrafficNetwork::writePeerQueue(udp::BufferQueue* buffers, uint32_t peerId, uint32_t ssrc, FrameQueue::OpcodePair opcode, 
     const uint8_t* data, uint32_t length, uint16_t pktSeq, uint32_t streamId, bool incPktSeq) const
 {
     if (streamId == 0U) {
@@ -3214,7 +3208,7 @@ bool FNENetwork::writePeerQueue(udp::BufferQueue* buffers, uint32_t peerId, uint
             }
 #if DEBUG_RTP_MUX
             if (m_debug)
-                LogDebugEx(LOG_NET, "FNENetwork::writePeerQueue()", "PEER %u, streamId = %u, pktSeq = %u", peerId, streamId, pktSeq);
+                LogDebugEx(LOG_NET, "TrafficNetwork::writePeerQueue()", "PEER %u, streamId = %u, pktSeq = %u", peerId, streamId, pktSeq);
 #endif
             if (m_maskOutboundPeerID)
                 ssrc = m_peerId; // mask the source SSRC to our own peer ID
@@ -3246,7 +3240,7 @@ bool FNENetwork::writePeerQueue(udp::BufferQueue* buffers, uint32_t peerId, uint
 
 /* Helper to send a command message to the specified peer. */
 
-bool FNENetwork::writePeerCommand(uint32_t peerId, FrameQueue::OpcodePair opcode,
+bool TrafficNetwork::writePeerCommand(uint32_t peerId, FrameQueue::OpcodePair opcode,
     const uint8_t* data, uint32_t length, uint32_t streamId, bool incPktSeq) const
 {
     if (peerId == 0)
@@ -3265,7 +3259,7 @@ bool FNENetwork::writePeerCommand(uint32_t peerId, FrameQueue::OpcodePair opcode
 
 /* Helper to send a ACK response to the specified peer. */
 
-bool FNENetwork::writePeerACK(uint32_t peerId, uint32_t streamId, const uint8_t* data, uint32_t length)
+bool TrafficNetwork::writePeerACK(uint32_t peerId, uint32_t streamId, const uint8_t* data, uint32_t length)
 {
     uint8_t buffer[DATA_PACKET_LENGTH];
     ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
@@ -3282,7 +3276,7 @@ bool FNENetwork::writePeerACK(uint32_t peerId, uint32_t streamId, const uint8_t*
 
 /* Helper to log a warning specifying which NAK reason is being sent a peer. */
 
-void FNENetwork::logPeerNAKReason(uint32_t peerId, const char* tag, NET_CONN_NAK_REASON reason)
+void TrafficNetwork::logPeerNAKReason(uint32_t peerId, const char* tag, NET_CONN_NAK_REASON reason)
 {
     switch (reason) {
     case NET_CONN_NAK_MODE_NOT_ENABLED:
@@ -3323,7 +3317,7 @@ void FNENetwork::logPeerNAKReason(uint32_t peerId, const char* tag, NET_CONN_NAK
 
 /* Helper to send a NAK response to the specified peer. */
 
-bool FNENetwork::writePeerNAK(uint32_t peerId, uint32_t streamId, const char* tag, NET_CONN_NAK_REASON reason)
+bool TrafficNetwork::writePeerNAK(uint32_t peerId, uint32_t streamId, const char* tag, NET_CONN_NAK_REASON reason)
 {
     if (peerId == 0)
         return false;
@@ -3342,7 +3336,7 @@ bool FNENetwork::writePeerNAK(uint32_t peerId, uint32_t streamId, const char* ta
 
 /* Helper to send a NAK response to the specified peer. */
 
-bool FNENetwork::writePeerNAK(uint32_t peerId, const char* tag, NET_CONN_NAK_REASON reason, sockaddr_storage& addr, uint32_t addrLen)
+bool TrafficNetwork::writePeerNAK(uint32_t peerId, const char* tag, NET_CONN_NAK_REASON reason, sockaddr_storage& addr, uint32_t addrLen)
 {
     if (peerId == 0)
         return false;
@@ -3367,7 +3361,7 @@ bool FNENetwork::writePeerNAK(uint32_t peerId, const char* tag, NET_CONN_NAK_REA
 
 /* Helper to process a FNE KMM TEK response. */
 
-void FNENetwork::processTEKResponse(p25::kmm::KeyItem* rspKi, uint8_t algId, uint8_t keyLength)
+void TrafficNetwork::processTEKResponse(p25::kmm::KeyItem* rspKi, uint8_t algId, uint8_t keyLength)
 {
     using namespace p25::defines;
     using namespace p25::kmm;
@@ -3390,8 +3384,8 @@ void FNENetwork::processTEKResponse(p25::kmm::KeyItem* rspKi, uint8_t algId, uin
             rspKi->getKey(key);
 
             if (m_debug) {
-                LogDebugEx(LOG_HOST, "FNENetwork::processTEKResponse()", "keyLength = %u", keyLength);
-                Utils::dump(1U, "FNENetwork::processTEKResponse(), Key", key, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
+                LogDebugEx(LOG_HOST, "TrafficNetwork::processTEKResponse()", "keyLength = %u", keyLength);
+                Utils::dump(1U, "TrafficNetwork::processTEKResponse(), Key", key, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
             }
 
             // build response buffer

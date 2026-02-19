@@ -17,7 +17,7 @@
 #include "common/Log.h"
 #include "common/Thread.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/callhandler/packetdata/DMRPacketData.h"
 #include "HostFNE.h"
 
@@ -51,7 +51,7 @@ const uint32_t ARP_RETRY_MS = 5000U; // milliseconds
 
 /* Initializes a new instance of the DMRPacketData class. */
 
-DMRPacketData::DMRPacketData(FNENetwork* network, TagDMRData* tag, bool debug) :
+DMRPacketData::DMRPacketData(TrafficNetwork* network, TagDMRData* tag, bool debug) :
     m_network(network),
     m_tag(tag),
     m_queuedFrames(),

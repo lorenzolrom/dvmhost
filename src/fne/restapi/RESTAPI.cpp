@@ -567,9 +567,9 @@ void RESTAPI::setLookups(lookups::RadioIdLookup* ridLookup, lookups::TalkgroupRu
     m_cryptoLookup = cryptoLookup;
 }
 
-/* Sets the instance of the FNE network. */
+/* Sets the instance of the traffic network. */
 
-void RESTAPI::setNetwork(network::FNENetwork* network)
+void RESTAPI::setNetwork(network::TrafficNetwork* network)
 {
     m_network = network;
 }

@@ -37,7 +37,7 @@
 // ---------------------------------------------------------------------------
 
 class HOST_SW_API HostFNE;
-namespace network { class HOST_SW_API FNENetwork; }
+namespace network { class HOST_SW_API TrafficNetwork; }
 
 // ---------------------------------------------------------------------------
 //  Class Declaration
@@ -79,10 +79,10 @@ public:
         ::lookups::PeerListLookup* peerListLookup, ::lookups::AdjSiteMapLookup* adjPeerMapLookup, 
         CryptoContainer* cryptoLookup);
     /**
-     * @brief Sets the instance of the FNE network.
-     * @param network Instance oft he FNENetwork class.
+     * @brief Sets the instance of the traffic network.
+     * @param network Instance of the TrafficNetwork class.
      */
-    void setNetwork(::network::FNENetwork* network);
+    void setNetwork(::network::TrafficNetwork* network);
 
     /**
      * @brief Opens connection to the network.
@@ -112,7 +112,7 @@ private:
     bool m_debug;
 
     HostFNE* m_host;
-    network::FNENetwork* m_network;
+    network::TrafficNetwork* m_network;
 
     ::lookups::RadioIdLookup* m_ridLookup;
     ::lookups::TalkgroupRulesLookup* m_tidLookup;

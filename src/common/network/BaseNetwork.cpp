@@ -45,7 +45,6 @@ BaseNetwork::BaseNetwork(uint32_t peerId, bool duplex, bool debug, bool slot1, b
     m_slot1(slot1),
     m_slot2(slot2),
     m_duplex(duplex),
-    m_useAlternatePortForDiagnostics(false),
     m_allowActivityTransfer(allowActivityTransfer),
     m_allowDiagnosticTransfer(allowDiagnosticTransfer),
     m_packetDump(false),
@@ -179,7 +178,7 @@ bool BaseNetwork::writeActLog(const char* message)
 #endif 
     
     return writeMaster({ NET_FUNC::TRANSFER, NET_SUBFUNC::TRANSFER_SUBFUNC_ACTIVITY }, (uint8_t*)buffer, (uint32_t)len + 11U,
-        RTP_END_OF_CALL_SEQ, 0U, m_useAlternatePortForDiagnostics);
+        RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes the local diagnostics log to the network. */
@@ -207,7 +206,7 @@ bool BaseNetwork::writeDiagLog(const char* message)
 #endif 
 
     return writeMaster({ NET_FUNC::TRANSFER, NET_SUBFUNC::TRANSFER_SUBFUNC_DIAG }, (uint8_t*)buffer, (uint32_t)len + 11U,
-        RTP_END_OF_CALL_SEQ, 0U, m_useAlternatePortForDiagnostics);
+        RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes the local status to the network. */
@@ -219,9 +218,6 @@ bool BaseNetwork::writePeerStatus(json::object obj)
 
     if (!m_allowActivityTransfer)
         return false;
-    if (!m_useAlternatePortForDiagnostics)
-        return false; // this is intentional -- peer status is a noisy message and it shouldn't be done
-                      // when the FNE is configured for main port transfers
 
     json::value v = json::value(obj);
     std::string json = std::string(v.serialize());
@@ -239,7 +235,7 @@ bool BaseNetwork::writePeerStatus(json::object obj)
 #endif 
 
     return writeMaster({ NET_FUNC::TRANSFER, NET_SUBFUNC::TRANSFER_SUBFUNC_STATUS }, (uint8_t*)buffer, (uint32_t)len + 11U,
-        RTP_END_OF_CALL_SEQ, 0U, m_useAlternatePortForDiagnostics);
+        RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes a group affiliation to the network. */
@@ -454,14 +450,14 @@ uint32_t BaseNetwork::getP25P2StreamId(uint32_t slotNo) const
 /* Helper to send a data message to the master. */
 
 bool BaseNetwork::writeMaster(FrameQueue::OpcodePair opcode, const uint8_t* data, uint32_t length, uint16_t pktSeq, uint32_t streamId, 
-    bool useAlternatePort, uint32_t peerId, uint32_t ssrc)
+    bool metadata, uint32_t peerId, uint32_t ssrc)
 {
     if (peerId == 0U)
         peerId = m_peerId;
     if (ssrc == 0U)
         ssrc = m_peerId;
 
-    if (useAlternatePort) {
+    if (metadata) {
         sockaddr_storage addr;
         uint32_t addrLen;
 

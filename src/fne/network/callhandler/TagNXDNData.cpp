@@ -20,7 +20,7 @@
 #include "common/Clock.h"
 #include "common/Log.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/callhandler/TagNXDNData.h"
 #include "HostFNE.h"
 #include "FNEMain.h"
@@ -40,7 +40,7 @@ using namespace nxdn::defines;
 
 /* Initializes a new instance of the TagNXDNData class. */
 
-TagNXDNData::TagNXDNData(FNENetwork* network, bool debug) :
+TagNXDNData::TagNXDNData(TrafficNetwork* network, bool debug) :
     m_network(network),
     m_parrotFrames(),
     m_parrotFramesReady(false),

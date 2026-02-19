@@ -24,7 +24,7 @@
 #include "common/p25/data/Assembler.h"
 #include "common/p25/data/DataHeader.h"
 #include "common/p25/data/DataBlock.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/PeerNetwork.h"
 #include "network/callhandler/TagP25Data.h"
 
@@ -48,11 +48,11 @@ namespace network
             public:
                 /**
                  * @brief Initializes a new instance of the P25PacketData class.
-                 * @param network Instance of the FNENetwork class.
+                 * @param network Instance of the TrafficNetwork class.
                  * @param tag Instance of the TagP25Data class.
                  * @param debug Flag indicating whether network debug is enabled.
                  */
-                P25PacketData(FNENetwork* network, TagP25Data* tag, bool debug);
+                P25PacketData(TrafficNetwork* network, TagP25Data* tag, bool debug);
                 /**
                  * @brief Finalizes a instance of the P25PacketData class.
                  */
@@ -111,7 +111,7 @@ namespace network
                 void cleanupStale();
 
             private:
-                FNENetwork* m_network;
+                TrafficNetwork* m_network;
                 TagP25Data* m_tag;
 
                 p25::data::Assembler* m_assembler;

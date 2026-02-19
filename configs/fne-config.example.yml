@@ -40,8 +40,8 @@ master:
     # Hostname/IP address to listen on (blank for all).
     address: 0.0.0.0
     # Port number to listen on.
-    #   NOTE: This port number includes itself for traffic, and master port + 1 for diagnostics and activity logging. (For 
-    #     example, a master port of 62031 will use 62032 for diagnostic and activity messages.)
+    #   NOTE: This port number includes itself for traffic, and master port + 1 for metadata. (For 
+    #     example, a master port of 62031 will use 62032 for metadata messages.)
     port: 62031
     # FNE access password.
     password: RPT1234

@@ -16,7 +16,7 @@
 #include "common/Clock.h"
 #include "common/Log.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/callhandler/TagDMRData.h"
 #include "HostFNE.h"
 #include "FNEMain.h"
@@ -37,7 +37,7 @@ using namespace dmr::defines;
 
 /* Initializes a new instance of the TagDMRData class. */
 
-TagDMRData::TagDMRData(FNENetwork* network, bool debug) :
+TagDMRData::TagDMRData(TrafficNetwork* network, bool debug) :
     m_network(network),
     m_parrotFrames(),
     m_parrotFramesReady(false),

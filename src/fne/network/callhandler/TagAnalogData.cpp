@@ -13,7 +13,7 @@
 #include "common/Clock.h"
 #include "common/Log.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/callhandler/TagAnalogData.h"
 #include "HostFNE.h"
 
@@ -33,7 +33,7 @@ using namespace analog::defines;
 
 /* Initializes a new instance of the TagAnalogData class. */
 
-TagAnalogData::TagAnalogData(FNENetwork* network, bool debug) :
+TagAnalogData::TagAnalogData(TrafficNetwork* network, bool debug) :
     m_network(network),
     m_parrotFrames(),
     m_parrotFramesReady(false),

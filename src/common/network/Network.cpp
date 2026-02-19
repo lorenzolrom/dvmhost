@@ -1206,14 +1206,13 @@ void Network::clock(uint32_t ms)
                         m_retryTimer.start();
 
                         if (length > 6) {
-                            m_useAlternatePortForDiagnostics = (buffer[6U] & 0x80U) == 0x80U;
-                            if (m_useAlternatePortForDiagnostics) {
-                                LogInfoEx(LOG_NET, "PEER %u RPTC ACK, master commanded alternate port for diagnostics and activity logging, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
-                            } else {
-                                // disable diagnostic and activity logging automatically if the master doesn't utilize the alternate port
+                            bool useAlternatePortForDiagnostics = (buffer[6U] & 0x80U) == 0x80U;
+                            if (!useAlternatePortForDiagnostics) {
+                                // disable diagnostic and activity logging automatically if the master doesn't utilize the secondary port
                                 m_allowDiagnosticTransfer = false;
                                 m_allowActivityTransfer = false;
-                                LogWarning(LOG_NET, "PEER %u RPTC ACK, master does not enable alternate port for diagnostics and activity logging, diagnostic and activity logging are disabled, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
+                                LogError(LOG_NET, "PEER %u RPTC ACK, master does not enable secondary port for metadata, diagnostic and activity logging are disabled, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
+                                LogError(LOG_NET, "PEER %u RPTC ACK, **please update your FNE**, secondary port for metadata, is required for all services as of R05A04, remotePeerId = %u", m_peerId, rtpHeader.getSSRC());
                             }
                         }
                         break;

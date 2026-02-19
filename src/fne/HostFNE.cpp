@@ -61,7 +61,7 @@ HostFNE::HostFNE(const std::string& confFile) :
     m_confFile(confFile),
     m_conf(),
     m_network(nullptr),
-    m_diagNetwork(nullptr),
+    m_mdNetwork(nullptr),
     m_vtunEnabled(false),
     m_packetDataMode(PacketDataMode::PROJECT25),
 #if !defined(_WIN32)
@@ -80,7 +80,6 @@ HostFNE::HostFNE(const std::string& confFile) :
     m_maxMissedPings(5U),
     m_updateLookupTime(10U),
     m_peerReplicaSavesACL(false),
-    m_useAlternatePortForDiagnostics(false),
     m_allowActivityTransfer(false),
     m_allowDiagnosticTransfer(false),
     m_RESTAPI(nullptr)
@@ -211,9 +210,9 @@ int HostFNE::run()
     ** Initialize Threads
     */
 
-    if (!Thread::runAsThread(this, threadMasterNetwork))
+    if (!Thread::runAsThread(this, threadTrafficNetwork))
         return EXIT_FAILURE;
-    if (!Thread::runAsThread(this, threadDiagNetwork))
+    if (!Thread::runAsThread(this, threadMetadataNetwork))
         return EXIT_FAILURE;
 #if !defined(_WIN32)
     if (!Thread::runAsThread(this, threadVirtualNetworking))
@@ -244,8 +243,8 @@ int HostFNE::run()
         // clock master
         if (m_network != nullptr)
             m_network->clock(ms);
-        if (m_diagNetwork != nullptr)
-            m_diagNetwork->clock(ms);
+        if (m_mdNetwork != nullptr)
+            m_mdNetwork->clock(ms);
 
         // clock peers
         for (auto network : m_peerNetworks) {
@@ -279,9 +278,9 @@ int HostFNE::run()
         delete m_network;
     }
 
-    if (m_diagNetwork != nullptr) {
-        m_diagNetwork->close();
-        delete m_diagNetwork;
+    if (m_mdNetwork != nullptr) {
+        m_mdNetwork->close();
+        delete m_mdNetwork;
     }
 
     for (auto network : m_peerNetworks) {
@@ -359,14 +358,8 @@ bool HostFNE::readParams()
         m_updateLookupTime = 10U;
     }
 
-    m_useAlternatePortForDiagnostics = systemConf["useAlternatePortForDiagnostics"].as<bool>(true);
     m_allowActivityTransfer = systemConf["allowActivityTransfer"].as<bool>(true);
     m_allowDiagnosticTransfer = systemConf["allowDiagnosticTransfer"].as<bool>(true);
-
-    if (!m_useAlternatePortForDiagnostics) {
-        LogWarning(LOG_HOST, "Alternate port for diagnostics and activity logging is disabled, this severely limits functionality and will prevent peer connections from transmitting diagnostic and activity logging to this FNE!");
-        LogWarning(LOG_HOST, "It is *not* recommended to disable the \"useAlternatePortForDiagnostics\" option.");
-    }
 
     if (!m_allowActivityTransfer) {
         LogWarning(LOG_HOST, "Peer activity logging is disabled, this severely limits functionality and can prevent proper operations by prohibiting activity logging to this FNE!");
@@ -388,10 +381,6 @@ bool HostFNE::readParams()
     LogInfo("    Send Talkgroups: %s", sendTalkgroups ? "yes" : "no");
     LogInfo("    Peer Replication ACL is retained: %s", m_peerReplicaSavesACL ? "yes" : "no");
 
-    if (m_useAlternatePortForDiagnostics)
-        LogInfo("    Use Alternate Port for Diagnostics: yes");
-    else
-        LogInfo(" !! Use Alternate Port for Diagnostics: no");
     if (m_allowActivityTransfer)
         LogInfo("    Allow Activity Log Transfer: yes");
     else
@@ -618,7 +607,8 @@ bool HostFNE::createMasterNetwork()
     LogInfo("    Identity: %s", identity.c_str());
     LogInfo("    Peer ID: %u", id);
     LogInfo("    Address: %s", address.c_str());
-    LogInfo("    Port: %u", port);
+    LogInfo("    Traffic Port: %u", port);
+    LogInfo("    Metadata Port: %u", port + 1U);
     LogInfo("    Allow DMR Traffic: %s", m_dmrEnabled ? "yes" : "no");
     LogInfo("    Allow P25 Traffic: %s", m_p25Enabled ? "yes" : "no");
     LogInfo("    Allow NXDN Traffic: %s", m_nxdnEnabled ? "yes" : "no");
@@ -648,8 +638,8 @@ bool HostFNE::createMasterNetwork()
         LogInfo("    P25 OTAR KMF Services Debug: yes");
     }
 
-    // initialize networking
-    m_network = new FNENetwork(this, address, port, id, password, identity, debug, kmfDebug, verbose, reportPeerPing,
+    // initialize traffic networking
+    m_network = new TrafficNetwork(this, address, port, id, password, identity, debug, kmfDebug, verbose, reportPeerPing,
         m_dmrEnabled, m_p25Enabled, m_nxdnEnabled, m_analogEnabled,
         parrotDelay, parrotGrantDemand, m_allowActivityTransfer, m_allowDiagnosticTransfer,
         m_pingTime, m_updateLookupTime, workerCnt);
@@ -674,31 +664,29 @@ bool HostFNE::createMasterNetwork()
         m_network->setPresharedKey(presharedKey);
     }
 
-    // setup alternate port for diagnostics/activity logging
-    if (m_useAlternatePortForDiagnostics) {
-        m_diagNetwork = new DiagNetwork(this, m_network, address, port + 1U, workerCnt);
-        m_diagNetwork->setPacketDump(packetDump);
+    // initialize metadata networking
+    m_mdNetwork = new MetadataNetwork(this, m_network, address, port + 1U, workerCnt);
+    m_mdNetwork->setPacketDump(packetDump);
 
-        bool ret = m_diagNetwork->open();
-        if (!ret) {
-            delete m_diagNetwork;
-            m_diagNetwork = nullptr;
-            LogError(LOG_HOST, "failed to initialize diagnostic log networking!");
-            m_useAlternatePortForDiagnostics = false; // this isn't fatal so just disable alternate port
-        }
-        else {
-            if (encrypted) {
-                m_diagNetwork->setPresharedKey(presharedKey);
-            }
+    ret = m_mdNetwork->open();
+    if (!ret) {
+        delete m_mdNetwork;
+        m_mdNetwork = nullptr;
+        LogError(LOG_HOST, "failed to initialize metadata networking!");
+        return false;
+    }
+    else {
+        if (encrypted) {
+            m_mdNetwork->setPresharedKey(presharedKey);
         }
     }
 
     return true;
 }
 
-/* Entry point to master FNE network thread. */
+/* Entry point to master traffic network thread. */
 
-void* HostFNE::threadMasterNetwork(void* arg)
+void* HostFNE::threadTrafficNetwork(void* arg)
 {
     thread_t* th = (thread_t*)arg;
     if (th != nullptr) {
@@ -708,7 +696,7 @@ void* HostFNE::threadMasterNetwork(void* arg)
         ::pthread_detach(th->thread);
 #endif // defined(_WIN32)
 
-        std::string threadName("fne:net");
+        std::string threadName("fne:traf-net");
         HostFNE* fne = static_cast<HostFNE*>(th->obj);
         if (fne == nullptr) {
             g_killed = true;
@@ -747,9 +735,9 @@ void* HostFNE::threadMasterNetwork(void* arg)
     return nullptr;
 }
 
-/* Entry point to master FNE diagnostics network thread. */
+/* Entry point to master metadata network thread. */
 
-void* HostFNE::threadDiagNetwork(void* arg)
+void* HostFNE::threadMetadataNetwork(void* arg)
 {
     thread_t* th = (thread_t*)arg;
     if (th != nullptr) {
@@ -759,7 +747,7 @@ void* HostFNE::threadDiagNetwork(void* arg)
         ::pthread_detach(th->thread);
 #endif // defined(_WIN32)
 
-        std::string threadName("fne:diag-net");
+        std::string threadName("fne:meta-net");
         HostFNE* fne = static_cast<HostFNE*>(th->obj);
         if (fne == nullptr) {
             g_killed = true;
@@ -767,11 +755,6 @@ void* HostFNE::threadDiagNetwork(void* arg)
         }
 
         if (g_killed) {
-            delete th;
-            return nullptr;
-        }
-
-        if (!fne->m_useAlternatePortForDiagnostics) {
             delete th;
             return nullptr;
         }
@@ -784,12 +767,12 @@ void* HostFNE::threadDiagNetwork(void* arg)
         StopWatch stopWatch;
         stopWatch.start();
 
-        if (fne->m_diagNetwork != nullptr) {
+        if (fne->m_mdNetwork != nullptr) {
             while (!g_killed) {
                 uint32_t ms = stopWatch.elapsed();
                 stopWatch.start();
 
-                fne->m_diagNetwork->processNetwork();
+                fne->m_mdNetwork->processNetwork();
 
                 if (ms < THREAD_CYCLE_THRESHOLD)
                     Thread::sleep(THREAD_CYCLE_THRESHOLD);

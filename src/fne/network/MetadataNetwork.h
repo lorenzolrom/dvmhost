@@ -8,18 +8,18 @@
  *
  */
 /**
- * @file DiagNetwork.h
+ * @file MetadataNetwork.h
  * @ingroup fne_network
- * @file DiagNetwork.cpp
+ * @file MetadataNetwork.cpp
  * @ingroup fne_network
  */
-#if !defined(__DIAG_NETWORK_H__)
-#define __DIAG_NETWORK_H__
+#if !defined(__METADATA_NETWORK_H__)
+#define __METADATA_NETWORK_H__
 
 #include "fne/Defines.h"
 #include "common/network/BaseNetwork.h"
 #include "common/ThreadPool.h"
-#include "fne/network/FNENetwork.h"
+#include "fne/network/TrafficNetwork.h"
 
 #include <string>
 
@@ -39,21 +39,21 @@ namespace network
      * @brief Implements the diagnostic/activity log networking logic.
      * @ingroup fne_network
      */
-    class HOST_SW_API DiagNetwork : public BaseNetwork {
+    class HOST_SW_API MetadataNetwork : public BaseNetwork {
     public:
         /**
-         * @brief Initializes a new instance of the DiagNetwork class.
+         * @brief Initializes a new instance of the MetadataNetwork class.
          * @param host Instance of the HostFNE class.
-         * @param network Instance of the FNENetwork class.
+         * @param network Instance of the TrafficNetwork class.
          * @param address Network Hostname/IP address to listen on.
          * @param port Network port number.
          * @param workerCnt Number of worker threads.
          */
-        DiagNetwork(HostFNE* host, FNENetwork* fneNetwork, const std::string& address, uint16_t port, uint16_t workerCnt);
+        MetadataNetwork(HostFNE* host, TrafficNetwork* trafficNetwork, const std::string& address, uint16_t port, uint16_t workerCnt);
         /**
-         * @brief Finalizes a instance of the DiagNetwork class.
+         * @brief Finalizes a instance of the MetadataNetwork class.
          */
-        ~DiagNetwork() override;
+        ~MetadataNetwork() override;
 
         /**
          * @brief Gets the current status of the network.
@@ -90,8 +90,8 @@ namespace network
         void close() override;
 
     private:
-        friend class FNENetwork;
-        FNENetwork* m_fneNetwork;
+        friend class TrafficNetwork;
+        TrafficNetwork* m_trafficNetwork;
         HostFNE* m_host;
 
         std::string m_address;
@@ -129,4 +129,4 @@ namespace network
     };
 } // namespace network
 
-#endif // __FNE_NETWORK_H__
+#endif // __METADATA_NETWORK_H__

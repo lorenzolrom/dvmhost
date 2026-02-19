@@ -22,7 +22,7 @@
 #include "common/concurrent/unordered_map.h"
 #include "common/dmr/DMRDefines.h"
 #include "common/dmr/data/DataHeader.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/PeerNetwork.h"
 #include "network/callhandler/TagDMRData.h"
 
@@ -46,11 +46,11 @@ namespace network
             public:
                 /**
                  * @brief Initializes a new instance of the DMRPacketData class.
-                 * @param network Instance of the FNENetwork class.
+                 * @param network Instance of the TrafficNetwork class.
                  * @param tag Instance of the TagDMRData class.
                  * @param debug Flag indicating whether network debug is enabled.
                  */
-                DMRPacketData(FNENetwork* network, TagDMRData* tag, bool debug);
+                DMRPacketData(TrafficNetwork* network, TagDMRData* tag, bool debug);
                 /**
                  * @brief Finalizes a instance of the P25PacketData class.
                  */
@@ -98,7 +98,7 @@ namespace network
                 void cleanupStale();
 
             private:
-                FNENetwork* m_network;
+                TrafficNetwork* m_network;
                 TagDMRData *m_tag;
 
                 /**

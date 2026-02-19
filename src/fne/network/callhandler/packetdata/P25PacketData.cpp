@@ -16,7 +16,7 @@
 #include "common/Log.h"
 #include "common/Thread.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/P25OTARService.h"
 #include "network/callhandler/packetdata/P25PacketData.h"
 #include "HostFNE.h"
@@ -55,7 +55,7 @@ const uint32_t SUBSCRIBER_READY_RETRY_MS = 1000U; // milliseconds
 
 /* Initializes a new instance of the P25PacketData class. */
 
-P25PacketData::P25PacketData(FNENetwork* network, TagP25Data* tag, bool debug) :
+P25PacketData::P25PacketData(TrafficNetwork* network, TagP25Data* tag, bool debug) :
     m_network(network),
     m_tag(tag),
     m_assembler(nullptr),

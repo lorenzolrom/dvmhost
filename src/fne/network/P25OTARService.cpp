@@ -12,7 +12,7 @@
 #include "common/Log.h"
 #include "common/Thread.h"
 #include "common/Utils.h"
-#include "network/FNENetwork.h"
+#include "network/TrafficNetwork.h"
 #include "network/P25OTARService.h"
 #include "HostFNE.h"
 
@@ -51,7 +51,7 @@ using namespace p25::kmm;
 
 /* Initializes a new instance of the P25OTARService class. */
 
-P25OTARService::P25OTARService(FNENetwork* network, P25PacketData* packetData, bool debug, bool verbose) :
+P25OTARService::P25OTARService(TrafficNetwork* network, P25PacketData* packetData, bool debug, bool verbose) :
     m_socket(nullptr),
     m_frameQueue(nullptr),
     m_threadPool(MAX_THREAD_CNT, "otar"),
