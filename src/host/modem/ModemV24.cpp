@@ -669,16 +669,97 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
     ::memset(buffer, 0x00U, P25_PDU_FRAME_LENGTH_BYTES + 2U);
 
     // get the DFSI data (skip the 0x00 padded byte at the start)
-    DECLARE_UINT8_ARRAY(dfsiData, length - 1U);
-    ::memcpy(dfsiData, data + 1U, length - 1U);
+    uint32_t dfsiLength = length - 1U;
+    DECLARE_UINT8_ARRAY(dfsiData, dfsiLength);
+    ::memcpy(dfsiData, data + 1U, dfsiLength);
 
     if (m_debug) {
         LogDebugEx(LOG_MODEM, "ModemV24::convertToAirV24()", "msgType = $%02X", dfsiData[0U]);
-        Utils::dump("ModemV24::convertToAirV24(), V.24 RX Data From Modem", dfsiData, length - 1U);
+        Utils::dump("ModemV24::convertToAirV24(), V.24 RX Data From Modem", dfsiData, dfsiLength);
     }
 
     DFSIFrameType::E frameType = (DFSIFrameType::E)dfsiData[0U];
     m_rxLastFrameTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+    uint32_t expectedLength = 0U;
+    switch (frameType) {
+        case DFSIFrameType::MOT_START_STOP:
+            expectedLength = DFSI_MOT_START_LEN;
+            break;
+        case DFSIFrameType::MOT_VHDR_1:
+            expectedLength = DFSI_MOT_VHDR_1_LEN;
+            break;
+        case DFSIFrameType::MOT_VHDR_2:
+            expectedLength = DFSI_MOT_VHDR_2_LEN;
+            break;
+        case DFSIFrameType::LDU1_VOICE1:
+            expectedLength = DFSI_LDU1_VOICE1_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE2:
+            expectedLength = DFSI_LDU1_VOICE2_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE3:
+            expectedLength = DFSI_LDU1_VOICE3_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE4:
+            expectedLength = DFSI_LDU1_VOICE4_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE5:
+            expectedLength = DFSI_LDU1_VOICE5_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE6:
+            expectedLength = DFSI_LDU1_VOICE6_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE7:
+            expectedLength = DFSI_LDU1_VOICE7_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE8:
+            expectedLength = DFSI_LDU1_VOICE8_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU1_VOICE9:
+            expectedLength = DFSI_LDU1_VOICE9_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE10:
+            expectedLength = DFSI_LDU2_VOICE10_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE11:
+            expectedLength = DFSI_LDU2_VOICE11_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE12:
+            expectedLength = DFSI_LDU2_VOICE12_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE13:
+            expectedLength = DFSI_LDU2_VOICE13_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE14:
+            expectedLength = DFSI_LDU2_VOICE14_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE15:
+            expectedLength = DFSI_LDU2_VOICE15_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE16:
+            expectedLength = DFSI_LDU2_VOICE16_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE17:
+            expectedLength = DFSI_LDU2_VOICE17_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::LDU2_VOICE18:
+            expectedLength = DFSI_LDU2_VOICE18_FRAME_LENGTH_BYTES;
+            break;
+        case DFSIFrameType::MOT_TDULC:
+            expectedLength = DFSI_MOT_TDULC_LEN;
+            break;
+        case DFSIFrameType::MOT_TSBK:
+            expectedLength = DFSI_MOT_TSBK_LEN;
+            break;
+        default:
+            break;
+    }
+
+    if (expectedLength > 0U && dfsiLength < expectedLength) {
+        LogWarning(LOG_MODEM, "V.24/DFSI short frame (type = $%02X), len = %u, expected >= %u", frameType, dfsiLength, expectedLength);
+        return;
+    }
 
     // Switch based on DFSI frame type
     switch (frameType) {
@@ -724,7 +805,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
             // copy to call data VHDR2
             ::memset(m_rxCall->VHDR2, 0x00U, DFSI_MOT_VHDR_2_LEN);
-            ::memcpy(m_rxCall->VHDR2, dfsiData + 1U, DFSI_MOT_VHDR_2_LEN);
+            ::memcpy(m_rxCall->VHDR2, dfsiData + 1U, DFSI_MOT_VHDR_2_LEN - 1U);
 
             if (m_debug && m_trace)
                 Utils::dump("ModemV24::convertToAirV24(), V.24 RX, VHDR2", m_rxCall->VHDR2, DFSI_MOT_VHDR_2_LEN);
@@ -2824,10 +2905,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
             tf.startOfStream->setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
             tf.startOfStream->setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
             tf.startOfStream->setArgument1(MotStreamPayload::TERM_LC);
-            delete[] tf.tdulcData;
-
-            tf.tdulcData = new uint8_t[P25_TDULC_PAYLOAD_LENGTH_BYTES + 1U];
-            ::memset(tf.tdulcData, 0x00U, P25_TDULC_PAYLOAD_LENGTH_BYTES + 1U);
+            ::memset(tf.tdulcData, 0x00U, P25_TDULC_FRAME_LENGTH_BYTES);
             ::memcpy(tf.tdulcData, tdulc.getDecodedRaw(), P25_TDULC_PAYLOAD_LENGTH_BYTES + 1U);
 
             // create buffer and encode
@@ -3158,9 +3236,6 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
             tf.startOfStream->setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
             tf.startOfStream->setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
             tf.startOfStream->setArgument1(MotStreamPayload::TSBK);
-            delete[] tf.tsbkData;
-
-            tf.tsbkData = new uint8_t[P25_TSBK_LENGTH_BYTES];
             ::memset(tf.tsbkData, 0x00U, P25_TSBK_LENGTH_BYTES);
             ::memcpy(tf.tsbkData, tsbk.getDecodedRaw(), P25_TSBK_LENGTH_BYTES);
 
