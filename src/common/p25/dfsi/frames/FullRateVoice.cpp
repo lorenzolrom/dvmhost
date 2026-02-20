@@ -89,7 +89,7 @@ bool FullRateVoice::decode(const uint8_t* data)
     assert(data != nullptr);
 
     if (imbeData != nullptr)
-        delete imbeData;
+        delete[] imbeData;
     imbeData = new uint8_t[IMBE_BUF_LEN];
     ::memset(imbeData, 0x00U, IMBE_BUF_LEN);
 
@@ -113,7 +113,7 @@ bool FullRateVoice::decode(const uint8_t* data)
         }
     } else {
         if (additionalData != nullptr)
-            delete additionalData;
+            delete[] additionalData;
         additionalData = nullptr;
     }
 

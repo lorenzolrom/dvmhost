@@ -492,7 +492,7 @@ void V24UDPPort::taskCtrlNetworkRx(V24PacketRequest* req)
                     case FSCMessageType::FSC_CONNECT:
                     {
                         FSCConnect* connMessage = static_cast<FSCConnect*>(message.get());
-                        FSCACK ackResp = FSCACK();
+                        FSCACK ackResp;
                         ackResp.setCorrelationTag(connMessage->getCorrelationTag());
                         ackResp.setAckMessageId(FSCMessageType::FSC_CONNECT);
                         ackResp.setResponseCode(FSCAckResponseCode::CONTROL_ACK);
@@ -571,7 +571,7 @@ void V24UDPPort::taskCtrlNetworkRx(V24PacketRequest* req)
 
                     case FSCMessageType::FSC_SEL_CHAN:
                     {
-                        FSCACK ackResp = FSCACK();
+                        FSCACK ackResp;
                         ackResp.setCorrelationTag(message->getCorrelationTag());
                         ackResp.setAckMessageId(FSCMessageType::FSC_SEL_CHAN);
                         ackResp.setResponseCode(FSCAckResponseCode::CONTROL_ACK);
@@ -588,7 +588,7 @@ void V24UDPPort::taskCtrlNetworkRx(V24PacketRequest* req)
 
                     case FSCMessageType::FSC_REPORT_SEL_MODES:
                     {
-                        FSCACK ackResp = FSCACK();
+                        FSCACK ackResp;
                         ackResp.setCorrelationTag(message->getCorrelationTag());
                         ackResp.setAckMessageId(FSCMessageType::FSC_REPORT_SEL_MODES);
                         ackResp.setResponseCode(FSCAckResponseCode::CONTROL_ACK);

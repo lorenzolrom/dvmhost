@@ -665,6 +665,11 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
     assert(data != nullptr);
     assert(length > 0U);
 
+    if (length < 2U) {
+        LogWarning(LOG_MODEM, "V.24/DFSI frame too short, len = %u", length);
+        return;
+    }
+
     uint8_t buffer[P25_PDU_FRAME_LENGTH_BYTES + 2U];
     ::memset(buffer, 0x00U, P25_PDU_FRAME_LENGTH_BYTES + 2U);
 
@@ -680,6 +685,56 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
     DFSIFrameType::E frameType = (DFSIFrameType::E)dfsiData[0U];
     m_rxLastFrameTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+    bool knownFrameType = false;
+    switch (frameType) {
+        case DFSIFrameType::MOT_START_STOP:
+        case DFSIFrameType::MOT_VHDR_1:
+        case DFSIFrameType::MOT_VHDR_2:
+        case DFSIFrameType::LDU1_VOICE1:
+        case DFSIFrameType::LDU1_VOICE2:
+        case DFSIFrameType::LDU1_VOICE3:
+        case DFSIFrameType::LDU1_VOICE4:
+        case DFSIFrameType::LDU1_VOICE5:
+        case DFSIFrameType::LDU1_VOICE6:
+        case DFSIFrameType::LDU1_VOICE7:
+        case DFSIFrameType::LDU1_VOICE8:
+        case DFSIFrameType::LDU1_VOICE9:
+        case DFSIFrameType::LDU2_VOICE10:
+        case DFSIFrameType::LDU2_VOICE11:
+        case DFSIFrameType::LDU2_VOICE12:
+        case DFSIFrameType::LDU2_VOICE13:
+        case DFSIFrameType::LDU2_VOICE14:
+        case DFSIFrameType::LDU2_VOICE15:
+        case DFSIFrameType::LDU2_VOICE16:
+        case DFSIFrameType::LDU2_VOICE17:
+        case DFSIFrameType::LDU2_VOICE18:
+        case DFSIFrameType::MOT_TDULC:
+        case DFSIFrameType::MOT_PDU_UNCONF_HEADER:
+        case DFSIFrameType::MOT_PDU_UNCONF_BLOCK_1:
+        case DFSIFrameType::MOT_PDU_UNCONF_BLOCK_2:
+        case DFSIFrameType::MOT_PDU_UNCONF_BLOCK_3:
+        case DFSIFrameType::MOT_PDU_UNCONF_BLOCK_4:
+        case DFSIFrameType::MOT_PDU_UNCONF_END:
+        case DFSIFrameType::MOT_PDU_SINGLE_UNCONF:
+        case DFSIFrameType::MOT_PDU_CONF_HEADER:
+        case DFSIFrameType::MOT_PDU_CONF_BLOCK_1:
+        case DFSIFrameType::MOT_PDU_CONF_BLOCK_2:
+        case DFSIFrameType::MOT_PDU_CONF_BLOCK_3:
+        case DFSIFrameType::MOT_PDU_CONF_BLOCK_4:
+        case DFSIFrameType::MOT_PDU_CONF_END:
+        case DFSIFrameType::MOT_PDU_SINGLE_CONF:
+        case DFSIFrameType::MOT_TSBK:
+            knownFrameType = true;
+            break;
+        default:
+            break;
+    }
+
+    if (!knownFrameType) {
+        LogWarning(LOG_MODEM, "V.24/DFSI unknown frame type $%02X, dropping frame", frameType);
+        return;
+    }
 
     uint32_t expectedLength = 0U;
     switch (frameType) {
@@ -765,7 +820,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
     switch (frameType) {
         case DFSIFrameType::MOT_START_STOP:
         {
-            MotStartOfStream start = MotStartOfStream(dfsiData);
+            MotStartOfStream start(dfsiData);
             if (start.getParam1() == DSFI_MOT_ICW_PARM_PAYLOAD) {
                 m_rxCall->resetCallData();
                 m_rxCallInProgress = true;
@@ -789,7 +844,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
         case DFSIFrameType::MOT_VHDR_1:
         {
-            MotStartOfStream start = MotStartOfStream(dfsiData);
+            MotStartOfStream start(dfsiData);
 
             // copy to call data VHDR1
             ::memset(m_rxCall->VHDR1, 0x00U, DFSI_MOT_VHDR_1_LEN);
@@ -801,7 +856,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
         break;
         case DFSIFrameType::MOT_VHDR_2:
         {
-            MotStartOfStream start = MotStartOfStream(dfsiData);
+            MotStartOfStream start(dfsiData);
 
             // copy to call data VHDR2
             ::memset(m_rxCall->VHDR2, 0x00U, DFSI_MOT_VHDR_2_LEN);
@@ -901,7 +956,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
         // VOICE1/10 create a start voice frame
         case DFSIFrameType::LDU1_VOICE1:
         {
-            MotStartVoiceFrame svf = MotStartVoiceFrame(dfsiData);
+            MotStartVoiceFrame svf(dfsiData);
             ::memset(m_rxCall->LDULC, 0x00U, P25DEF::P25_LDU_LC_FEC_LENGTH_BYTES);
             ::memcpy(m_rxCall->netLDU1 + 10U, svf.fullRateVoice->imbeData, RAW_IMBE_LENGTH_BYTES);
 
@@ -918,6 +973,8 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
                     uint8_t value = icw[i + 1U];
 
                     switch (param) {
+                    case DFSI_MOT_ICW_PARM_NOP:
+                        break;
                     case DSFI_MOT_ICW_PARM_PAYLOAD:
                         payloadType = value;
                         break;
@@ -953,7 +1010,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
         break;
         case DFSIFrameType::LDU2_VOICE10:
         {
-            MotStartVoiceFrame svf = MotStartVoiceFrame(dfsiData);
+            MotStartVoiceFrame svf(dfsiData);
             ::memset(m_rxCall->LDULC, 0x00U, P25DEF::P25_LDU_LC_FEC_LENGTH_BYTES);
             ::memcpy(m_rxCall->netLDU2 + 10U, svf.fullRateVoice->imbeData, RAW_IMBE_LENGTH_BYTES);
 
@@ -970,6 +1027,8 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
                     uint8_t value = icw[i + 1U];
 
                     switch (param) {
+                    case DFSI_MOT_ICW_PARM_NOP:
+                        break;
                     case DSFI_MOT_ICW_PARM_PAYLOAD:
                         payloadType = value;
                         break;
@@ -1006,7 +1065,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
         case DFSIFrameType::MOT_TDULC:
         {
-            MotTDULCFrame tf = MotTDULCFrame(dfsiData);
+            MotTDULCFrame tf(dfsiData);
             lc::tdulc::LC_TDULC_RAW tdulc = lc::tdulc::LC_TDULC_RAW();
             if (!tdulc.decode(tf.tdulcData, true)) {
                 LogError(LOG_MODEM, "V.24/DFSI traffic failed to decode TDULC FEC");
@@ -1348,7 +1407,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
 
         case DFSIFrameType::MOT_TSBK:
         {
-            MotTSBKFrame tf = MotTSBKFrame(dfsiData);
+            MotTSBKFrame tf(dfsiData);
             lc::tsbk::OSP_TSBK_RAW tsbk = lc::tsbk::OSP_TSBK_RAW();
             if (!tsbk.decode(tf.tsbkData, true)) {
                 LogError(LOG_MODEM, "V.24/DFSI traffic failed to decode TSBK FEC");
@@ -1388,7 +1447,7 @@ void ModemV24::convertToAirV24(const uint8_t *data, uint32_t length)
         // The remaining LDUs all create full rate voice frames so we do that here
         default:
         {
-            MotFullRateVoice voice = MotFullRateVoice(dfsiData);
+            MotFullRateVoice voice(dfsiData);
 
             if (m_debug) {
                 LogDebugEx(LOG_MODEM, "ModemV24::convertToAirV24()", "Full Rate Voice, frameType = $%02X, errors = %u, busy = %u", voice.getFrameType(), voice.getTotalErrors(), voice.getBusy());
@@ -1974,7 +2033,7 @@ void ModemV24::convertToAirTIA(const uint8_t *data, uint32_t length)
     
         case BlockType::FULL_RATE_VOICE:
         {
-            FullRateVoice voice = FullRateVoice();
+            FullRateVoice voice;
             //m_superFrameCnt = voice.getSuperframeCnt();
             voice.decode(dfsiData + dataOffs);
 
@@ -2510,7 +2569,7 @@ void ModemV24::startOfStreamV24(const p25::lc::LC& control)
 {
     m_txCallInProgress = true;
 
-    MotStartOfStream start = MotStartOfStream();
+    MotStartOfStream start;
     start.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
     start.setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
     start.setArgument1(MotStreamPayload::VOICE);
@@ -2588,7 +2647,7 @@ void ModemV24::startOfStreamV24(const p25::lc::LC& control)
 
 void ModemV24::endOfStreamV24()
 {
-    MotStartOfStream end = MotStartOfStream();
+    MotStartOfStream end;
     end.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
     end.setParam1(DFSI_MOT_ICW_PARM_STOP);
     end.setArgument1(MotStreamPayload::VOICE);
@@ -2901,7 +2960,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
                 return;
             }
 
-            MotTDULCFrame tf = MotTDULCFrame();
+            MotTDULCFrame tf;
             tf.startOfStream->setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
             tf.startOfStream->setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
             tf.startOfStream->setArgument1(MotStreamPayload::TERM_LC);
@@ -2990,7 +3049,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
                     offset += P25_PDU_FEC_LENGTH_BITS;
                 }
 
-                MotStartOfStream start = MotStartOfStream();
+                MotStartOfStream start;
                 start.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
                 start.setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
                 start.setArgument1(MotStreamPayload::DATA);
@@ -3014,7 +3073,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
                     DECLARE_UINT8_ARRAY(pduBuf, pduLen);
 
                     // header block contains the embedded start of stream
-                    MotStartOfStream embedded = MotStartOfStream();
+                    MotStartOfStream embedded;
                     embedded.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
                     embedded.setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
                     embedded.setArgument1((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? MotStreamPayload::DATA_18 : MotStreamPayload::DATA_12);
@@ -3053,7 +3112,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
 
                     queueP25Frame(pduBuf, pduLen, STT_DATA);
 
-                    MotStartOfStream end = MotStartOfStream();
+                    MotStartOfStream end;
                     end.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
                     end.setParam1(DFSI_MOT_ICW_PARM_STOP);
                     end.setArgument1(MotStreamPayload::DATA);
@@ -3079,7 +3138,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
 
                     // assemble the first frame
                     // header block contains the embedded start of stream
-                    MotStartOfStream embedded = MotStartOfStream();
+                    MotStartOfStream embedded;
                     embedded.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
                     embedded.setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
                     embedded.setArgument1((dataHeader.getFormat() == PDUFormatType::CONFIRMED) ? MotStreamPayload::DATA_18 : MotStreamPayload::DATA_12);
@@ -3205,7 +3264,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
                         queueP25Frame(pduBuf, pduLen, STT_DATA);
                     }
 
-                    MotStartOfStream end = MotStartOfStream();
+                    MotStartOfStream end;
                     end.setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
                     end.setParam1(DFSI_MOT_ICW_PARM_STOP);
                     end.setArgument1(MotStreamPayload::DATA);
@@ -3232,7 +3291,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
                 return;
             }
 
-            MotTSBKFrame tf = MotTSBKFrame();
+            MotTSBKFrame tf;
             tf.startOfStream->setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
             tf.startOfStream->setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
             tf.startOfStream->setArgument1(MotStreamPayload::TSBK);
@@ -3294,7 +3353,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
         for (int n = 0; n < 9; n++) {
             uint8_t* buffer = nullptr;
             uint16_t bufferSize = 0;
-            MotFullRateVoice voice = MotFullRateVoice();
+            MotFullRateVoice voice;
             voice.setBusy(DFSI_BUSY_BITS_INBOUND);
 
             switch (n) {
@@ -3302,7 +3361,7 @@ void ModemV24::convertFromAirV24(uint8_t* data, uint32_t length, bool imm)
                 {
                     voice.setFrameType((duid == DUID::LDU1) ? DFSIFrameType::LDU1_VOICE1 : DFSIFrameType::LDU2_VOICE10);
 
-                    MotStartVoiceFrame svf = MotStartVoiceFrame();
+                    MotStartVoiceFrame svf;
                     svf.startOfStream->setOpcode(m_rtrt ? MotStartStreamOpcode::TRANSMIT : MotStartStreamOpcode::RECEIVE);
                     svf.startOfStream->setParam1(DSFI_MOT_ICW_PARM_PAYLOAD);
                     svf.startOfStream->setArgument1(MotStreamPayload::VOICE);
@@ -3577,7 +3636,7 @@ void ModemV24::convertFromAirTIA(uint8_t* data, uint32_t length, bool imm)
         for (int n = 0; n < 9; n++) {
             uint8_t* buffer = nullptr;
             uint16_t bufferSize = 0;
-            FullRateVoice voice = FullRateVoice();
+            FullRateVoice voice;
             voice.setBusy(DFSI_BUSY_BITS_BUSY);
             voice.setSuperframeCnt(m_superFrameCnt);
 
