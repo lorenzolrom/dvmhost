@@ -164,6 +164,31 @@ void MetadataNetwork::close()
     m_status = NET_STAT_INVALID;
 }
 
+/* Helper to send a metadata message to a peer's metadata port. */
+
+bool MetadataNetwork::writePeerMetadata(FNEPeerConnection* connection, uint32_t ssrc, FrameQueue::OpcodePair opcode, const uint8_t* data,
+    uint32_t length, uint16_t pktSeq, uint32_t streamId) const
+{
+    if (connection == nullptr)
+        return false;
+    if (m_status != NET_STAT_MST_RUNNING)
+        return false;
+    if (m_frameQueue == nullptr)
+        return false;
+
+    sockaddr_storage addr;
+    uint32_t addrLen = 0U;
+    uint16_t port = connection->port() + 1U;
+
+    if (udp::Socket::lookup(connection->address(), port, addr, addrLen) != 0) {
+        LogWarning(LOG_NET, "PEER %u (%s) failed to resolve metadata endpoint %s:%u", connection->id(),
+            connection->identWithQualifier().c_str(), connection->address().c_str(), port);
+        return false;
+    }
+
+    return m_frameQueue->write(data, length, streamId, connection->id(), ssrc, opcode, pktSeq, addr, addrLen);
+}
+
 // ---------------------------------------------------------------------------
 //  Private Class Members
 // ---------------------------------------------------------------------------
@@ -433,14 +458,17 @@ void MetadataNetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         json::object response = json::object();
                                         std::string errorMessage;
-                                        if (!network->patchStatusRegistry().publish(reqObj, response, errorMessage)) {
+                                        bool changed = false;
+                                        if (!network->patchStatusRegistry().publish(reqObj, response, errorMessage, &changed)) {
                                             LogWarning(LOG_MASTER, "PEER %u (%s) invalid patch status payload, %s", pktPeerId, connection->identWithQualifier().c_str(), errorMessage.c_str());
                                             network->writePeerNAK(pktPeerId, network->createStreamId(), TAG_TRANSFER_PATCH_STATUS, NET_CONN_NAK_ILLEGAL_PACKET);
                                             break;
                                         }
 
-                                        network->writePatchStatusToConsoles(response);
-                                        network->replicatePatchStatus(reqObj);
+                                        if (changed) {
+                                            network->writePatchStatusToConsoles(response);
+                                            network->replicatePatchStatus(reqObj);
+                                        }
                                     }
                                     else {
                                         network->writePeerNAK(pktPeerId, network->createStreamId(), TAG_TRANSFER_PATCH_STATUS, NET_CONN_NAK_FNE_UNAUTHORIZED);

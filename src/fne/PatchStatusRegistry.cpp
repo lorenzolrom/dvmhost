@@ -53,8 +53,11 @@ void PatchStatusRegistry::configure(uint32_t defaultTtlSeconds, uint32_t minTtlS
 
 /* Publishes a complete patch snapshot for one console peer. */
 
-bool PatchStatusRegistry::publish(json::object& request, json::object& response, std::string& errorMessage)
+bool PatchStatusRegistry::publish(json::object& request, json::object& response, std::string& errorMessage, bool* changed)
 {
+    if (changed != nullptr)
+        *changed = false;
+
     if (!request["peerId"].is<uint32_t>()) {
         errorMessage = "peerId was not a valid integer";
         return false;
@@ -109,18 +112,35 @@ bool PatchStatusRegistry::publish(json::object& request, json::object& response,
     {
         std::lock_guard<std::mutex> guard(m_mutex);
         auto existing = m_peerPatches.find(incoming.peerId);
-        if (existing != m_peerPatches.end() && incoming.sequence > 0U && existing->second.sequence > incoming.sequence) {
+        if (existing != m_peerPatches.end() && incoming.sequence > 0U && existing->second.sequence >= incoming.sequence &&
+            existing->second.originFnePeerId == incoming.originFnePeerId) {
             response = snapshotLocked();
             response["acceptedPeerId"].set<uint32_t>(incoming.peerId);
             response["ttlSeconds"].set<uint32_t>(ttlSeconds);
             return true;
         }
 
-        if (incoming.patches.empty())
-            m_peerPatches.erase(incoming.peerId);
-        else
+        if (existing != m_peerPatches.end() && peerSnapshotsEqual(existing->second, incoming)) {
+            response = snapshotLocked();
+            response["acceptedPeerId"].set<uint32_t>(incoming.peerId);
+            response["ttlSeconds"].set<uint32_t>(ttlSeconds);
+            return true;
+        }
+
+        if (incoming.patches.empty()) {
+            if (m_peerPatches.erase(incoming.peerId) == 0U) {
+                response = snapshotLocked();
+                response["acceptedPeerId"].set<uint32_t>(incoming.peerId);
+                response["ttlSeconds"].set<uint32_t>(ttlSeconds);
+                return true;
+            }
+        }
+        else {
             m_peerPatches[incoming.peerId] = incoming;
+        }
         bumpRevisionLocked();
+        if (changed != nullptr)
+            *changed = true;
 
         response = snapshotLocked();
         response["acceptedPeerId"].set<uint32_t>(incoming.peerId);
@@ -318,6 +338,51 @@ json::object PatchStatusRegistry::peerSnapshotToJson(const PeerPatchSnapshot& pe
     obj["patches"].set<json::array>(patches);
 
     return obj;
+}
+
+/* Compares two patch members for logical equality. */
+
+bool PatchStatusRegistry::patchMembersEqual(const PatchMember& lhs, const PatchMember& rhs)
+{
+    return lhs.system == rhs.system &&
+        lhs.mode == rhs.mode &&
+        lhs.tgid == rhs.tgid &&
+        lhs.slot == rhs.slot;
+}
+
+/* Compares two patch records for logical equality. */
+
+bool PatchStatusRegistry::patchRecordsEqual(const PatchRecord& lhs, const PatchRecord& rhs)
+{
+    if (lhs.patchId != rhs.patchId || lhs.active != rhs.active || lhs.oneWay != rhs.oneWay || lhs.members.size() != rhs.members.size())
+        return false;
+
+    for (size_t i = 0U; i < lhs.members.size(); i++) {
+        if (!patchMembersEqual(lhs.members[i], rhs.members[i]))
+            return false;
+    }
+
+    return true;
+}
+
+/* Compares two peer snapshots for logical equality. */
+
+bool PatchStatusRegistry::peerSnapshotsEqual(const PeerPatchSnapshot& lhs, const PeerPatchSnapshot& rhs)
+{
+    if (lhs.peerId != rhs.peerId ||
+        lhs.originFnePeerId != rhs.originFnePeerId ||
+        lhs.peerName != rhs.peerName ||
+        lhs.sequence != rhs.sequence ||
+        lhs.patches.size() != rhs.patches.size()) {
+        return false;
+    }
+
+    for (size_t i = 0U; i < lhs.patches.size(); i++) {
+        if (!patchRecordsEqual(lhs.patches[i], rhs.patches[i]))
+            return false;
+    }
+
+    return true;
 }
 
 /* Parses one patch record from JSON. */

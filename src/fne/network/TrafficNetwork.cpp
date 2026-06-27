@@ -553,10 +553,14 @@ void TrafficNetwork::processReplicatedPatchStatus(uint32_t peerId, json::object 
 
     json::object response = json::object();
     std::string errorMessage;
-    if (!m_patchStatusRegistry.publish(obj, response, errorMessage)) {
+    bool changed = false;
+    if (!m_patchStatusRegistry.publish(obj, response, errorMessage, &changed)) {
         LogWarning(LOG_MASTER, "PEER %u invalid replicated patch status payload, %s", peerId, errorMessage.c_str());
         return;
     }
+
+    if (!changed)
+        return;
 
     writePatchStatusToConsoles(response);
     replicatePatchStatus(obj, peerId);
@@ -2525,6 +2529,8 @@ bool TrafficNetwork::writePatchStatusPayload(FNEPeerConnection* connection, json
         return false;
     if (!m_patchStatusEnabled)
         return false;
+    if (m_host->m_mdNetwork == nullptr)
+        return false;
     if (!connection->connected())
         return false;
     if (connection->peerClass() != PEER_CONN_CLASS_CONSOLE)
@@ -2543,15 +2549,12 @@ bool TrafficNetwork::writePatchStatusPayload(FNEPeerConnection* connection, json
     ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
     ::memcpy(buffer + 11U, payload.c_str(), len);
 
-    sockaddr_storage addr = connection->socketStorage();
-    uint32_t addrLen = connection->sockStorageLen();
-
     if (m_debug) {
         LogDebug(LOG_MASTER, "PEER %u (%s) sending patch status registry, len = %u", connection->id(), connection->identWithQualifier().c_str(), len);
     }
 
-    return m_frameQueue->write(buffer, len + 11U, createStreamId(), connection->id(), m_peerId,
-        { NET_FUNC::TRANSFER, NET_SUBFUNC::TRANSFER_SUBFUNC_PATCH_STATUS }, RTP_END_OF_CALL_SEQ, addr, addrLen);
+    return m_host->m_mdNetwork->writePeerMetadata(connection, m_peerId,
+        { NET_FUNC::TRANSFER, NET_SUBFUNC::TRANSFER_SUBFUNC_PATCH_STATUS }, buffer, len + 11U, RTP_END_OF_CALL_SEQ, createStreamId());
 }
 
 /* Helper to serialize and queue a patch status replication payload. */
@@ -2561,6 +2564,8 @@ bool TrafficNetwork::writePatchStatusReplicationPayload(FNEPeerConnection* conne
     if (connection == nullptr)
         return false;
     if (!m_patchStatusEnabled)
+        return false;
+    if (m_host->m_mdNetwork == nullptr)
         return false;
     if (!connection->connected())
         return false;
@@ -2585,7 +2590,7 @@ bool TrafficNetwork::writePatchStatusReplicationPayload(FNEPeerConnection* conne
         connection->identWithQualifier().c_str(), pkt.fragments.size(), streamId);
     if (pkt.fragments.size() > 0U) {
         for (auto frag : pkt.fragments) {
-            writePeer(connection->id(), m_peerId, { NET_FUNC::REPL, NET_SUBFUNC::REPL_PATCH_STATUS },
+            m_host->m_mdNetwork->writePeerMetadata(connection, m_peerId, { NET_FUNC::REPL, NET_SUBFUNC::REPL_PATCH_STATUS },
                 frag.second->data, FRAG_SIZE, RTP_END_OF_CALL_SEQ, streamId);
             Thread::sleep(60U); // pace block transmission
         }

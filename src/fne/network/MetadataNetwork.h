@@ -91,6 +91,9 @@ namespace network
 
     private:
         friend class TrafficNetwork;
+        bool writePeerMetadata(FNEPeerConnection* connection, uint32_t ssrc, FrameQueue::OpcodePair opcode, const uint8_t* data,
+            uint32_t length, uint16_t pktSeq, uint32_t streamId) const;
+
         TrafficNetwork* m_trafficNetwork;
         HostFNE* m_host;
 

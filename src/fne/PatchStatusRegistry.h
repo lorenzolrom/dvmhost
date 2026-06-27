@@ -77,7 +77,7 @@ public:
      * @param errorMessage Validation error text populated when the request is invalid.
      * @returns bool True, if the publish request was valid and applied, otherwise false.
      */
-    bool publish(json::object& request, json::object& response, std::string& errorMessage);
+    bool publish(json::object& request, json::object& response, std::string& errorMessage, bool* changed = nullptr);
     /**
      * @brief Removes all patch records associated with a console peer.
      * @param peerId Console peer ID whose records should be removed.
@@ -193,6 +193,9 @@ private:
      * @returns json::object JSON peer patch snapshot.
      */
     static json::object peerSnapshotToJson(const PeerPatchSnapshot& peer);
+    static bool patchMembersEqual(const PatchMember& lhs, const PatchMember& rhs);
+    static bool patchRecordsEqual(const PatchRecord& lhs, const PatchRecord& rhs);
+    static bool peerSnapshotsEqual(const PeerPatchSnapshot& lhs, const PeerPatchSnapshot& rhs);
 
     /**
      * @brief Parses one patch record from JSON.
