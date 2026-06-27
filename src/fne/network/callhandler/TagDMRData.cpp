@@ -1067,7 +1067,7 @@ bool TagDMRData::isPeerPermitted(uint32_t peerId, data::NetData& data, uint32_t 
             }
 
             // check the affiliations for this peer to see if we can repeat traffic
-            lookups::AffiliationLookup* aff = m_network->m_peerAffiliations[lookupPeerId];
+            std::shared_ptr<fne_lookups::AffiliationLookup> aff = m_network->getPeerAffiliations(lookupPeerId);
             if (aff == nullptr) {
                 std::string peerIdentity = m_network->resolvePeerIdentity(lookupPeerId);
                 //LogError(LOG_NET, "PEER %u (%s) has an invalid affiliations lookup? This shouldn't happen BUGBUG.", lookupPeerId, peerIdentity.c_str());
@@ -1272,6 +1272,14 @@ bool TagDMRData::validate(uint32_t peerId, data::NetData& data, lc::CSBK* csbk, 
             return false;
         }
 
+        /*
+        ** bryanb: yes the encryption else condition is missing here -- DMR is a bit of a mess when it comes to 
+        **  handling encryption because AFAIK the TS.102 spec doesn't clearly indicate how to handle encryption; 
+        **  DVM's FNE cannot reliably implement selectable, strapped, clear checking because it won't know reliably 
+        **  if the call is encrypted or not until it receives a VOICE_LC_HEADER or VOICE_PI_HEADER frame, and by that 
+        **  time it'll really be too late to reject the call
+        */
+
         // peer always send list takes priority over any following affiliation rules
         bool isAlwaysPeer = false;
         std::vector<uint32_t> alwaysSend = tg.config().alwaysSend();
@@ -1405,7 +1413,7 @@ bool TagDMRData::write_CSBK_Grant(uint32_t peerId, uint32_t srcId, uint32_t dstI
     }
 
     // check the affiliations for this peer to see if we can grant traffic
-    lookups::AffiliationLookup* aff = m_network->m_peerAffiliations[peerId];
+    std::shared_ptr<fne_lookups::AffiliationLookup> aff = m_network->getPeerAffiliations(peerId);
     if (aff == nullptr) {
         std::string peerIdentity = m_network->resolvePeerIdentity(peerId);
         LogError(LOG_MASTER, "PEER %u (%s) has an invalid affiliations lookup? This shouldn't happen BUGBUG.", peerId, peerIdentity.c_str());

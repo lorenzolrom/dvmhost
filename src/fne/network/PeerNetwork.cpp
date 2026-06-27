@@ -61,7 +61,7 @@ PeerNetwork::PeerNetwork(const std::string& address, uint16_t port, uint16_t loc
     m_prevSpanningTreeChildren(0U),
     m_nakFallOver(false),
     m_nakFallOverCount(0U),
-    m_nakFallOverCountThreshold(10U)
+    m_nakFallOverCountThreshold(50U)
 {
     assert(!address.empty());
     assert(port > 0U);
@@ -363,9 +363,6 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 if (m_peerReplicaCallback != nullptr)
                     m_peerReplicaCallback(this);
 
-                // reset NAK count on reception of a replica TG
-                m_nakFallOverCount = 0U;
-
                 // cleanup temporary file
                 ::remove(filename.c_str());
                 m_tgidPkt.clear();
@@ -425,9 +422,6 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 if (m_peerReplicaCallback != nullptr)
                     m_peerReplicaCallback(this);
 
-                // reset NAK count on reception of a replica TG
-                m_nakFallOverCount = 0U;
-
                 // cleanup temporary file
                 ::remove(filename.c_str());
                 m_ridPkt.clear();
@@ -486,9 +480,6 @@ void PeerNetwork::userPacketHandler(uint32_t peerId, FrameQueue::OpcodePair opco
                 m_peerReplica = true;
                 if (m_peerReplicaCallback != nullptr)
                     m_peerReplicaCallback(this);
-
-                // reset NAK count on reception of a replica TG
-                m_nakFallOverCount = 0U;
 
                 // cleanup temporary file
                 ::remove(filename.c_str());

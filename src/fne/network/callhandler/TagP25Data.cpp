@@ -169,8 +169,32 @@ bool TagP25Data::processFrame(const uint8_t* data, uint32_t len, uint32_t peerId
         tsbk = lc::tsbk::TSBKFactory::createTSBK(data);
     }
 
+    // decode true LDU LC from the network frame into a DFSI LC class literal
+    dfsi::LC dfsiLC = dfsi::LC(control, lsd);
+    if (duid == DUID::LDU1 || duid == DUID::LDU2) {
+        uint8_t netLDU[9U * 25U];
+        ::memset(netLDU, 0x00U, 9U * 25U);
+
+        uint8_t missing = BaseNetwork::reconstructLDUVectors(buffer + 24U, frameLength, &dfsiLC, duid, netLDU);
+        if (missing > 0U) {
+            LogWarning(LOG_NET, (duid == DUID::LDU1) ? P25_LDU1_STR : P25_LDU2_STR ", missing %u LDU voice frames, srcId = %u, dstId = %u", missing, srcId, dstId);
+        }
+
+        // if its a LDU2 get the crypto state
+        if (duid == DUID::LDU2) {
+            control.setAlgId(dfsiLC.control()->getAlgId());
+            control.setKId(dfsiLC.control()->getKId());
+
+            // copy MI data
+            uint8_t mi[MI_LENGTH_BYTES];
+            ::memset(mi, 0x00U, MI_LENGTH_BYTES);
+            dfsiLC.control()->getMI(mi);
+            control.setMI(mi);
+        }
+    }
+
     // is the stream valid?
-    if (validate(peerId, control, duid, tsbk.get(), streamId)) {
+    if (validate(peerId, control, duid, tsbk.get(), frameType, streamId)) {
         // is this peer ignored?
         if (!isPeerPermitted(peerId, control, duid, streamId, fromUpstream)) {
             return false;
@@ -1286,7 +1310,7 @@ bool TagP25Data::processTSDUTo(uint8_t* buffer, uint32_t peerId, uint8_t duid)
                             }
 
                             // check the affiliations for this peer to see if we can repeat the TSDU
-                            lookups::AffiliationLookup* aff = m_network->m_peerAffiliations[lookupPeerId];
+                            std::shared_ptr<fne_lookups::AffiliationLookup> aff = m_network->getPeerAffiliations(lookupPeerId);
                             if (aff == nullptr) {
                                 std::string peerIdentity = m_network->resolvePeerIdentity(lookupPeerId);
                                 //LogError(LOG_P25, "PEER %u (%s) has an invalid affiliations lookup? This shouldn't happen BUGBUG.", lookupPeerId, peerIdentity.c_str());
@@ -1513,7 +1537,7 @@ bool TagP25Data::isPeerPermitted(uint32_t peerId, lc::LC& control, DUID::E duid,
         }
 
         // check the affiliations for this peer to see if we can repeat traffic
-        lookups::AffiliationLookup* aff = m_network->m_peerAffiliations[lookupPeerId];
+        std::shared_ptr<fne_lookups::AffiliationLookup> aff = m_network->getPeerAffiliations(lookupPeerId);
         if (aff == nullptr) {
             std::string peerIdentity = m_network->resolvePeerIdentity(lookupPeerId);
             //LogError(LOG_NET, "PEER %u (%s) has an invalid affiliations lookup? This shouldn't happen BUGBUG.", lookupPeerId, peerIdentity.c_str());
@@ -1531,7 +1555,7 @@ bool TagP25Data::isPeerPermitted(uint32_t peerId, lc::LC& control, DUID::E duid,
 
 /* Helper to validate the P25 call stream. */
 
-bool TagP25Data::validate(uint32_t peerId, lc::LC& control, DUID::E duid, const p25::lc::TSBK* tsbk, uint32_t streamId)
+bool TagP25Data::validate(uint32_t peerId, lc::LC& control, DUID::E duid, const p25::lc::TSBK* tsbk, uint8_t frameType, uint32_t streamId)
 {
     // promiscuous hub mode performs no ACL checking and will pass all traffic
     if (g_promiscuousHub)
@@ -1785,6 +1809,61 @@ bool TagP25Data::validate(uint32_t peerId, lc::LC& control, DUID::E duid, const 
         m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25, NET_ICC::REJECT_TRAFFIC, control.getDstId());
         return false;
     }
+    else {
+        // "selectable" strapping doesn't care about encryption state -- anything else does
+        if ((tg.config().strapping() != lookups::TG_STRAPPING_SELECTABLE) && (frameType == FrameType::HDU_VALID || duid == DUID::LDU2)) {
+            // is the TG strapped but the LC is reporting unencrypted?
+            if (tg.config().strapping() == lookups::TG_STRAPPING_STRAPPED) {
+                LogDebugEx(LOG_P25, "TagP25Data::validate()", "tgId = %u, duid = $%02X, strapping = %u, algId = $%02X", control.getDstId(), (uint8_t)duid, tg.config().strapping(), control.getAlgId());
+                if (control.getAlgId() == P25DEF::ALGO_UNENCRYPT) {
+                    // report error event to InfluxDB
+                    if (m_network->m_enableInfluxDB) {
+                        influxdb::QueryBuilder()
+                            .meas("call_error_event")
+                                .tag("peerId", std::to_string(peerId))
+                                .tag("streamId", std::to_string(streamId))
+                                .tag("srcId", std::to_string(control.getSrcId()))
+                                .tag("dstId", std::to_string(control.getDstId()))
+                                    .field("message", std::string(INFLUXDB_ERRSTR_ENC_TALKGROUP_CLR))
+                                .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
+                            .requestAsync(m_network->m_influxServer);
+                    }
+
+                    if (m_network->m_logDenials)
+                        LogError(LOG_P25, INFLUXDB_ERRSTR_ENC_TALKGROUP_CLR ", peer = %u, srcId = %u, dstId = %u", peerId, control.getSrcId(), control.getDstId());
+
+                    // report In-Call Control to the peer sending traffic
+                    m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25, NET_ICC::REJECT_TRAFFIC, control.getDstId(), 0U, true);
+                    return false;
+                }
+            }
+
+            // is the TG unstrapped but the LC is reporting encrypted?
+            if (tg.config().strapping() == lookups::TG_STRAPPING_CLEAR) {
+                if (control.getAlgId() != P25DEF::ALGO_UNENCRYPT) {
+                    // report error event to InfluxDB
+                    if (m_network->m_enableInfluxDB) {
+                        influxdb::QueryBuilder()
+                            .meas("call_error_event")
+                                .tag("peerId", std::to_string(peerId))
+                                .tag("streamId", std::to_string(streamId))
+                                .tag("srcId", std::to_string(control.getSrcId()))
+                                .tag("dstId", std::to_string(control.getDstId()))
+                                    .field("message", std::string(INFLUXDB_ERRSTR_CLR_TALKGROUP_ENC))
+                                .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
+                            .requestAsync(m_network->m_influxServer);
+                    }
+
+                    if (m_network->m_logDenials)
+                        LogError(LOG_P25, INFLUXDB_ERRSTR_CLR_TALKGROUP_ENC ", peer = %u, srcId = %u, dstId = %u", peerId, control.getSrcId(), control.getDstId());
+
+                    // report In-Call Control to the peer sending traffic
+                    m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_P25, NET_ICC::REJECT_TRAFFIC, control.getDstId(), 0U, true);
+                    return false;
+                }
+            }
+        }
+    }
 
     // peer always send list takes priority over any following affiliation rules
     bool isAlwaysPeer = false;
@@ -1889,7 +1968,7 @@ bool TagP25Data::write_TSDU_Grant(uint32_t peerId, uint32_t srcId, uint32_t dstI
     }
 
     // check the affiliations for this peer to see if we can grant traffic
-    lookups::AffiliationLookup* aff = m_network->m_peerAffiliations[peerId];
+    std::shared_ptr<fne_lookups::AffiliationLookup> aff = m_network->getPeerAffiliations(peerId);
     if (aff == nullptr) {
         std::string peerIdentity = m_network->resolvePeerIdentity(peerId);
         LogError(LOG_MASTER, "PEER %u (%s) has an invalid affiliations lookup? This shouldn't happen BUGBUG.", peerId, peerIdentity.c_str());

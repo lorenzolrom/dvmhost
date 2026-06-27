@@ -82,7 +82,8 @@ Network::Network(const std::string& address, uint16_t port, uint16_t localPort, 
     m_p25InCallCallback(nullptr),
     m_nxdnInCallCallback(nullptr),
     m_analogInCallCallback(nullptr),
-    m_keyRespCallback(nullptr)
+    m_keyRespCallback(nullptr),
+    m_llaKeyRespCallback(nullptr)
 {
     assert(!address.empty());
     assert(port > 0U);
@@ -524,7 +525,7 @@ void Network::clock(uint32_t ms)
                                 m_rxP25Data.addData(&len, 1U);
                             }
 
-                            m_rxP25Data.addData(buffer.get(), len);
+                            m_rxP25Data.addData(buffer.get(), length);
                         }
                     }
                     break;
@@ -872,6 +873,19 @@ void Network::clock(uint32_t ms)
                                     bool affiliated = (buffer[offs + 3U] & 0x40U) == 0x40U;
                                     bool nonPreferred = (buffer[offs + 3U] & 0x80U) == 0x80U;
 
+                                    // encryption strapping bits
+                                    bool strappedBit = (buffer[offs + 3U] & 0x20U) == 0x20U;
+                                    bool clearBit = (buffer[offs + 3U] & 0x10U) == 0x10U;
+                                    uint8_t strapping = lookups::TG_STRAPPING_SELECTABLE;
+
+                                    if (strappedBit) {
+                                        strapping = lookups::TG_STRAPPING_STRAPPED;
+                                    }
+                                    
+                                    if (clearBit) {
+                                        strapping = lookups::TG_STRAPPING_CLEAR;
+                                    }
+
                                     lookups::TalkgroupRuleGroupVoice tid = m_tidLookup->find(id, slot);
 
                                     // if the TG is marked as non-preferred, and the TGID exists in the local entries
@@ -888,9 +902,10 @@ void Network::clock(uint32_t ms)
                                             m_tidLookup->eraseEntry(id, slot);
                                         }
 
-                                        LogInfoEx(LOG_NET, "Activated%s%s TG %u TS %u in TGID table", 
-                                            (nonPreferred) ? " non-preferred" : "", (affiliated) ? " affiliated" : "", id, slot);
-                                        m_tidLookup->addEntry(id, slot, true, affiliated, nonPreferred);
+                                        LogInfoEx(LOG_NET, "Activated%s%s TG %u TS %u %s in TGID table", 
+                                            (nonPreferred) ? " non-preferred" : "", (affiliated) ? " affiliated" : "", id, slot,
+                                            (strappedBit) ? "strapped" : (clearBit) ? "clear" : "selectable");
+                                        m_tidLookup->addEntry(id, slot, true, affiliated, nonPreferred, strapping);
                                     }
 
                                     offs += 5U;
@@ -952,6 +967,8 @@ void Network::clock(uint32_t ms)
 
                             // always add the configured address to the HA IP list
                             m_haIPs.push_back(PeerHAIPEntry(m_configuredAddress, m_configuredPort));
+                            if (m_debug)
+                                LogDebugEx(LOG_NET, "Network::clock()", "HA PARAMS, 1, %s:%u", m_configuredAddress.c_str(), m_configuredPort);
 
                             uint32_t len = GET_UINT32(buffer, 6U);
                             if (len > 0U) {
@@ -965,8 +982,12 @@ void Network::clock(uint32_t ms)
 
                                 std::string address = __IP_FROM_UINT(ipAddr);
 
+                                if (address == m_configuredAddress && port == m_configuredPort) {
+                                    continue; // skip if this is the same as our configured address
+                                }
+
                                 if (m_debug)
-                                    LogDebugEx(LOG_NET, "Network::clock()", "HA PARAMS, %s:%u", address.c_str(), port);
+                                    LogDebugEx(LOG_NET, "Network::clock()", "HA PARAMS, %u, %s:%u", i + 2, address.c_str(), port);
 
                                 m_haIPs.push_back(PeerHAIPEntry(address, port));
                             }
@@ -974,7 +995,8 @@ void Network::clock(uint32_t ms)
                             if (m_haIPs.size() > 1U) {
                                 m_currentHAIP = 1U; // because the first entry is our configured entry, set
                                                     // the current HA IP to the next available
-                                LogInfoEx(LOG_NET, "Loaded %u HA IPs from master", m_haIPs.size() - 1U);
+                                LogInfoEx(LOG_NET, "Loaded %u HA IPs from master", m_haIPs.size());
+                                LogInfoEx(LOG_NET, "Current HA IP %s:%u", m_haIPs[m_currentHAIP].masterAddress.c_str(), m_haIPs[m_currentHAIP].masterPort);
                             }
                         }
                     }
@@ -1224,6 +1246,46 @@ void Network::clock(uint32_t ms)
                 }
             }
             break;
+
+        case NET_FUNC::KEY_LLA_RSP:                                     // LLA Enc. Key Response
+            {
+                if (m_enabled) {
+                    using namespace p25::kmm;
+
+                    std::unique_ptr<KMMFrame> frame = KMMFactory::create(buffer.get() + 11U);
+                    if (frame == nullptr) {
+                        LogWarning(LOG_NET, "PEER %u, undecodable KMM frame from master", m_peerId);
+                        break;
+                    }
+
+                    switch (frame->getMessageId()) {
+                    case P25DEF::KMM_MessageType::MODIFY_KEY_CMD:
+                        {
+                            KMMModifyKey* modifyKey = static_cast<KMMModifyKey*>(frame.get());
+                            if (modifyKey->getAlgId() > 0U) {
+                                KeysetItem ks = modifyKey->getKeysetItem();
+                                if (ks.keys().size() > 0U) {
+                                    // fetch first key (a master response should never really send back more then one key)
+                                    KeyItem ki = ks.keys()[0];
+                                    LogInfoEx(LOG_NET, "PEER %u, master reported LLA enc. key, algId = $%02X, kID = $%04X", m_peerId,
+                                        ks.algId(), ki.kId());
+
+                                    // fire off key response callback if we have one
+                                    if (m_llaKeyRespCallback != nullptr) {
+                                        m_llaKeyRespCallback(modifyKey->getDstLLId(), ki, ks.keyLength());
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    default:
+                        break;
+                    }
+                }
+            }
+            break;
+
         case NET_FUNC::MST_DISC:                                        // Master Disconnect
             {
                 LogError(LOG_NET, "PEER %u master disconnect, remotePeerId = %u", m_peerId, m_remotePeerId);
@@ -1339,6 +1401,8 @@ bool Network::open()
             m_address.c_str(), m_port, entry.masterAddress.c_str(), entry.masterPort);
         m_address = entry.masterAddress;
         m_port = entry.masterPort;
+
+        LogInfoEx(LOG_NET, "PEER %u trying HA IP %s:%u", m_peerId, m_haIPs[m_currentHAIP].masterAddress.c_str(), m_haIPs[m_currentHAIP].masterPort);
     }
 
     m_timeoutTimer.start();

@@ -177,13 +177,15 @@ int HostFNE::run()
     // try to load radio IDs table
     std::string ridLookupFile = systemConf["radio_id"]["file"].as<std::string>();
     uint32_t ridReloadTime = systemConf["radio_id"]["time"].as<uint32_t>(0U);
+    bool verboseRIDRules = systemConf["radio_id"]["verbose"].as<bool>(false);
 
     LogInfo("Radio Id Lookups");
     LogInfo("    File: %s", ridLookupFile.length() > 0U ? ridLookupFile.c_str() : "None");
     if (ridReloadTime > 0U)
         LogInfo("    Reload: %u mins", ridReloadTime);
+    LogInfo("    Verbose: %s", verboseRIDRules ? "true" : "false");
     
-    m_ridLookup = new RadioIdLookup(ridLookupFile, ridReloadTime, true);
+    m_ridLookup = new RadioIdLookup(ridLookupFile, ridReloadTime, true, verboseRIDRules);
     m_ridLookup->read();
 
     // initialize master networking
@@ -400,6 +402,7 @@ bool HostFNE::readParams()
     yaml::Node talkgroupRules = masterConf["talkgroup_rules"];
     std::string talkgroupConfig = talkgroupRules["file"].as<std::string>();
     uint32_t talkgroupConfigReload = talkgroupRules["time"].as<uint32_t>(30U);
+    bool verboseTalkgroupRules = talkgroupRules["verbose"].as<bool>(true);
 
     yaml::Node adjSiteMapRules = masterConf["adj_site_map"];
     std::string adjSiteMapConfig = adjSiteMapRules["file"].as<std::string>();
@@ -412,18 +415,22 @@ bool HostFNE::readParams()
 #endif // ENABLE_SSL
     std::string cryptoContainerEKC = cryptoContainer["file"].as<std::string>();
     std::string cryptoContainerPassword = cryptoContainer["password"].as<std::string>();
+    std::string cryptoContainerRemotePassword = cryptoContainer["remoteAccessPassword"].as<std::string>();
+    bool cryptoContainerRemoteAccess = cryptoContainer["remoteAccess"].as<bool>(false);
     uint32_t cryptoContainerReload = cryptoContainer["time"].as<uint32_t>(30U);
 
     std::string peerListLookupFile = systemConf["peer_acl"]["file"].as<std::string>();
     bool peerListLookupEnable = systemConf["peer_acl"]["enable"].as<bool>(false);
     uint32_t peerListConfigReload = systemConf["peer_acl"]["time"].as<uint32_t>(30U);
+    bool verbosePeerListRules = systemConf["peer_acl"]["verbose"].as<bool>(true);
 
     LogInfo("Talkgroup Rule Lookups");
     LogInfo("    File: %s", talkgroupConfig.length() > 0U ? talkgroupConfig.c_str() : "None");
     if (talkgroupConfigReload > 0U)
         LogInfo("    Reload: %u mins", talkgroupConfigReload);
+    LogInfo("    Verbose: %s", verboseTalkgroupRules ? "true" : "false");
 
-    m_tidLookup = new TalkgroupRulesLookup(talkgroupConfig, talkgroupConfigReload, true);
+    m_tidLookup = new TalkgroupRulesLookup(talkgroupConfig, talkgroupConfigReload, true, verboseTalkgroupRules);
     m_tidLookup->sendTalkgroups(sendTalkgroups);
     m_tidLookup->read();
 
@@ -433,8 +440,9 @@ bool HostFNE::readParams()
     LogInfo("    File: %s", peerListLookupFile.length() > 0U ? peerListLookupFile.c_str() : "None");
     if (peerListConfigReload > 0U)
         LogInfo("    Reload: %u mins", peerListConfigReload);
+    LogInfo("    Verbose: %s", verbosePeerListRules ? "true" : "false");
 
-    m_peerListLookup = new PeerListLookup(peerListLookupFile, peerListConfigReload, peerListLookupEnable);
+    m_peerListLookup = new PeerListLookup(peerListLookupFile, peerListConfigReload, peerListLookupEnable, verbosePeerListRules);
     m_peerListLookup->read();
 
     LogInfo("Adjacent Site Map Lookups");
@@ -451,8 +459,10 @@ bool HostFNE::readParams()
     LogInfo("    File: %s", cryptoContainerEKC.length() > 0U ? cryptoContainerEKC.c_str() : "None");
     if (cryptoContainerReload > 0U)
         LogInfo("    Reload: %u mins", cryptoContainerReload);
+    LogInfo("    Remote Access Enabled: %s", cryptoContainerRemoteAccess ? "yes" : "no");
 
-    m_cryptoLookup = new CryptoContainer(cryptoContainerEKC, cryptoContainerPassword, cryptoContainerReload, cryptoContainerEnabled);
+    m_cryptoLookup = new CryptoContainer(cryptoContainerEKC, cryptoContainerPassword, 
+        cryptoContainerRemotePassword, cryptoContainerRemoteAccess, cryptoContainerReload, cryptoContainerEnabled);
     m_cryptoLookup->read();
 
     return true;
@@ -855,7 +865,7 @@ bool HostFNE::createPeerNetworks()
             std::string location = peerConf["location"].as<std::string>();
 
             bool nakFallOver = peerConf["nakFallOver"].as<bool>(false);
-            uint32_t nakFallOverCount = peerConf["nakFallOverCount"].as<uint32_t>(10U);
+            uint32_t nakFallOverCount = peerConf["nakFallOverCount"].as<uint32_t>(50U);
 
             ::LogInfoEx(LOG_HOST, "Peer ID %u Master Address %s Master Port %u Enabled %u Encrypted %u NAK Fall Over %u", id, masterAddress.c_str(), masterPort, enabled, encrypted, nakFallOver);
 
@@ -1059,6 +1069,12 @@ void HostFNE::processPeerDMRInCallCtrl(network::NET_ICC::ENUM command, uint32_t 
 {
     switch (command) {
     case network::NET_ICC::REJECT_TRAFFIC:
+    case network::NET_ICC::DMR_RC_CEASE_TRANSMIT:
+    case network::NET_ICC::DMR_RC_REQUEST_CEASE_TRANSMIT:
+    case network::NET_ICC::DMR_RC_MAXIMUM_POWER:
+    case network::NET_ICC::DMR_RC_MINIMUM_POWER:
+    case network::NET_ICC::DMR_RC_POWER_INCREASE_ONE_STEP:
+    case network::NET_ICC::DMR_RC_POWER_DECREASE_ONE_STEP:
         m_network->processDownstreamInCallCtrl(command, NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR, dstId, slot, peerId, ssrc, streamId);
         break;
 

@@ -941,7 +941,7 @@ bool TagNXDNData::isPeerPermitted(uint32_t peerId, lc::RTCH& lc, uint8_t message
             }
 
             // check the affiliations for this peer to see if we can repeat traffic
-            lookups::AffiliationLookup* aff = m_network->m_peerAffiliations[lookupPeerId];
+            std::shared_ptr<fne_lookups::AffiliationLookup> aff = m_network->getPeerAffiliations(lookupPeerId);
             if (aff == nullptr) {
                 std::string peerIdentity = m_network->resolvePeerIdentity(lookupPeerId);
                 //LogError(LOG_NET, "PEER %u (%s) has an invalid affiliations lookup? This shouldn't happen BUGBUG.", lookupPeerId, peerIdentity.c_str());
@@ -1084,6 +1084,60 @@ bool TagNXDNData::validate(uint32_t peerId, lc::RTCH& lc, uint8_t messageType, u
         m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN, NET_ICC::REJECT_TRAFFIC, lc.getDstId());
         return false;
     }
+    else {
+        // "selectable" strapping doesn't care about encryption state -- anything else does
+        if (tg.config().strapping() != lookups::TG_STRAPPING_SELECTABLE) {
+            // is the TG strapped but the LC is reporting unencrypted?
+            if (tg.config().strapping() == lookups::TG_STRAPPING_STRAPPED) {
+                if (lc.getAlgId() == NXDDEF::CIPHER_TYPE_NONE) {
+                    // report error event to InfluxDB
+                    if (m_network->m_enableInfluxDB) {
+                        influxdb::QueryBuilder()
+                            .meas("call_error_event")
+                                .tag("peerId", std::to_string(peerId))
+                                .tag("streamId", std::to_string(streamId))
+                                .tag("srcId", std::to_string(lc.getSrcId()))
+                                .tag("dstId", std::to_string(lc.getDstId()))
+                                    .field("message", std::string(INFLUXDB_ERRSTR_ENC_TALKGROUP_CLR))
+                                .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
+                            .requestAsync(m_network->m_influxServer);
+                    }
+
+                    if (m_network->m_logDenials)
+                        LogError(LOG_NXDN, INFLUXDB_ERRSTR_ENC_TALKGROUP_CLR ", peer = %u, srcId = %u, dstId = %u", peerId, lc.getSrcId(), lc.getDstId());
+
+                    // report In-Call Control to the peer sending traffic
+                    m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN, NET_ICC::REJECT_TRAFFIC, lc.getDstId(), 0U, true);
+                    return false;
+                }
+            }
+
+            // is the TG unstrapped but the LC is reporting encrypted?
+            if (tg.config().strapping() == lookups::TG_STRAPPING_CLEAR) {
+                if (lc.getAlgId() != NXDDEF::CIPHER_TYPE_NONE) {
+                    // report error event to InfluxDB
+                    if (m_network->m_enableInfluxDB) {
+                        influxdb::QueryBuilder()
+                            .meas("call_error_event")
+                                .tag("peerId", std::to_string(peerId))
+                                .tag("streamId", std::to_string(streamId))
+                                .tag("srcId", std::to_string(lc.getSrcId()))
+                                .tag("dstId", std::to_string(lc.getDstId()))
+                                    .field("message", std::string(INFLUXDB_ERRSTR_CLR_TALKGROUP_ENC))
+                                .timestamp(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count())
+                            .requestAsync(m_network->m_influxServer);
+                    }
+
+                    if (m_network->m_logDenials)
+                        LogError(LOG_NXDN, INFLUXDB_ERRSTR_CLR_TALKGROUP_ENC ", peer = %u, srcId = %u, dstId = %u", peerId, lc.getSrcId(), lc.getDstId());
+
+                    // report In-Call Control to the peer sending traffic
+                    m_network->writePeerICC(peerId, streamId, NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN, NET_ICC::REJECT_TRAFFIC, lc.getDstId(), 0U, true);
+                    return false;
+                }
+            }
+        }
+    }
 
     // peer always send list takes priority over any following affiliation rules
     bool isAlwaysPeer = false;
@@ -1186,7 +1240,7 @@ bool TagNXDNData::write_Message_Grant(uint32_t peerId, uint32_t srcId, uint32_t 
     std::unique_ptr<lc::rcch::MESSAGE_TYPE_VCALL_CONN> rcch = std::make_unique<lc::rcch::MESSAGE_TYPE_VCALL_CONN>();
 
     // check the affiliations for this peer to see if we can grant traffic
-    lookups::AffiliationLookup* aff = m_network->m_peerAffiliations[peerId];
+    std::shared_ptr<fne_lookups::AffiliationLookup> aff = m_network->getPeerAffiliations(peerId);
     if (aff == nullptr) {
         std::string peerIdentity = m_network->resolvePeerIdentity(peerId);
         LogError(LOG_MASTER, "PEER %u (%s) has an invalid affiliations lookup? This shouldn't happen BUGBUG.", peerId, peerIdentity.c_str());

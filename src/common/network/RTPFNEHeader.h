@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2023,2024,2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2023-2026 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -62,11 +62,16 @@ namespace network
 
             GRANT_REQ = 0x7AU,                      //!< Grant Request
             INCALL_CTRL = 0x7BU,                    //!< In-Call Control
-            KEY_REQ = 0x7CU,                        //!< Encryption Key Request
-            KEY_RSP = 0x7DU,                        //!< Encryption Key Response
+            KEY_REQ = 0x7CU,                        //!< Encryption Key TEK Request
+            KEY_RSP = 0x7DU,                        //!< Encryption Key TEK Response
 
             ACK = 0x7EU,                            //!< Packet Acknowledge
             NAK = 0x7FU,                            //!< Packet Negative Acknowledge
+
+            KEY_LLA_REQ = 0x80U,                    //!< Encryption Key LLA Request
+            KEY_LLA_RSP = 0x81U,                    //!< Encryption Key LLA Response
+            KEYS_INVENTORY = 0x8EU,                 //!< Encryption Key Container Inventory
+            KEYS_UPDATE = 0x8FU,                    //!< Encryption Key Container Update
 
             TRANSFER = 0x90U,                       //!< Network Transfer Function
 
@@ -107,6 +112,7 @@ namespace network
             ANNC_SUBFUNC_UNIT_DEREG = 0x02U,        //!< Announce Unit Deregistration
             ANNC_SUBFUNC_GRP_UNAFFIL = 0x03U,       //!< Announce Group Affiliation Removal
             ANNC_SUBFUNC_AFFILS = 0x90U,            //!< Update All Affiliations
+            ANNC_SUBFUNC_UNIT_REGS = 0x91U,         //!< Update All Unit Registrations
             ANNC_SUBFUNC_SITE_VC = 0x9AU,           //!< Announce Site VCs
 
             REPL_TALKGROUP_LIST = 0x00U,            //!< FNE Replication Talkgroup Transfer
@@ -132,6 +138,14 @@ namespace network
 
             BUSY_DENY = 0x00U,                      //!< Busy Deny
             REJECT_TRAFFIC = 0x01U,                 //!< Reject Active Traffic
+
+            // DMR Reverse Channel Commands
+            DMR_RC_CEASE_TRANSMIT = 0xD2U,          //!< DMR Reverse Channel: Cease Transmission
+            DMR_RC_REQUEST_CEASE_TRANSMIT = 0xD3U,  //!< DMR Reverse Channel: Request Cease Transmission
+            DMR_RC_MAXIMUM_POWER = 0xD4U,           //!< DMR Reverse Channel: Maximum Power
+            DMR_RC_MINIMUM_POWER = 0xD5U,           //!< DMR Reverse Channel: Minimum Power
+            DMR_RC_POWER_INCREASE_ONE_STEP = 0xD6U, //!< DMR Reverse Channel: Increase Power One Step
+            DMR_RC_POWER_DECREASE_ONE_STEP = 0xD7U, //!< DMR Reverse Channel: Decrease Power One Step
         };
     };
 

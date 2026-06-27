@@ -142,6 +142,19 @@ bool Voice::process(uint8_t* data, uint32_t len)
                 }
             }
 
+            // perform encryption strapping check
+            ::lookups::TalkgroupRuleGroupVoice groupVoice = m_p25->m_tidLookup->find(lc.getDstId());
+            if (!groupVoice.isInvalid()) {
+                if (groupVoice.config().strapping() == ::lookups::TG_STRAPPING_STRAPPED) {
+                    if (lc.getAlgId() == P25DEF::ALGO_UNENCRYPT) {
+                        LogWarning(LOG_RF, "P25, " P25_HDU_STR " denial, TGID enc. strapping rejection, dstId = %u", lc.getDstId());
+                        resetRF();
+                        m_p25->m_rfState = RS_RF_LISTENING;
+                        return false;
+                    }
+                }
+            }
+
             // don't process RF frames if this modem isn't authoritative
             if (!m_p25->m_authoritative && m_p25->m_permittedDstId != lc.getDstId()) {
                 if (!g_disableNonAuthoritativeLogging)
@@ -168,6 +181,7 @@ bool Voice::process(uint8_t* data, uint32_t len)
                 }
 
                 resetNet();
+                m_p25->m_netState = RS_NET_IDLE;
                 if (m_p25->m_network != nullptr)
                     m_p25->m_network->resetP25();
 
@@ -319,6 +333,23 @@ bool Voice::process(uint8_t* data, uint32_t len)
                     m_p25->m_rfState = RS_RF_REJECTED;
                     return false;
                 }
+
+                // perform encryption strapping check
+                ::lookups::TalkgroupRuleGroupVoice groupVoice = m_p25->m_tidLookup->find(dstId);
+                if (!groupVoice.isInvalid()) {
+                    if (groupVoice.config().strapping() == ::lookups::TG_STRAPPING_STRAPPED) {
+                        if (!lc.getEncrypted()) {
+                            LogWarning(LOG_RF, "P25, " P25_HDU_STR " denial, TGID enc. strapping rejection, srcId = %u, dstId = %u", srcId, dstId);
+                            ::ActivityLog("P25", true, "RF voice rejection from %u to %s%u ", srcId, group ? "TG " : "", dstId);
+
+                            m_p25->m_rfLastDstId = 0U;
+                            m_p25->m_rfLastSrcId = 0U;
+                            m_p25->m_rfTGHang.stop();
+                            m_p25->m_rfState = RS_RF_REJECTED;
+                            return false;
+                        }
+                    }
+                }
             }
 
             if (group && dstId == 0U && m_p25->m_forceAllowTG0) {
@@ -377,7 +408,7 @@ bool Voice::process(uint8_t* data, uint32_t len)
             LogInfoEx(LOG_RF, "P25 Voice Call, srcId = %u, dstId = %u", srcId, dstId);
 
             uint8_t serviceOptions = (m_rfLC.getEmergency() ? 0x80U : 0x00U) +       // Emergency Flag
-                (m_rfLC.getEncrypted() ? 0x40U : 0x00U) +                            // Encrypted Flag
+                (m_rfLastHDU.getEncrypted() ? 0x40U : 0x00U) +                       // Encrypted Flag
                 (m_rfLC.getPriority() & 0x07U);                                      // Priority
 
             if (m_p25->m_enableControl) {
@@ -674,24 +705,16 @@ bool Voice::process(uint8_t* data, uint32_t len)
                 else {
                     std::lock_guard<std::mutex> lock(m_p25->s_activeTGLock);
                     if (m_p25->m_activeTG.size() > 0) {
-                        if (m_grpUpdtCount > m_p25->m_activeTG.size())
-                            m_grpUpdtCount = 0U;
-
-                        if (m_p25->m_activeTG.size() < 2) {
-                            uint32_t dstId = m_p25->m_activeTG.at(0);
+                        uint32_t dstId = 0U;
+                        uint32_t dstIdB = 0U;
+                        bool hasDstIdB = false;
+                        if (nextActiveTalkgroups(m_p25->m_activeTG, m_grpUpdtCount, dstId, dstIdB, hasDstIdB)) {
                             m_rfLC.setMFId(MFG_STANDARD);
                             m_rfLC.setLCO(LCO::GROUP_UPDT);
                             m_rfLC.setDstId(dstId);
-                        }
-                        else {
-                            uint32_t dstId = m_p25->m_activeTG.at(m_grpUpdtCount);
-                            uint32_t dstIdB = m_p25->m_activeTG.at(m_grpUpdtCount + 1U);
-                            m_rfLC.setMFId(MFG_STANDARD);
-                            m_rfLC.setLCO(LCO::GROUP_UPDT);
-                            m_rfLC.setDstId(dstId);
-                            m_rfLC.setDstIdB(dstIdB);
-
-                            m_grpUpdtCount++;
+                            if (hasDstIdB) {
+                                m_rfLC.setDstIdB(dstIdB);
+                            }
                         }
                     }
                 }
@@ -1158,52 +1181,19 @@ bool Voice::processNetwork(uint8_t* data, uint32_t len, lc::LC& control, data::L
     if (checkNetTrafficCollision(srcId, dstId, duid))
         return false;
 
+    if (m_p25->m_netState == RS_NET_AUDIO && (duid != DUID::TDU && duid != DUID::TDULC))
+        m_p25->m_networkWatchdog.start();
+
     uint32_t count = 0U;
     switch (duid) {
         case DUID::LDU1:
-            if ((data[0U] == DFSIFrameType::LDU1_VOICE1) && (data[22U] == DFSIFrameType::LDU1_VOICE2) &&
-                (data[36U] == DFSIFrameType::LDU1_VOICE3) && (data[53U] == DFSIFrameType::LDU1_VOICE4) &&
-                (data[70U] == DFSIFrameType::LDU1_VOICE5) && (data[87U] == DFSIFrameType::LDU1_VOICE6) &&
-                (data[104U] == DFSIFrameType::LDU1_VOICE7) && (data[121U] == DFSIFrameType::LDU1_VOICE8) &&
-                (data[138U] == DFSIFrameType::LDU1_VOICE9)) {
-
+            {
                 m_dfsiLC = dfsi::LC(control, lsd);
 
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE1);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 10U);
-                count += DFSI_LDU1_VOICE1_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE2);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 26U);
-                count += DFSI_LDU1_VOICE2_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE3);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 55U);
-                count += DFSI_LDU1_VOICE3_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE4);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 80U);
-                count += DFSI_LDU1_VOICE4_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE5);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 105U);
-                count += DFSI_LDU1_VOICE5_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE6);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 130U);
-                count += DFSI_LDU1_VOICE6_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE7);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 155U);
-                count += DFSI_LDU1_VOICE7_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE8);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 180U);
-                count += DFSI_LDU1_VOICE8_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU1_VOICE9);
-                m_dfsiLC.decodeLDU1(data + count, m_netLDU1 + 204U);
-                count += DFSI_LDU1_VOICE9_FRAME_LENGTH_BYTES;
+                uint8_t missing = network::BaseNetwork::reconstructLDUVectors(data, len, &m_dfsiLC, DUID::LDU1, m_netLDU1);
+                if (missing > 0U) {
+                    LogWarning(LOG_NET, P25_LDU1_STR ", missing %u LDU1 voice frames, srcId = %u, dstId = %u", missing, srcId, dstId);
+                }
 
                 m_gotNetLDU1 = true;
 
@@ -1256,46 +1246,11 @@ bool Voice::processNetwork(uint8_t* data, uint32_t len, lc::LC& control, data::L
             }
             break;
         case DUID::LDU2:
-            if ((data[0U] == DFSIFrameType::LDU2_VOICE10) && (data[22U] == DFSIFrameType::LDU2_VOICE11) &&
-                (data[36U] == DFSIFrameType::LDU2_VOICE12) && (data[53U] == DFSIFrameType::LDU2_VOICE13) &&
-                (data[70U] == DFSIFrameType::LDU2_VOICE14) && (data[87U] == DFSIFrameType::LDU2_VOICE15) &&
-                (data[104U] == DFSIFrameType::LDU2_VOICE16) && (data[121U] == DFSIFrameType::LDU2_VOICE17) &&
-                (data[138U] == DFSIFrameType::LDU2_VOICE18)) {
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE10);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 10U);
-                count += DFSI_LDU2_VOICE10_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE11);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 26U);
-                count += DFSI_LDU2_VOICE11_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE12);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 55U);
-                count += DFSI_LDU2_VOICE12_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE13);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 80U);
-                count += DFSI_LDU2_VOICE13_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE14);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 105U);
-                count += DFSI_LDU2_VOICE14_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE15);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 130U);
-                count += DFSI_LDU2_VOICE15_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE16);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 155U);
-                count += DFSI_LDU2_VOICE16_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE17);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 180U);
-                count += DFSI_LDU2_VOICE17_FRAME_LENGTH_BYTES;
-
-                m_dfsiLC.setFrameType(DFSIFrameType::LDU2_VOICE18);
-                m_dfsiLC.decodeLDU2(data + count, m_netLDU2 + 204U);
-                count += DFSI_LDU2_VOICE18_FRAME_LENGTH_BYTES;
+            {
+                uint8_t missing = network::BaseNetwork::reconstructLDUVectors(data, len, &m_dfsiLC, DUID::LDU2, m_netLDU2);
+                if (missing > 0U) {
+                    LogWarning(LOG_NET, P25_LDU2_STR ", missing %u LDU2 voice frames, srcId = %u, dstId = %u", missing, srcId, dstId);
+                }
 
                 m_gotNetLDU2 = true;
 
@@ -1382,7 +1337,9 @@ bool Voice::processNetwork(uint8_t* data, uint32_t len, lc::LC& control, data::L
                 if (duid == DUID::TDU)
                     writeNet_TDU();
 
+                m_p25->m_networkWatchdog.stop();
                 resetNet();
+                m_p25->m_netState = RS_NET_IDLE;
             }
             break;
 
@@ -1539,6 +1496,7 @@ bool Voice::checkRFTrafficCollision(uint32_t srcId, uint32_t dstId)
             }
 
             resetNet();
+            m_p25->m_netState = RS_NET_IDLE;
             if (m_p25->m_network != nullptr)
                 m_p25->m_network->resetP25();
 
@@ -1568,6 +1526,17 @@ bool Voice::checkRFTrafficCollision(uint32_t srcId, uint32_t dstId)
 
 bool Voice::checkNetTrafficCollision(uint32_t srcId, uint32_t dstId, defines::DUID::E duid)
 {
+    // safety check: if the network is marked as not idle, but the last network destination ID is 0 *and* the 
+    // network watchdog isn't running, then reset the network state to idle
+    if (m_p25->m_netState != RS_NET_IDLE && m_p25->m_netLastDstId == 0U && !m_p25->m_networkWatchdog.isRunning()) {
+        LogWarning(LOG_NET, "Network state inconsistency detected, resetting network state to idle, netState = %u, netLastDstId = %u", m_p25->m_netState,
+            m_p25->m_netLastDstId);
+        resetNet();
+        m_p25->m_netState = RS_NET_IDLE;
+        if (m_p25->m_network != nullptr)
+            m_p25->m_network->resetP25();
+    }
+
     // don't process network frames if the destination ID's don't match and the RF TG hang timer is running
     if (m_p25->m_rfLastDstId != 0U && dstId != 0U) {
         if (m_p25->m_rfLastDstId != dstId && (m_p25->m_rfTGHang.isRunning() && !m_p25->m_rfTGHang.hasExpired())) {
@@ -1642,6 +1611,7 @@ bool Voice::checkNetTrafficCollision(uint32_t srcId, uint32_t dstId, defines::DU
                 LogWarning(LOG_NET, "Traffic collision detect, preempting new network traffic to existing RF traffic (Are we in a voting condition?), rfSrcId = %u, rfDstId = %u, netSrcId = %u, netDstId = %u", m_rfLC.getSrcId(), m_rfLC.getDstId(),
                     srcId, dstId);
                 resetNet();
+                m_p25->m_netState = RS_NET_IDLE;
                 if (m_p25->m_network != nullptr)
                     m_p25->m_network->resetP25();
                 return true;
@@ -1650,6 +1620,7 @@ bool Voice::checkNetTrafficCollision(uint32_t srcId, uint32_t dstId, defines::DU
                 LogWarning(LOG_NET, "Traffic collision detect, preempting new network traffic to existing RF traffic, rfDstId = %u, netDstId = %u", m_rfLC.getDstId(),
                     dstId);
                 resetNet();
+                m_p25->m_netState = RS_NET_IDLE;
                 if (m_p25->m_network != nullptr)
                     m_p25->m_network->resetP25();
                 return true;
@@ -2063,24 +2034,16 @@ void Voice::writeNet_LDU1()
         else {
             std::lock_guard<std::mutex> lock(m_p25->s_activeTGLock);
             if (m_p25->m_activeTG.size() > 0) {
-                if (m_grpUpdtCount > m_p25->m_activeTG.size())
-                    m_grpUpdtCount = 0U;
-
-                if (m_p25->m_activeTG.size() < 2) {
-                    uint32_t dstId = m_p25->m_activeTG.at(0);
+                uint32_t dstId = 0U;
+                uint32_t dstIdB = 0U;
+                bool hasDstIdB = false;
+                if (nextActiveTalkgroups(m_p25->m_activeTG, m_grpUpdtCount, dstId, dstIdB, hasDstIdB)) {
                     m_netLC.setMFId(MFG_STANDARD);
                     m_netLC.setLCO(LCO::GROUP_UPDT);
                     m_netLC.setDstId(dstId);
-                }
-                else {
-                    uint32_t dstId = m_p25->m_activeTG.at(m_grpUpdtCount);
-                    uint32_t dstIdB = m_p25->m_activeTG.at(m_grpUpdtCount + 1U);
-                    m_netLC.setMFId(MFG_STANDARD);
-                    m_netLC.setLCO(LCO::GROUP_UPDT);
-                    m_netLC.setDstId(dstId);
-                    m_netLC.setDstIdB(dstIdB);
-
-                    m_grpUpdtCount++;
+                    if (hasDstIdB) {
+                        m_netLC.setDstIdB(dstIdB);
+                    }
                 }
             }
         }
@@ -2350,6 +2313,38 @@ void Voice::resetWithNullAudio(uint8_t* data, bool encrypted)
         ::memcpy(data + 180U, P25DEF::ENCRYPTED_NULL_IMBE, 11U);
         ::memcpy(data + 204U, P25DEF::ENCRYPTED_NULL_IMBE, 11U);
     }
+}
+
+/* Helper to determine the next active talkgroup in a active multi-group scenario. */
+
+bool Voice::nextActiveTalkgroups(const std::vector<uint32_t>& activeTG, uint8_t& groupUpdtIndex, uint32_t& dstId, uint32_t& dstIdB, bool& hasDstIdB)
+{
+    const size_t count = activeTG.size();
+    if (count == 0U) {
+        groupUpdtIndex = 0U;
+        hasDstIdB = false;
+        return false;
+    }
+
+    size_t index = static_cast<size_t>(groupUpdtIndex);
+    if (index >= count) {
+        index = 0U;
+    }
+
+    dstId = activeTG[index];
+    if (count < 2U) {
+        groupUpdtIndex = static_cast<uint8_t>(index);
+        hasDstIdB = false;
+        return true;
+    }
+
+    const size_t nextIndex = (index + 1U) % count;
+    dstIdB = activeTG[nextIndex];
+    hasDstIdB = true;
+
+    // move the rolling index forward for the next report cycle
+    groupUpdtIndex = static_cast<uint8_t>(nextIndex);
+    return true;
 }
 
 /* Given the last MI, generate the next MI using LFSR. */

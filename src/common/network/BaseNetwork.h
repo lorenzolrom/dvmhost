@@ -462,9 +462,17 @@ namespace network
          * @brief Writes a enc. key request to the network.
          * @param kId Key ID.
          * @param algId Algorithm ID.
+         * @param srcId Source Radio ID.
          * @returns bool True, if request was sent, otherwise false. 
          */
-        bool writeKeyReq(const uint16_t kId, const uint8_t algId);
+        bool writeKeyReq(const uint16_t kId, const uint8_t algId, const uint32_t srcId = 0U);
+
+        /**
+         * @brief Writes a LLA enc. key request to the network.
+         * @param srcId Source Radio ID.
+         * @returns bool True, if request was sent, otherwise false. 
+         */
+        bool writeLLAKeyReq(const uint32_t srcId);
 
         /**
          * @brief Writes the local activity log to the network.
@@ -683,6 +691,27 @@ namespace network
         virtual bool announceAffiliationUpdate(const std::unordered_map<uint32_t, uint32_t> affs);
 
         /**
+         * @brief Writes a complete update of the peer's unit registration list to the network.
+         * \code{.unparsed}
+         *  Below is the representation of the data layout for the repeater/end point login message.
+         *  The message is variable bytes in length.
+         * 
+         *  Each unit registration update entry is 3 bytes.
+         * 
+         *  Byte 0               1               2               3
+         *  Bit  7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0 7 6 5 4 3 2 1 0
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Number of entries                                             |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *      | Entry: Source ID                                |
+         *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         * \endcode
+         * @param regs Complete list of unit registrations.
+         * @returns bool True, if unit registration update announcement was sent, otherwise false. 
+         */
+        virtual bool announceUnitRegUpdate(const std::vector<uint32_t> regs);
+
+        /**
          * @brief Writes a complete update of the peer's voice channel list to the network.
          * \code{.unparsed}
          *  Below is the representation of the data layout for the repeater/end point login message.
@@ -816,6 +845,25 @@ namespace network
          * @returns UInt8Array Buffer containing received frame.
          */
         virtual UInt8Array readP25(bool& ret, uint32_t& frameLength);
+        /**
+         * @brief Helper to test if the given buffer contains a complete set of P25 LDU voice vectors for the given DUID type.
+         * @param[in] data Buffer containing the data to check.
+         * @param len Length of the data buffer.
+         * @param[in] duid P25 DUID type.
+         * @returns bool True, if the buffer contains P25 LDU voice vectors for the given DUID type, otherwise false.
+         */
+        static bool hasLDUVectors(const uint8_t* data, uint32_t len, P25DEF::DUID::E duid);
+        /**
+         * @brief Helper to reconstruct P25 LDU voice vectors from the given DFSI data.
+         * @param[in] dfsiData Buffer containing the DFSI data to reconstruct from.
+         * @param len Length of the DFSI data buffer.
+         * @param[in] dfsiLC Instance of p25::dfsi::LC containing the DFSI link control data.
+         * @param[in] duid P25 DUID type.
+         * @param[out] outLDU Buffer to write the reconstructed LDU voice vectors to.
+         * @returns uint8_t Number of missing frames, 9 if reconstruction failed, otherwise the number of missing frames.
+         */
+        static uint8_t reconstructLDUVectors(const uint8_t* dfsiData, uint32_t len, p25::dfsi::LC* dfsiLC, P25DEF::DUID::E duid, 
+            uint8_t* outLDU);
         /**
          * @brief Writes P25 LDU1 frame data to the network.
          * @param[in] control Instance of p25::lc::LC containing link control data.

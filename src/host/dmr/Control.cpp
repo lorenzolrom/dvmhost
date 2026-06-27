@@ -152,6 +152,9 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
     m_slot1->setNotifyCC(notifyCC);
     m_slot2->setNotifyCC(notifyCC);
 
+    bool disableGrpAffTimeout = dmrProtocol["disableGrpAffTimeout"].as<bool>(false);
+    m_slot1->s_affiliations->setDisableGrpAffTimeout(disableGrpAffTimeout);
+    m_slot2->s_affiliations->setDisableGrpAffTimeout(disableGrpAffTimeout);
     bool disableUnitRegTimeout = dmrProtocol["disableUnitRegTimeout"].as<bool>(false);
     m_slot1->s_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
     m_slot2->s_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
@@ -229,6 +232,14 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, ::lookups::VoiceChDa
 
         if (defaultNetIdleTalkgroup != 0U) {
             LogInfo("    Default Network Idle Talkgroup: %u", defaultNetIdleTalkgroup);
+        }
+
+        if (disableGrpAffTimeout) {
+            LogInfo("    Disable Group Affiliation Timeout: yes");
+        }
+
+        if (disableUnitRegTimeout) {
+            LogInfo("    Disable Unit Registration Timeout: yes");
         }
 
         LogInfo("    Ignore Affiliation Check: %s", ignoreAffiliationCheck ? "yes" : "no");
@@ -622,7 +633,7 @@ void Control::writeRF_Call_Alrt(uint32_t slotNo, uint32_t srcId, uint32_t dstId)
 
 bool Control::isBusy() const
 {
-    return (m_slot1->m_rfState != RS_RF_LISTENING || m_slot1->m_netState != RS_NET_IDLE) &&
+    return (m_slot1->m_rfState != RS_RF_LISTENING || m_slot1->m_netState != RS_NET_IDLE) ||
         (m_slot2->m_rfState != RS_RF_LISTENING || m_slot2->m_netState != RS_NET_IDLE);
 }
 

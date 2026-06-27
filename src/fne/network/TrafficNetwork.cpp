@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2023-2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2023-2026 Bryan Biedenkapp, N2PLL
  *
  */
 #include "fne/Defines.h"
@@ -35,6 +35,7 @@ using namespace compress;
 #include <chrono>
 #include <fstream>
 #include <streambuf>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 //  Constants
@@ -55,6 +56,7 @@ const uint32_t FIXED_HA_UPDATE_INTERVAL = 30U; // 30s
 // ---------------------------------------------------------------------------
 
 std::timed_mutex TrafficNetwork::s_keyQueueMutex;
+std::timed_mutex TrafficNetwork::s_llaKeyQueueMutex;
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -88,6 +90,7 @@ TrafficNetwork::TrafficNetwork(HostFNE* host, const std::string& address, uint16
     m_parrotOnlyOriginating(false),
     m_parrotOverrideSrcId(0U),
     m_kmfServicesEnabled(false),
+    m_kmfAllowRID0(false),
     m_ridLookup(nullptr),
     m_tidLookup(nullptr),
     m_peerListLookup(nullptr),
@@ -99,6 +102,7 @@ TrafficNetwork::TrafficNetwork(HostFNE* host, const std::string& address, uint16
     m_peerAffiliations(),
     m_ccPeerMap(),
     m_peerReplicaKeyQueue(),
+    m_peerReplicaLLAKeyQueue(),
     m_globalAff(nullptr),
     m_treeRoot(nullptr),
     m_treeLock(),
@@ -143,6 +147,9 @@ TrafficNetwork::TrafficNetwork(HostFNE* host, const std::string& address, uint16
     m_jitterMaxSize(4U),
     m_jitterMaxWait(40000U),
     m_threadPool(workerCnt, "fne"),
+    m_metadataUpdateThreadPool(workerCnt / 2U, "mupdt"),
+    m_metadataUpdateMutex(),
+    m_metadataUpdateState(),
     m_disablePacketData(false),
     m_dumpPacketData(false),
     m_verbosePacketData(false),
@@ -292,6 +299,7 @@ void TrafficNetwork::setOptions(yaml::Node& conf, bool printOptions)
     m_kmfServicesEnabled = false;
     LogWarning(LOG_MASTER, "FNE is compiled without OpenSSL support, KMF services are unavailable.");
 #endif // ENABLE_SSL
+    m_kmfAllowRID0 = conf["kmfAllowRID0"].as<bool>(false);
 
     m_callCollisionTimeout = conf["callCollisionTimeout"].as<uint32_t>(5U);
 
@@ -412,6 +420,7 @@ void TrafficNetwork::setOptions(yaml::Node& conf, bool printOptions)
         LogInfo("    P25 OTAR KMF Services Enabled: %s", m_kmfServicesEnabled ? "yes" : "no");
         LogInfo("    P25 OTAR KMF Listening Address: %s", m_address.c_str());
         LogInfo("    P25 OTAR KMF Listening Port: %u", kmfOtarPort);
+        LogInfo("    P25 KMF Allow RID 0 Requests: %s", m_kmfAllowRID0 ? "yes" : "no");
         LogInfo("    High Availability Enabled: %s", m_haEnabled ? "yes" : "no");
         if (m_haEnabled) {
             LogInfo("    Advertised HA WAN IP: %s", m_advertisedHAAddress.c_str());
@@ -647,6 +656,9 @@ void TrafficNetwork::clock(uint32_t ms)
                             peer.second->setKeyResponseCallback([=](p25::kmm::KeyItem ki, uint8_t algId, uint8_t keyLength) {
                                 processTEKResponse(&ki, algId, keyLength);
                             });
+                            peer.second->setLLAKeyResponseCallback([=](uint32_t srcId, p25::kmm::KeyItem ki, uint8_t keyLength) {
+                                processLLAResponse(srcId, &ki, keyLength);
+                            });
                         }
 
                         if (m_peers.size() > 0) {
@@ -762,6 +774,9 @@ bool TrafficNetwork::open()
     // start thread pool
     m_threadPool.start();
 
+    // start metadata thread pool
+    m_metadataUpdateThreadPool.start();
+
     // start FluxQL thread pool
     if (m_enableInfluxDB) {
         influxdb::detail::TSCaller::start();
@@ -817,6 +832,16 @@ void TrafficNetwork::close()
     // stop thread pool
     m_threadPool.stop();
     m_threadPool.wait();
+
+    // stop metadata thread pool
+    m_metadataUpdateThreadPool.stop();
+    m_metadataUpdateThreadPool.wait();
+
+    // scope is intentional
+    {
+        std::lock_guard<std::mutex> lock(m_metadataUpdateMutex);
+        m_metadataUpdateState.clear();
+    }
 
     // stop FluxQL thread pool
     if (m_enableInfluxDB) {
@@ -995,8 +1020,6 @@ void TrafficNetwork::taskNetworkRx(NetPacketRequest* req)
                             streamId, pktSeq, lastRxSeq);
                     }
                 }
-
-                network->m_peers[peerId] = connection;
             }
 
             // if we don't have a stream ID and are receiving call data -- throw an error and discard
@@ -1232,7 +1255,7 @@ void TrafficNetwork::taskNetworkRx(NetPacketRequest* req)
                                 if (connection->connectionState() == NET_STAT_RUNNING) {
                                     LogInfoEx(LOG_MASTER, "PEER %u (%s) resetting peer connection, connectionState = %u", peerId, connection->identWithQualifier().c_str(),
                                         connection->connectionState());
-                                    delete connection;
+                                    network->disconnectPeer(peerId, connection);
 
                                     connection = new FNEPeerConnection(peerId, req->address, req->addrLen);
                                     connection->lastPing(now);
@@ -1684,7 +1707,6 @@ void TrafficNetwork::taskNetworkRx(NetPacketRequest* req)
                                 payload[6U] = (uint8_t)((now >> 8) & 0xFFU);
                                 payload[7U] = (uint8_t)((now >> 0) & 0xFFU);
 
-                                network->m_peers[peerId] = connection;
                                 network->writePeerCommand(peerId, { NET_FUNC::PONG, NET_SUBFUNC::NOP }, payload, 8U, streamId, false);
 
                                 if (network->m_reportPeerPing) {
@@ -1834,6 +1856,45 @@ void TrafficNetwork::taskNetworkRx(NetPacketRequest* req)
                                     {
                                         KMMModifyKey* modifyKey = static_cast<KMMModifyKey*>(frame.get());
                                         if (modifyKey->getAlgId() > 0U && modifyKey->getKId() > 0U) {
+                                            uint32_t requestingRid = modifyKey->getSrcLLId();
+
+                                            if (requestingRid > 0U) {
+                                                lookups::RadioId ridEntry = network->m_ridLookup->find(requestingRid);
+                                                if (ridEntry.radioDefault()) {
+                                                    LogError(LOG_MASTER, "PEER %u (%s) requested enc. key but RID %u has no key policy entry, no response",
+                                                        peerId, connection->identWithQualifier().c_str(), requestingRid);
+                                                    break;
+                                                }
+
+                                                if (!ridEntry.radioEnabled()) {
+                                                    LogError(LOG_MASTER, "PEER %u (%s) requested enc. key but RID %u is disabled, no response",
+                                                        peerId, connection->identWithQualifier().c_str(), requestingRid);
+                                                    break;
+                                                }
+
+                                                if (!ridEntry.canRequestKeys()) {
+                                                    LogError(LOG_MASTER, "PEER %u (%s) requested enc. key but RID %u cannot request keys, no response",
+                                                        peerId, connection->identWithQualifier().c_str(), requestingRid);
+                                                    break;
+                                                }
+
+                                                std::vector<uint16_t> allowedKIds = ridEntry.allowedKIds();
+
+                                                // check if this RID is allowed to request the KID in question
+                                                if (!allowedKIds.empty() && std::find(allowedKIds.begin(), allowedKIds.end(), modifyKey->getKId()) == allowedKIds.end()) {
+                                                    LogError(LOG_MASTER, "PEER %u (%s) requested enc. key kID = $%04X but RID %u is not permitted for that key, no response",
+                                                        peerId, connection->identWithQualifier().c_str(), modifyKey->getKId(), requestingRid);
+                                                    break;
+                                                }
+                                            }
+                                            else {
+                                                if (!network->m_kmfAllowRID0 && connection->peerClass() != PEER_CONN_CLASS_NEIGHBOR) {
+                                                    LogError(LOG_MASTER, "PEER %u (%s) requested enc. key with RID 0 but such requests are not allowed, no response",
+                                                        peerId, connection->identWithQualifier().c_str());
+                                                    break;
+                                                }
+                                            }
+
                                             LogInfoEx(LOG_MASTER, "PEER %u (%s) requested enc. key, algId = $%02X, kID = $%04X", peerId, connection->identWithQualifier().c_str(),
                                                 modifyKey->getAlgId(), modifyKey->getKId());
                                             ::EKCKeyItem keyItem = network->m_cryptoLookup->find(modifyKey->getKId());
@@ -1897,6 +1958,138 @@ void TrafficNetwork::taskNetworkRx(NetPacketRequest* req)
                                                             }
                                                         }
                                                     }
+                                                } else {
+                                                    LogError(LOG_MASTER, "PEER %u (%s) no local key or container and no replica masters to forward request to, no response, algId = $%02X, kID = $%04X", peerId, connection->identWithQualifier().c_str(),
+                                                        modifyKey->getAlgId(), modifyKey->getKId());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    break;
+
+                                default:
+                                    break;
+                                }
+                            }
+                            else {
+                                network->writePeerNAK(peerId, streamId, TAG_REPEATER_KEY, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                            }
+                        }
+                    }
+                }
+                break;
+
+            case NET_FUNC::KEY_LLA_REQ:                                     // LLA Enc. Key Request
+                {
+                    using namespace p25::defines;
+                    using namespace p25::kmm;
+
+                    if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                        FNEPeerConnection* connection = network->m_peers[peerId];
+                        if (connection != nullptr) {
+                            std::string ip = udp::Socket::address(req->address);
+
+                            // validate peer (simple validation really)
+                            if (connection->connected() && connection->address() == ip) {
+                                // is this peer allowed to request keys?
+                                if (network->m_peerListLookup->getACL()) {
+                                    lookups::PeerId peerEntry = network->m_peerListLookup->find(peerId);
+                                    if (peerEntry.peerDefault()) {
+                                        break;
+                                    } else {
+                                        if (!peerEntry.canRequestKeys()) {
+                                            LogError(LOG_MASTER, "PEER %u (%s) requested enc. key but is not allowed, no response", peerId, connection->identWithQualifier().c_str());
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                std::unique_ptr<KMMFrame> frame = KMMFactory::create(req->buffer + 11U);
+                                if (frame == nullptr) {
+                                    LogWarning(LOG_MASTER, "PEER %u (%s), undecodable KMM frame from peer", peerId, connection->identWithQualifier().c_str());
+                                    break;
+                                }
+
+                                switch (frame->getMessageId()) {
+                                case P25DEF::KMM_MessageType::MODIFY_KEY_CMD:
+                                    {
+                                        KMMModifyKey* modifyKey = static_cast<KMMModifyKey*>(frame.get());
+
+                                        LogDebugEx(LOG_MASTER, "TrafficNetwork::taskNetworkRx()", "PEER %u (%s) LLA enc. key request received, dstLLId = %u, algId = %u, kId = %u", peerId, connection->identWithQualifier().c_str(), modifyKey->getDstLLId(), modifyKey->getAlgId(), modifyKey->getKId());
+
+                                        if (modifyKey->getAlgId() == ALGO_AES_128 && modifyKey->getDstLLId() > 0U) {
+                                            LogDebugEx(LOG_MASTER, "TrafficNetwork::taskNetworkRx()", "PEER %u (%s) LLA enc. key request received", peerId, connection->identWithQualifier().c_str());
+                                            uint32_t requestingRid = modifyKey->getDstLLId();
+
+                                            LogInfoEx(LOG_MASTER, "PEER %u (%s) requested LLA enc. key, rsi = %u", peerId, connection->identWithQualifier().c_str(),
+                                                requestingRid);
+
+                                            ::EKCKeyItem keyItem = network->m_cryptoLookup->findLLA(requestingRid);
+                                            if (!keyItem.isInvalid()) {
+                                                uint8_t key[P25DEF::MAX_ENC_KEY_LENGTH_BYTES];
+                                                ::memset(key, 0x00U, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
+                                                uint8_t keyLength = keyItem.getKey(key);
+
+                                                //if (network->m_debug) {
+                                                    LogDebugEx(LOG_HOST, "TrafficNetwork::threadedNetworkRx()", "keyLength = %u", keyLength);
+                                                    Utils::dump(1U, "TrafficNetwork::taskNetworkRx(), Key", key, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
+                                                //}
+
+                                                LogInfoEx(LOG_MASTER, "PEER %u (%s) local enc. key, algId = $%02X, rsi = %u", peerId, connection->identWithQualifier().c_str(),
+                                                    modifyKey->getAlgId(), requestingRid);
+
+                                                // build response buffer
+                                                uint8_t buffer[DATA_PACKET_LENGTH];
+                                                ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
+
+                                                KMMModifyKey modifyKeyRsp = KMMModifyKey();
+                                                modifyKeyRsp.setDecryptInfoFmt(KMM_DECRYPT_INSTRUCT_NONE);
+                                                modifyKeyRsp.setAlgId(modifyKey->getAlgId());
+                                                modifyKeyRsp.setKId(0U);
+                                                modifyKeyRsp.setSrcLLId(WUID_FNE);
+                                                modifyKeyRsp.setDstLLId(requestingRid);
+
+                                                KeysetItem ks = KeysetItem();
+                                                ks.keysetId(1U);
+                                                ks.algId(modifyKey->getAlgId());
+                                                ks.keyLength(keyLength);
+
+                                                p25::kmm::KeyItem ki = p25::kmm::KeyItem();
+                                                ki.keyFormat(KEY_FORMAT_TEK);
+                                                ki.kId((uint16_t)keyItem.kId());
+                                                ki.sln((uint16_t)keyItem.sln());
+                                                ki.setKey(key, keyLength);
+
+                                                ks.push_back(ki);
+                                                modifyKeyRsp.setKeysetItem(ks);
+
+                                                modifyKeyRsp.encode(buffer + 11U);
+
+                                                network->writePeer(peerId, network->m_peerId, { NET_FUNC::KEY_LLA_RSP, NET_SUBFUNC::NOP }, buffer, modifyKeyRsp.length() + 11U, 
+                                                    RTP_END_OF_CALL_SEQ, network->createStreamId());
+                                            } else {
+                                                // attempt to forward KMM key request to replica masters
+                                                if (network->m_host->m_peerNetworks.size() > 0) {
+                                                    for (auto& peer : network->m_host->m_peerNetworks) {
+                                                        if (peer.second != nullptr) {
+                                                            if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                                LogInfoEx(LOG_PEER, "PEER %u (%s) no local key or container, requesting key from upstream master, algId = $%02X, rsi = %u", peerId, connection->identWithQualifier().c_str(),
+                                                                    modifyKey->getAlgId(), requestingRid);
+
+                                                                bool locked = network->s_llaKeyQueueMutex.try_lock_for(std::chrono::milliseconds(60));
+                                                                network->m_peerReplicaLLAKeyQueue[peerId] = modifyKey->getDstLLId();
+
+                                                                if (locked)
+                                                                    network->s_llaKeyQueueMutex.unlock();
+
+                                                                peer.second->writeMaster({ NET_FUNC::KEY_LLA_REQ, NET_SUBFUNC::NOP }, 
+                                                                    req->buffer, req->length, RTP_END_OF_CALL_SEQ, 0U, false);
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    LogError(LOG_MASTER, "PEER %u (%s) requested LLA enc. key with no local key and no upstream masters to query, algId = $%02X, rsi = %u, no response", peerId, connection->identWithQualifier().c_str(),
+                                                        modifyKey->getAlgId(), requestingRid);
                                                 }
                                             }
                                         }
@@ -1918,268 +2111,11 @@ void TrafficNetwork::taskNetworkRx(NetPacketRequest* req)
             case NET_FUNC::TRANSFER:                                    // Transfer
                 // transfer command is not supported for performance reasons on the main traffic port
                 break;
-
-            case NET_FUNC::ANNOUNCE:                                    // Announce
-                {
-                    // process incoming message subfunction opcodes
-                    switch (req->fneHeader.getSubFunction()) {
-                    case NET_SUBFUNC::ANNC_SUBFUNC_GRP_AFFIL:           // Announce Group Affiliation
-                        {
-                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
-                                FNEPeerConnection* connection = network->m_peers[peerId];
-                                if (connection != nullptr) {
-                                    std::string ip = udp::Socket::address(req->address);
-                                    lookups::AffiliationLookup* aff = network->m_peerAffiliations[peerId];
-                                    if (aff == nullptr) {
-                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
-                                    }
-
-                                    // validate peer (simple validation really)
-                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
-                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
-                                        uint32_t dstId = GET_UINT24(req->buffer, 3U);           // Destination Address
-                                        aff->groupUnaff(srcId);
-                                        aff->groupAff(srcId, dstId);
-
-                                        // attempt to repeat traffic to replica masters
-                                        if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto& peer : network->m_host->m_peerNetworks) {
-                                                if (peer.second != nullptr) {
-                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
-                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_AFFIL }, 
-                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, false);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else {
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-
-                    case NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REG:            // Announce Unit Registration
-                        {
-                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
-                                FNEPeerConnection* connection = network->m_peers[peerId];
-                                if (connection != nullptr) {
-                                    std::string ip = udp::Socket::address(req->address);
-                                    fne_lookups::AffiliationLookup* aff = network->m_peerAffiliations[peerId];
-                                    if (aff == nullptr) {
-                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
-                                    }
-
-                                    // validate peer (simple validation really)
-                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
-                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
-                                        aff->unitReg(srcId, ssrc);
-                                        network->m_globalAff->unitReg(srcId, ssrc);
-
-                                        // attempt to repeat traffic to replica masters
-                                        if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto& peer : network->m_host->m_peerNetworks) {
-                                                if (peer.second != nullptr) {
-                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
-                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REG }, 
-                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, false, 0U, ssrc);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else {
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    case NET_SUBFUNC::ANNC_SUBFUNC_UNIT_DEREG:          // Announce Unit Deregistration
-                        {
-                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
-                                FNEPeerConnection* connection = network->m_peers[peerId];
-                                if (connection != nullptr) {
-                                    std::string ip = udp::Socket::address(req->address);
-                                    lookups::AffiliationLookup* aff = network->m_peerAffiliations[peerId];
-                                    if (aff == nullptr) {
-                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
-                                    }
-
-                                    // validate peer (simple validation really)
-                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
-                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
-                                        aff->unitDereg(srcId);
-                                        network->m_globalAff->unitDereg(srcId);
-
-                                        // attempt to repeat traffic to replica masters
-                                        if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto& peer : network->m_host->m_peerNetworks) {
-                                                if (peer.second != nullptr) {
-                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
-                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_DEREG }, 
-                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, false);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else {
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-
-                    case NET_SUBFUNC::ANNC_SUBFUNC_GRP_UNAFFIL:         // Announce Group Affiliation Removal
-                        {
-                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
-                                FNEPeerConnection* connection = network->m_peers[peerId];
-                                if (connection != nullptr) {
-                                    std::string ip = udp::Socket::address(req->address);
-                                    lookups::AffiliationLookup* aff = network->m_peerAffiliations[peerId];
-                                    if (aff == nullptr) {
-                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
-                                    }
-
-                                    // validate peer (simple validation really)
-                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
-                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
-                                        aff->groupUnaff(srcId);
-                                        network->m_globalAff->groupUnaff(srcId);
-
-                                        // attempt to repeat traffic to replica masters
-                                        if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto& peer : network->m_host->m_peerNetworks) {
-                                                if (peer.second != nullptr) {
-                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
-                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_UNAFFIL }, 
-                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, false);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else {
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-
-                    case NET_SUBFUNC::ANNC_SUBFUNC_AFFILS:              // Announce Update All Affiliations
-                        {
-                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
-                                FNEPeerConnection* connection = network->m_peers[peerId];
-                                if (connection != nullptr) {
-                                    std::string ip = udp::Socket::address(req->address);
-
-                                    // validate peer (simple validation really)
-                                    if (connection->connected() && connection->address() == ip) {
-                                        lookups::AffiliationLookup* aff = network->m_peerAffiliations[peerId];
-                                        if (aff == nullptr) {
-                                            LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
-                                            network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
-                                        }
-
-                                        if (aff != nullptr) {
-                                            aff->clearGroupAff(0U, true);
-
-                                            // update TGID lists
-                                            uint32_t len = GET_UINT32(req->buffer, 0U);
-                                            uint32_t offs = 4U;
-                                            for (uint32_t i = 0; i < len; i++) {
-                                                uint32_t srcId = GET_UINT24(req->buffer, offs);
-                                                uint32_t dstId = GET_UINT24(req->buffer, offs + 4U);
-
-                                                aff->groupAff(srcId, dstId);
-                                                network->m_globalAff->groupAff(srcId, dstId);
-                                                offs += 8U;
-                                            }
-                                            LogInfoEx(LOG_MASTER, "PEER %u (%s) announced %u affiliations", peerId, connection->identWithQualifier().c_str(), len);
-
-                                            // attempt to repeat traffic to replica masters
-                                            if (network->m_host->m_peerNetworks.size() > 0) {
-                                                for (auto& peer : network->m_host->m_peerNetworks) {
-                                                    if (peer.second != nullptr) {
-                                                        if (peer.second->isEnabled() && peer.second->isReplica()) {
-                                                            peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_AFFILS }, 
-                                                                req->buffer, req->length, req->rtpHeader.getSequence(), streamId, false);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else {
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-
-                    case NET_SUBFUNC::ANNC_SUBFUNC_SITE_VC:             // Announce Site VCs
-                        {
-                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
-                                FNEPeerConnection* connection = network->m_peers[peerId];
-                                if (connection != nullptr) {
-                                    std::string ip = udp::Socket::address(req->address);
-
-                                    // validate peer (simple validation really)
-                                    if (connection->connected() && connection->address() == ip) {
-                                        std::vector<uint32_t> vcPeers;
-
-                                        // update peer association
-                                        uint32_t len = GET_UINT32(req->buffer, 0U);
-                                        uint32_t offs = 4U;
-                                        for (uint32_t i = 0; i < len; i++) {
-                                            uint32_t vcPeerId = GET_UINT32(req->buffer, offs);
-                                            if (vcPeerId > 0 && (network->m_peers.find(vcPeerId) != network->m_peers.end())) {
-                                                FNEPeerConnection* vcConnection = network->m_peers[vcPeerId];
-                                                if (vcConnection != nullptr) {
-                                                    vcConnection->ccPeerId(peerId);
-                                                    vcPeers.push_back(vcPeerId);
-                                                }
-                                            }
-                                            offs += 4U;
-                                        }
-                                        LogInfoEx(LOG_MASTER, "PEER %u (%s) announced %u VCs", peerId, connection->identWithQualifier().c_str(), len);
-                                        network->m_ccPeerMap[peerId] = vcPeers;
-
-                                        // attempt to repeat traffic to replica masters
-                                        if (network->m_host->m_peerNetworks.size() > 0) {
-                                            for (auto& peer : network->m_host->m_peerNetworks) {
-                                                if (peer.second != nullptr) {
-                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
-                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_SITE_VC }, 
-                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, false);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else {
-                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    default:
-                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_ILLEGAL_PACKET);
-                        Utils::dump("Unknown announcement opcode from the peer", req->buffer, req->length);
-                    }
-                }
-                break;
+            case NET_FUNC::ANNOUNCE:                                     // Announce
+                // bryanb: temporary support to allow announce packets on the traffic port but ultimately
+                //  this should be removed and handled like TRANSFER is handled here
+                network->m_host->m_mdNetwork->taskNetworkRx(req);
+                return; // don't break, return because taskNetworkRx will cleanup req
 
             default:
                 Utils::dump("Unknown opcode from the peer", req->buffer, req->length);
@@ -2267,32 +2203,73 @@ void TrafficNetwork::eraseStreamPktSeq(uint32_t peerId, uint32_t streamId)
 
 void TrafficNetwork::createPeerAffiliations(uint32_t peerId, std::string peerName)
 {
-    erasePeerAffiliations(peerId);
+    std::lock_guard<std::mutex> lock(m_peerAffiliationsMutex);
+
+    auto it = m_peerAffiliations.find(peerId);
+    if (it != m_peerAffiliations.end()) {
+        m_peerAffiliations.erase(peerId);
+    }
 
     lookups::ChannelLookup* chLookup = new lookups::ChannelLookup();
-    m_peerAffiliations[peerId] = new fne_lookups::AffiliationLookup(peerName, chLookup, m_verbose);
-    m_peerAffiliations[peerId]->setDisableUnitRegTimeout(true); // FNE doesn't allow unit registration timeouts (notification must come from the peers)
+    std::shared_ptr<fne_lookups::AffiliationLookup> aff(
+        new fne_lookups::AffiliationLookup(peerName, chLookup, m_verbose),
+        [](fne_lookups::AffiliationLookup* p) {
+            if (p != nullptr) {
+                lookups::ChannelLookup* rfCh = p->rfCh();
+                if (rfCh != nullptr) {
+                    delete rfCh;
+                }
+                delete p;
+            }
+        });
+
+    aff->setDisableUnitRegTimeout(true); // FNE doesn't allow unit registration timeouts (notification must come from the peers)
+    aff->setDisableGrpAffTimeout(true);  // FNE doesn't allow group affiliation timeouts (notification must come from the peers)
+    m_peerAffiliations.insert(peerId, aff);
 }
 
 /* Helper to erase the peer from the peers affiliations list. */
 
 bool TrafficNetwork::erasePeerAffiliations(uint32_t peerId)
 {
-    auto it = std::find_if(m_peerAffiliations.begin(), m_peerAffiliations.end(), [&](PeerAffiliationMapPair x) { return x.first == peerId; });
-    if (it != m_peerAffiliations.end()) {
-        lookups::AffiliationLookup* aff = m_peerAffiliations[peerId];
-        if (aff != nullptr) {
-            lookups::ChannelLookup* rfCh = aff->rfCh();
-            if (rfCh != nullptr)
-                delete rfCh;
-            delete aff;
-        }
-        m_peerAffiliations.erase(peerId);
+    std::lock_guard<std::mutex> lock(m_peerAffiliationsMutex);
 
+    auto it = m_peerAffiliations.find(peerId);
+    if (it != m_peerAffiliations.end()) {
+        m_peerAffiliations.erase(peerId);
         return true;
     }
 
     return false;
+}
+
+/* Helper to get the peer affiliations entry for a peer. */
+
+std::shared_ptr<fne_lookups::AffiliationLookup> TrafficNetwork::getPeerAffiliations(uint32_t peerId) const
+{
+    std::lock_guard<std::mutex> lock(m_peerAffiliationsMutex);
+
+    auto it = m_peerAffiliations.find(peerId);
+    if (it != m_peerAffiliations.end()) {
+        return it->second;
+    }
+
+    return nullptr;
+}
+
+/* Helper to create a snapshot of all peer affiliation entries. */
+
+std::vector<TrafficNetwork::PeerAffiliationMapPair> TrafficNetwork::peerAffiliationsSnapshot() const
+{
+    std::vector<TrafficNetwork::PeerAffiliationMapPair> snapshot;
+
+    std::lock_guard<std::mutex> lock(m_peerAffiliationsMutex);
+    snapshot.reserve(m_peerAffiliations.size());
+    for (auto it = m_peerAffiliations.begin(); it != m_peerAffiliations.end(); ++it) {
+        snapshot.push_back(*it);
+    }
+
+    return snapshot;
 }
 
 /* Helper to disconnect a downstream peer. */
@@ -2410,8 +2387,9 @@ bool TrafficNetwork::isPeerLocal(uint32_t peerId)
 
 uint32_t TrafficNetwork::findPeerUnitReg(uint32_t srcId)
 {
-    for (auto it = m_peerAffiliations.begin(); it != m_peerAffiliations.end(); ++it) {
-        fne_lookups::AffiliationLookup* aff = it->second;
+    std::vector<PeerAffiliationMapPair> affSnapshot = peerAffiliationsSnapshot();
+    for (const auto& entry : affSnapshot) {
+        std::shared_ptr<fne_lookups::AffiliationLookup> aff = entry.second;
         if (aff != nullptr) {
             if (aff->isUnitReg(srcId)) {
                 return aff->getSSRCByUnitReg(srcId);
@@ -2717,7 +2695,15 @@ void TrafficNetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::
 
     switch (command) {
     case network::NET_ICC::REJECT_TRAFFIC:
+    case network::NET_ICC::DMR_RC_CEASE_TRANSMIT:
+    case network::NET_ICC::DMR_RC_REQUEST_CEASE_TRANSMIT:
+    case network::NET_ICC::DMR_RC_MAXIMUM_POWER:
+    case network::NET_ICC::DMR_RC_MINIMUM_POWER:
+    case network::NET_ICC::DMR_RC_POWER_INCREASE_ONE_STEP:
+    case network::NET_ICC::DMR_RC_POWER_DECREASE_ONE_STEP:
         {
+            const bool callTakeover = (command == network::NET_ICC::REJECT_TRAFFIC);
+
             // is this a local peer?
             if (ssrc > 0 && (m_peers.find(ssrc) != m_peers.end())) {
                 FNEPeerConnection* connection = m_peers[ssrc];
@@ -2729,32 +2715,38 @@ void TrafficNetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::
                         // send ICC request to local peer
                         writePeerICC(ssrc, streamId, subFunc, command, dstId, slotNo, true);
 
-                        // flag the protocol call handler to allow call takeover on the next audio frame
-                        switch (subFunc) {
-                        case NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR:             // Encapsulated DMR data frame
-                            m_tagDMR->triggerCallTakeover(dstId);
-                            break;
+                        if (callTakeover) {
+                            // flag the protocol call handler to allow call takeover on the next audio frame
+                            switch (subFunc) {
+                            case NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR:             // Encapsulated DMR data frame
+                                m_tagDMR->triggerCallTakeover(dstId);
+                                break;
 
-                        case NET_SUBFUNC::PROTOCOL_SUBFUNC_P25:             // Encapsulated P25 data frame
-                            m_tagP25->triggerCallTakeover(dstId);
-                            break;
+                            case NET_SUBFUNC::PROTOCOL_SUBFUNC_P25:             // Encapsulated P25 data frame
+                                m_tagP25->triggerCallTakeover(dstId);
+                                break;
 
-                        case NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN:            // Encapsulated NXDN data frame
-                            m_tagNXDN->triggerCallTakeover(dstId);
-                            break;
+                            case NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN:            // Encapsulated NXDN data frame
+                                m_tagNXDN->triggerCallTakeover(dstId);
+                                break;
 
-                        case NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG:          // Encapsulated analog data frame
-                            m_tagAnalog->triggerCallTakeover(dstId);
-                            break;
+                            case NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG:          // Encapsulated analog data frame
+                                m_tagAnalog->triggerCallTakeover(dstId);
+                                break;
 
-                        default:
-                            break;
+                            default:
+                                break;
+                            }
                         }
                     }
                 }
             } else {
-                // send ICC request to any peers connected to us that are neighbor FNEs
+                // collect target neighbors while holding the peers lock, then send after unlock
+                // to avoid lock re-entry via writePeerICC() -> writePeerQueue().
+                std::vector<uint32_t> neighborPeers;
+                bool localRequestPeer = false;
                 m_peers.shared_lock();
+                localRequestPeer = (m_peers.find(peerId) != m_peers.end());
                 for (auto& peer : m_peers) {
                     if (peer.second == nullptr)
                         continue;
@@ -2766,39 +2758,46 @@ void TrafficNetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::
                         }
 
                         if (conn->peerClass() == PEER_CONN_CLASS_NEIGHBOR) {
-                            LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request to Neighbors, peerId = %u, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, peer.first, dstId, slotNo, ssrc, streamId);
-
-                            // send ICC request to local peer
-                            writePeerICC(peer.first, streamId, subFunc, command, dstId, slotNo, true, false, ssrc);
+                            neighborPeers.push_back(peer.first);
                         }
                     }
                 }
                 m_peers.shared_unlock();
 
-                // flag the protocol call handler to allow call takeover on the next audio frame
-                switch (subFunc) {
-                case NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR:             // Encapsulated DMR data frame
-                    m_tagDMR->triggerCallTakeover(dstId);
-                    break;
+                // send ICC request to any peers connected to us that are neighbor FNEs
+                for (auto& neighborPeerId : neighborPeers) {
+                    LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request to Neighbors, peerId = %u, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, neighborPeerId, dstId, slotNo, ssrc, streamId);
 
-                case NET_SUBFUNC::PROTOCOL_SUBFUNC_P25:             // Encapsulated P25 data frame
-                    m_tagP25->triggerCallTakeover(dstId);
-                    break;
+                    // send ICC request to local peer
+                    writePeerICC(neighborPeerId, streamId, subFunc, command, dstId, slotNo, true, false, ssrc);
+                }
 
-                case NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN:            // Encapsulated NXDN data frame
-                    m_tagNXDN->triggerCallTakeover(dstId);
-                    break;
+                if (callTakeover) {
+                    // flag the protocol call handler to allow call takeover on the next audio frame
+                    switch (subFunc) {
+                    case NET_SUBFUNC::PROTOCOL_SUBFUNC_DMR:             // Encapsulated DMR data frame
+                        m_tagDMR->triggerCallTakeover(dstId);
+                        break;
 
-                case NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG:          // Encapsulated analog data frame
-                    m_tagAnalog->triggerCallTakeover(dstId);
-                    break;
+                    case NET_SUBFUNC::PROTOCOL_SUBFUNC_P25:             // Encapsulated P25 data frame
+                        m_tagP25->triggerCallTakeover(dstId);
+                        break;
 
-                default:
-                    break;
+                    case NET_SUBFUNC::PROTOCOL_SUBFUNC_NXDN:            // Encapsulated NXDN data frame
+                        m_tagNXDN->triggerCallTakeover(dstId);
+                        break;
+
+                    case NET_SUBFUNC::PROTOCOL_SUBFUNC_ANALOG:          // Encapsulated analog data frame
+                        m_tagAnalog->triggerCallTakeover(dstId);
+                        break;
+
+                    default:
+                        break;
+                    }
                 }
 
                 // send further up the network tree (only if ICC request came from a local peer)
-                if (m_host->m_peerNetworks.size() > 0 && m_peers.find(peerId) != m_peers.end()) {
+                if (m_host->m_peerNetworks.size() > 0 && localRequestPeer) {
                     writePeerICC(peerId, streamId, subFunc, command, dstId, slotNo, true, true, ssrc);
                 }
             }
@@ -2814,15 +2813,61 @@ void TrafficNetwork::processInCallCtrl(network::NET_ICC::ENUM command, network::
 
 void TrafficNetwork::peerMetadataUpdate(uint32_t peerId)
 {
+    if (peerId == 0U) {
+        return;
+    }
+
+    bool enqueueTask = false;
+
+    // scope is intentional
+    {
+        std::lock_guard<std::mutex> lock(m_metadataUpdateMutex);
+        MetadataUpdateState& state = m_metadataUpdateState[peerId];
+
+        if (state.inFlight) {
+            // coalesce duplicate requests while one update is running
+            LogWarning(LOG_MASTER, "PEER %u metadata update already in flight, coalescing duplicate request", peerId);
+            state.pending = true;
+            return;
+        }
+
+        if (state.pending) {
+            // a request is already queued for this peer
+            LogWarning(LOG_MASTER, "PEER %u metadata update already pending, coalescing duplicate request", peerId);
+            return;
+        }
+
+        state.pending = true;
+        enqueueTask = true;
+    }
+
+    if (!enqueueTask) {
+        return;
+    }
+
     MetadataUpdateRequest* req = new MetadataUpdateRequest();
     req->obj = this;
     req->peerId = peerId;
 
     // enqueue the task
-    if (!m_threadPool.enqueue(new_pooltask(taskMetadataUpdate, req))) {
+    if (!m_metadataUpdateThreadPool.enqueue(new_pooltask(taskMetadataUpdate, req))) {
         LogError(LOG_NET, "Failed to task enqueue metadata update, peerId = %u", peerId);
-        if (req != nullptr)
+
+        // scope is intentional
+        {
+            std::lock_guard<std::mutex> lock(m_metadataUpdateMutex);
+            auto it = m_metadataUpdateState.find(peerId);
+            if (it != m_metadataUpdateState.end()) {
+                it->second.pending = false;
+                if (!it->second.inFlight) {
+                    m_metadataUpdateState.erase(it);
+                }
+            }
+        }
+
+        if (req != nullptr) {
             delete req;
+        }
     }
 }
 
@@ -2841,37 +2886,76 @@ void TrafficNetwork::taskMetadataUpdate(MetadataUpdateRequest* req)
         if (req == nullptr)
             return;
 
-        std::string peerIdentity = network->resolvePeerIdentity(req->peerId);
+        while (true) {
+            // scope is intentional
+            {
+                std::lock_guard<std::mutex> lock(network->m_metadataUpdateMutex);
 
-        FNEPeerConnection* connection = network->m_peers[req->peerId];
-        if (connection != nullptr) {
-            if (connection->connected()) {
-                connection->lock();
-                uint32_t streamId = network->createStreamId();
-
-                // if the connection is a downstream neighbor FNE peer, and peer is participating in peer link,
-                // send the peer proper configuration data
-                if (connection->peerClass() == PEER_CONN_CLASS_NEIGHBOR && connection->isReplica()) {
-                    LogInfoEx(LOG_MASTER, "PEER %u (%s) sending replica network metadata updates", req->peerId, peerIdentity.c_str());
-
-                    network->writeWhitelistRIDs(req->peerId, streamId, true);
-                    network->writeTGIDs(req->peerId, streamId, true);
-                    network->writePeerList(req->peerId, streamId);
-
-                    network->writeHAParameters(req->peerId, streamId, true);
-                }
-                else {
-                    LogInfoEx(LOG_MASTER, "PEER %u (%s) sending network metadata updates", req->peerId, peerIdentity.c_str());
-
-                    network->writeWhitelistRIDs(req->peerId, streamId, false);
-                    network->writeBlacklistRIDs(req->peerId, streamId);
-                    network->writeTGIDs(req->peerId, streamId, false);
-                    network->writeDeactiveTGIDs(req->peerId, streamId);
-
-                    network->writeHAParameters(req->peerId, streamId, false);
+                // check if there is a pending metadata update for this peer
+                MetadataUpdateState& state = network->m_metadataUpdateState[req->peerId];
+                if (!state.pending) {
+                    // no pending metadata update for this peer, exit the loop
+                    state.inFlight = false;
+                    network->m_metadataUpdateState.erase(req->peerId);
+                    break;
                 }
 
-                connection->unlock();
+                // check if the peer connection is still valid and connected
+                FNEPeerConnection* connection = network->m_peers[req->peerId];
+                if (connection != nullptr) {
+                    if (!connection->connected()) {
+                        // peer connection is not connected, skip the metadata update
+                        LogWarning(LOG_MASTER, "PEER %u (%s) not connected, skipping metadata update", req->peerId, connection->identWithQualifier().c_str());
+                        state.pending = false;
+                        state.inFlight = false;
+                        network->m_metadataUpdateState.erase(req->peerId);
+                        break;
+                    }
+                } else {
+                    // peer connection is not found, skip the metadata update
+                    LogWarning(LOG_MASTER, "PEER %u not found, skipping metadata update", req->peerId);
+                    state.pending = false;
+                    state.inFlight = false;
+                    network->m_metadataUpdateState.erase(req->peerId);
+                    break;
+                }
+
+                state.pending = false;
+                state.inFlight = true;
+            }
+
+            std::string peerIdentity = network->resolvePeerIdentity(req->peerId);
+
+            FNEPeerConnection* connection = network->m_peers[req->peerId];
+            if (connection != nullptr) {
+                if (connection->connected()) {
+                    connection->lock();
+                    uint32_t streamId = network->createStreamId();
+
+                    // if the connection is a downstream neighbor FNE peer, and peer is participating in peer link,
+                    // send the peer proper configuration data
+                    if (connection->peerClass() == PEER_CONN_CLASS_NEIGHBOR && connection->isReplica()) {
+                        LogInfoEx(LOG_MASTER, "PEER %u (%s) sending replica network metadata updates", req->peerId, peerIdentity.c_str());
+
+                        network->writeWhitelistRIDs(req->peerId, streamId, true);
+                        network->writeTGIDs(req->peerId, streamId, true);
+                        network->writePeerList(req->peerId, streamId);
+
+                        network->writeHAParameters(req->peerId, streamId, true);
+                    }
+                    else {
+                        LogInfoEx(LOG_MASTER, "PEER %u (%s) sending network metadata updates", req->peerId, peerIdentity.c_str());
+
+                        network->writeWhitelistRIDs(req->peerId, streamId, false);
+                        network->writeBlacklistRIDs(req->peerId, streamId);
+                        network->writeTGIDs(req->peerId, streamId, false);
+                        network->writeDeactiveTGIDs(req->peerId, streamId);
+
+                        network->writeHAParameters(req->peerId, streamId, false);
+                    }
+
+                    connection->unlock();
+                }
             }
         }
 
@@ -3196,6 +3280,16 @@ void TrafficNetwork::writeTGIDs(uint32_t peerId, uint32_t streamId, bool sendRep
                 slotNo |= 0x40U;
             }
 
+            // set the $20 bit of the slot number to identify if this TG is strapped or not
+            if (entry.config().strapping() == lookups::TG_STRAPPING_STRAPPED) {
+                slotNo |= 0x20U;
+            }
+
+            // set the $10 bit of the slot number to identify if this TG is clear only
+            if (entry.config().strapping() == lookups::TG_STRAPPING_CLEAR) {
+                slotNo |= 0x10U;
+            }
+
             tgidList.push_back({ entry.source().tgId(), slotNo });
         }
     }
@@ -3446,7 +3540,7 @@ bool TrafficNetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUN
                     }
 
                     if (peer.second->isEnabled()) {
-                        LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request to Upstream, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, dstId, slotNo, ssrc, streamId);
+                        LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request to Upstream, command = $%02X, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, command, dstId, slotNo, ssrc, streamId);
                         peer.second->writeMaster({ NET_FUNC::INCALL_CTRL, subFunc }, buffer, 15U, RTP_END_OF_CALL_SEQ, streamId, false, 0U, ssrc);
                     }
                 }
@@ -3455,8 +3549,10 @@ bool TrafficNetwork::writePeerICC(uint32_t peerId, uint32_t streamId, NET_SUBFUN
 
         return true;
     }
-    else
+    else {
+        LogInfoEx(LOG_MASTER, "PEER %u In-Call Control Request, command = $%02X, dstId = %u, slot = %u, ssrc = %u, streamId = %u", peerId, command, dstId, slotNo, ssrc, streamId);
         return writePeer(peerId, ssrc, { NET_FUNC::INCALL_CTRL, subFunc }, buffer, 15U, RTP_END_OF_CALL_SEQ, streamId);
+    }
 }
 
 /*
@@ -3713,4 +3809,74 @@ void TrafficNetwork::processTEKResponse(p25::kmm::KeyItem* rspKi, uint8_t algId,
         m_peerReplicaKeyQueue.erase(peerId);
 
     s_keyQueueMutex.unlock();
+}
+
+/* Helper to process a FNE KMM LLA response. */
+
+void TrafficNetwork::processLLAResponse(uint32_t srcId, p25::kmm::KeyItem* rspKi, uint8_t keyLength)
+{
+    using namespace p25::defines;
+    using namespace p25::kmm;
+
+    if (rspKi == nullptr)
+        return;
+
+    LogInfoEx(LOG_PEER, "upstream master LLA enc. key, rsi = %u", srcId);
+
+    s_llaKeyQueueMutex.lock();
+
+    std::vector<uint32_t> peersToRemove;
+    for (auto entry : m_peerReplicaLLAKeyQueue) {
+        uint32_t requestingRid = entry.second;
+        if (requestingRid == srcId) {
+            uint32_t peerId = entry.first;
+
+            uint8_t key[P25DEF::MAX_ENC_KEY_LENGTH_BYTES];
+            ::memset(key, 0x00U, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
+            rspKi->getKey(key);
+
+            if (m_debug) {
+                LogDebugEx(LOG_HOST, "TrafficNetwork::processLLAResponse()", "keyLength = %u", keyLength);
+                Utils::dump(1U, "TrafficNetwork::processLLAResponse(), Key", key, P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
+            }
+
+            // build response buffer
+            uint8_t buffer[DATA_PACKET_LENGTH];
+            ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
+
+            KMMModifyKey modifyKeyRsp = KMMModifyKey();
+            modifyKeyRsp.setDecryptInfoFmt(KMM_DECRYPT_INSTRUCT_NONE);
+            modifyKeyRsp.setAlgId(ALGO_AES_128);
+            modifyKeyRsp.setKId(0U);
+            modifyKeyRsp.setSrcLLId(WUID_FNE);
+            modifyKeyRsp.setDstLLId(srcId);
+
+            KeysetItem ks = KeysetItem();
+            ks.keysetId(1U);
+            ks.algId(ALGO_AES_128);
+            ks.keyLength(keyLength);
+
+            p25::kmm::KeyItem ki = p25::kmm::KeyItem();
+            ki.keyFormat(KEY_FORMAT_TEK);
+            ki.kId(rspKi->kId());
+            ki.sln(rspKi->sln());
+            ki.setKey(key, keyLength);
+
+            ks.push_back(ki);
+            modifyKeyRsp.setKeysetItem(ks);
+
+            modifyKeyRsp.encode(buffer + 11U);
+
+            writePeer(peerId, m_peerId, { NET_FUNC::KEY_LLA_RSP, NET_SUBFUNC::NOP }, buffer, modifyKeyRsp.length() + 11U, 
+                RTP_END_OF_CALL_SEQ, createStreamId());
+
+            peersToRemove.push_back(peerId);
+        }
+    }
+
+    // remove peers who were sent keys
+    for (auto& peerId : peersToRemove)
+        m_peerReplicaLLAKeyQueue.erase(peerId);
+
+    s_llaKeyQueueMutex.unlock();
 }

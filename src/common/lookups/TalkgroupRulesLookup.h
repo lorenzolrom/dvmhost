@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2023,2024,2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2023-2026 Bryan Biedenkapp, N2PLL
  *  Copyright (C) 2024 Patrick McDonnell, W3AXL
  *
  */
@@ -33,6 +33,17 @@
 
 namespace lookups
 {
+    // ---------------------------------------------------------------------------
+    //  Constants
+    // ---------------------------------------------------------------------------
+
+    /** @brief Talkgroup Strapping Selectable */
+    const uint8_t TG_STRAPPING_SELECTABLE   = 0U;
+    /** @brief Talkgroup Strapping Strapped */
+    const uint8_t TG_STRAPPING_STRAPPED     = 1U;
+    /** @brief Talkgroup Strapping Clear */
+    const uint8_t TG_STRAPPING_CLEAR        = 2U;
+
     // ---------------------------------------------------------------------------
     //  Class Declaration
     // ---------------------------------------------------------------------------
@@ -187,6 +198,7 @@ namespace lookups
         TalkgroupRuleConfig() :
             m_active(false),
             m_affiliated(false),
+            m_strapping(TG_STRAPPING_SELECTABLE),
             m_parrot(false),
             m_inclusion(),
             m_exclusion(),
@@ -208,6 +220,7 @@ namespace lookups
             m_active = node["active"].as<bool>(false);
             m_affiliated = node["affiliated"].as<bool>(false);
             m_parrot = node["parrot"].as<bool>(false);
+            m_strapping = (uint8_t)node["strapping"].as<uint32_t>(TG_STRAPPING_SELECTABLE);
 
             yaml::Node& inclusionList = node["inclusion"];
             if (inclusionList.size() > 0U) {
@@ -267,6 +280,7 @@ namespace lookups
             if (this != &data) {
                 m_active = data.m_active;
                 m_affiliated = data.m_affiliated;
+                m_strapping = data.m_strapping;
                 m_parrot = data.m_parrot;
                 m_inclusion = data.m_inclusion;
                 m_exclusion = data.m_exclusion;
@@ -320,8 +334,9 @@ namespace lookups
             // We have to convert the bools back to strings to pass to the yaml node
             node["active"] = __BOOL_STR(m_active);
             node["affiliated"] = __BOOL_STR(m_affiliated);
+            node["strapping"] = __INT_STR(m_strapping);
             node["parrot"] = __BOOL_STR(m_parrot);
-            
+
             // Get the lists
             yaml::Node inclusionList;
             if (m_inclusion.size() > 0U) {
@@ -387,6 +402,10 @@ namespace lookups
          * @brief Flag indicating whether this talkgroup will only repeat with affiliations.
          */
         DECLARE_PROPERTY_PLAIN(bool, affiliated);
+        /**
+         * @brief Encryption strapping level for this talkgroup. (0 = Selectable, 1 = Strapped, 2 = Clear)
+         */
+        DECLARE_PROPERTY_PLAIN(uint8_t, strapping);
         /**
          * @brief Flag indicating whether or not the talkgroup is a parrot.
          */
@@ -537,8 +556,9 @@ namespace lookups
          * @param filename Full-path to the routing rules file.
          * @param reloadTime Interval of time to reload the routing rules.
          * @param acl Flag indicating these rules are enabled for enforcing access control.
+         * @param verbose Flag indicating if logging should be enabled for this lookup table.
          */
-        TalkgroupRulesLookup(const std::string& filename, uint32_t reloadTime, bool acl);
+        TalkgroupRulesLookup(const std::string& filename, uint32_t reloadTime, bool acl, bool verbose = true);
         /**
          * @brief Finalizes a instance of the TalkgroupRulesLookup class.
          */
@@ -578,8 +598,10 @@ namespace lookups
          * @param enabled Flag indicating if talkgroup ID is enabled or not.
          * @param affiliated Flag indicating if talkgroup ID requires affiliated or not.
          * @param nonPreferred Flag indicating if the talkgroup ID is non-preferred.
+         * @param strapping Encryption strapping level for this talkgroup. (0 = Selectable, 1 = Strapped, 2 = Clear)
          */
-        void addEntry(uint32_t id, uint8_t slot, bool enabled, bool affiliated = false, bool nonPreferred = false);
+        void addEntry(uint32_t id, uint8_t slot, bool enabled, bool affiliated = false, bool nonPreferred = false,
+            uint8_t strapping = TG_STRAPPING_SELECTABLE);
         /**
          * @brief Adds a new entry to the lookup table.
          * @param groupVoice Group Voice Configuration Block.
@@ -651,6 +673,8 @@ namespace lookups
 
         bool m_acl;
         bool m_stop;
+
+        bool m_verbose;
 
         static std::mutex s_mutex;  //!< Mutex used for change locking.
         static bool s_locked;       //!< Flag used for read locking (prevents find lookups), should be used when atomic operations (add/erase/etc) are being used.

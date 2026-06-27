@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2023-2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2023-2026 Bryan Biedenkapp, N2PLL
  *
  */
 /**
@@ -47,6 +47,7 @@
 #include <string>
 #include <cstdint>
 #include <unordered_map>
+#include <memory>
 #include <mutex>
 
 // ---------------------------------------------------------------------------
@@ -88,6 +89,8 @@ namespace network
     #define INFLUXDB_ERRSTR_DISABLED_DST_RID "disabled destination RID"
     #define INFLUXDB_ERRSTR_INV_TALKGROUP "illegal/invalid talkgroup"
     #define INFLUXDB_ERRSTR_DISABLED_TALKGROUP "disabled talkgroup"
+    #define INFLUXDB_ERRSTR_ENC_TALKGROUP_CLR "encrypted talkgroup with clear traffic"
+    #define INFLUXDB_ERRSTR_CLR_TALKGROUP_ENC "clear talkgroup with encrypted traffic"
     #define INFLUXDB_ERRSTR_INV_SLOT "invalid slot for talkgroup"
     #define INFLUXDB_ERRSTR_RID_NOT_PERMITTED "RID not permitted for talkgroup"
     #define INFLUXDB_ERRSTR_ILLEGAL_RID_ACCESS "illegal/unknown RID attempted access"
@@ -362,6 +365,7 @@ namespace network
         uint32_t m_parrotOverrideSrcId;
 
         bool m_kmfServicesEnabled;
+        bool m_kmfAllowRID0;
 
         lookups::RadioIdLookup* m_ridLookup;
         lookups::TalkgroupRulesLookup* m_tidLookup;
@@ -375,11 +379,14 @@ namespace network
         typedef std::pair<const uint32_t, network::FNEPeerConnection*> PeerMapPair;
         concurrent::shared_unordered_map<uint32_t, FNEPeerConnection*> m_peers;
         concurrent::unordered_map<uint32_t, json::array> m_peerReplicaPeers;
-        typedef std::pair<const uint32_t, lookups::AffiliationLookup*> PeerAffiliationMapPair;
-        concurrent::unordered_map<uint32_t, fne_lookups::AffiliationLookup*> m_peerAffiliations;
+        typedef std::pair<const uint32_t, std::shared_ptr<fne_lookups::AffiliationLookup>> PeerAffiliationMapPair;
+        concurrent::unordered_map<uint32_t, std::shared_ptr<fne_lookups::AffiliationLookup>> m_peerAffiliations;
+        mutable std::mutex m_peerAffiliationsMutex;
         concurrent::shared_unordered_map<uint32_t, std::vector<uint32_t>> m_ccPeerMap;
         static std::timed_mutex s_keyQueueMutex;
         std::unordered_map<uint32_t, uint16_t> m_peerReplicaKeyQueue;
+        static std::timed_mutex s_llaKeyQueueMutex;
+        std::unordered_map<uint32_t, uint16_t> m_peerReplicaLLAKeyQueue;
 
         fne_lookups::AffiliationLookup* m_globalAff;
 
@@ -441,6 +448,24 @@ namespace network
         uint32_t m_jitterMaxWait;
 
         ThreadPool m_threadPool;
+        ThreadPool m_metadataUpdateThreadPool;
+
+        /**
+         * @brief Represents the state of a metadata update for a given peer ID.
+         * @ingroup fne_network
+         */
+        struct MetadataUpdateState {
+            /**
+             * @brief Flag indicating whether a metadata update is currently in flight for this peer ID.
+             */
+            bool inFlight = false;
+            /**
+             * @brief Flag indicating whether a metadata update is pending for this peer ID.
+             */
+            bool pending = false;
+        };
+        std::mutex m_metadataUpdateMutex;
+        std::unordered_map<uint32_t, MetadataUpdateState> m_metadataUpdateState;
 
         bool m_disablePacketData;
         bool m_dumpPacketData;
@@ -509,6 +534,17 @@ namespace network
          * @returns bool True, if the peer affiliations were deleted, otherwise false.
          */
         bool erasePeerAffiliations(uint32_t peerId);
+        /**
+         * @brief Helper to get the peer affiliations entry for a peer.
+         * @param peerId Peer ID.
+         * @returns std::shared_ptr<fne_lookups::AffiliationLookup> Shared affiliations lookup instance.
+         */
+        std::shared_ptr<fne_lookups::AffiliationLookup> getPeerAffiliations(uint32_t peerId) const;
+        /**
+         * @brief Helper to create a snapshot of all peer affiliation entries.
+         * @returns std::vector<PeerAffiliationMapPair> Snapshot of peer affiliation entries.
+         */
+        std::vector<PeerAffiliationMapPair> peerAffiliationsSnapshot() const;
         /**
          * @brief Helper to disconnect a downstream peer.
          * @param peerId Peer ID.
@@ -858,6 +894,14 @@ namespace network
          * @param keyLength Length of key in bytes.
          */
         void processTEKResponse(p25::kmm::KeyItem* ki, uint8_t algId, uint8_t keyLength);
+
+        /**
+         * @brief Helper to process a FNE KMM LLA response.
+         * @param srcId Source Radio ID for the LLA response.
+         * @param ki Key Item.
+         * @param keyLength Length of key in bytes.
+         */
+        void processLLAResponse(uint32_t srcId, p25::kmm::KeyItem* ki, uint8_t keyLength);
     };
 } // namespace network
 

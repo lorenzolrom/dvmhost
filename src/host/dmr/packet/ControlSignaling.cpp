@@ -121,7 +121,7 @@ bool ControlSignaling::process(uint8_t* data, uint32_t len)
     slotType.setColorCode(m_slot->s_colorCode);
     slotType.setDataType(dataType);
 
-    if (dataType == DataType::CSBK) {
+    if (dataType == DataType::CSBK || dataType == DataType::MBC_HEADER || dataType == DataType::MBC_DATA) {
         // generate a new CSBK and check validity
         std::unique_ptr<lc::CSBK> csbk = CSBKFactory::createCSBK(data + 2U, dataType);
         if (csbk == nullptr)
@@ -369,7 +369,7 @@ bool ControlSignaling::process(uint8_t* data, uint32_t len)
             if (m_slot->s_duplex)
                 m_slot->addFrame(data);
 
-            m_slot->writeNetwork(data, DataType::CSBK, gi ? FLCO::GROUP : FLCO::PRIVATE, srcId, dstId, 0U, 0U, true);
+            m_slot->writeNetwork(data, dataType, gi ? FLCO::GROUP : FLCO::PRIVATE, srcId, dstId, 0U, 0U, true);
         }
 
         return true;
@@ -387,7 +387,7 @@ void ControlSignaling::processNetwork(const data::NetData& dmrData)
     uint8_t data[DMR_FRAME_LENGTH_BYTES + 2U];
     dmrData.getData(data + 2U);
 
-    if (dataType == DataType::CSBK) {
+    if (dataType == DataType::CSBK || dataType == DataType::MBC_HEADER || dataType == DataType::MBC_DATA) {
         std::unique_ptr<lc::CSBK> csbk = CSBKFactory::createCSBK(data + 2U, dataType);
         if (csbk == nullptr) {
             LogError(LOG_NET, "DMR Slot %u, CSBK, unable to decode the network CSBK", m_slot->m_slotNo);
@@ -879,6 +879,22 @@ bool ControlSignaling::writeRF_CSBK_Grant(uint32_t srcId, uint32_t dstId, uint8_
                 if (!tscc->s_affiliations->isUnitReg(dstId)) {
                     LogWarning(LOG_RF, "DMR Slot %u, CSBK, RAND (Random Access, IND_VOICE_CALL (Individual Voice Call) ignored, no unit registration, dstId = %u", tscc->m_slotNo, dstId);
                     return false;
+                }
+            }
+
+            // perform encryption strapping check on the voice frame of a call
+            if (grp) {
+                if (!groupVoice.isInvalid()) {
+                    if (groupVoice.config().strapping() == ::lookups::TG_STRAPPING_STRAPPED) {
+                        if (!privacy) {
+                            LogWarning(LOG_RF, "DMR Slot %u, CSBK, RAND (Random Access, GRP_VOICE_CALL (Group Voice Call) denial, TGID enc. strapping rejection, srcId = %u, dstId = %u", tscc->m_slotNo, srcId, dstId);
+                            writeRF_CSBK_ACK_RSP(srcId, ReasonCode::TS_DENY_RSN_TGT_GROUP_NOT_VALID, (grp) ? 1U : 0U);
+
+                            ::ActivityLog("DMR", true, "Slot %u group grant request rejection from %u to TG %u ", tscc->m_slotNo, srcId, dstId);
+                            m_slot->m_rfState = RS_RF_REJECTED;
+                            return false;
+                        }
+                    }
                 }
             }
 

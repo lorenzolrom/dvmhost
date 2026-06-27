@@ -5,7 +5,7 @@
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  *  Copyright (C) 2016,2017,2018 Jonathan Naylor, G4KLX
- *  Copyright (C) 2017-2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2017-2026 Bryan Biedenkapp, N2PLL
  *
  */
 #include "Defines.h"
@@ -127,10 +127,7 @@ Control::Control(bool authoritative, uint32_t nac, uint32_t callHang, uint32_t q
     m_ccFrameCnt(0U),
     m_ccSeq(0U),
     m_random(),
-    m_llaK(nullptr),
-    m_llaRS(nullptr),
-    m_llaCRS(nullptr),
-    m_llaKS(nullptr),
+    m_llaRID(),
     m_nid(nac),
     m_siteData(),
     m_rssiMapper(rssiMapper),
@@ -173,11 +170,6 @@ Control::Control(bool authoritative, uint32_t nac, uint32_t callHang, uint32_t q
     std::mt19937 mt(rd());
     m_random = mt;
 
-    m_llaK = nullptr;
-    m_llaRS = new uint8_t[AUTH_KEY_LENGTH_BYTES];
-    m_llaCRS = new uint8_t[AUTH_KEY_LENGTH_BYTES];
-    m_llaKS = new uint8_t[AUTH_KEY_LENGTH_BYTES];
-
     // register RPC handlers
     g_RPC->registerHandler(RPC_PERMIT_P25_TG, RPC_FUNC_BIND(Control::RPC_permittedTG, this));
     g_RPC->registerHandler(RPC_ACTIVE_P25_TG, RPC_FUNC_BIND(Control::RPC_activeTG, this));
@@ -205,13 +197,6 @@ Control::~Control()
     if (m_data != nullptr) {
         delete m_data;
     }
-
-    if (m_llaK != nullptr) {
-        delete[] m_llaK;
-    }
-    delete[] m_llaRS;
-    delete[] m_llaCRS;
-    delete[] m_llaKS;
 }
 
 /* Resets the data states for the RF interface. */
@@ -256,34 +241,6 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
     m_control->m_announcementGroup = (uint32_t)::strtoul(rfssConfig["announcementGroup"].as<std::string>("FFFE").c_str(), NULL, 16);
     m_defaultNetIdleTalkgroup = (uint32_t)rfssConfig["defaultNetIdleTalkgroup"].as<uint32_t>(0U);
 
-    yaml::Node secureConfig = rfssConfig["secure"];
-    std::string key = secureConfig["key"].as<std::string>();
-    if (!key.empty()) {
-        if (key.size() == 32) {
-            if ((key.find_first_not_of("0123456789abcdefABCDEF", 2) == std::string::npos)) {
-                const char* keyPtr = key.c_str();
-                m_llaK = new uint8_t[AUTH_KEY_LENGTH_BYTES];
-                ::memset(m_llaK, 0x00U, AUTH_KEY_LENGTH_BYTES);
-
-                for (uint8_t i = 0; i < AUTH_KEY_LENGTH_BYTES; i++) {
-                    char t[4] = {keyPtr[0], keyPtr[1], 0};
-                    m_llaK[i] = (uint8_t)::strtoul(t, NULL, 16);
-                    keyPtr += 2 * sizeof(char);
-                }
-            }
-            else {
-                LogWarning(LOG_P25, "Invalid characters in the secure key. LLA disabled.");
-            }
-        }
-        else {
-            LogWarning(LOG_P25, "Invalid secure key length, key should be 16 hex pairs, or 32 characters. LLA disabled.");
-        }
-    }
-
-    if (m_llaK != nullptr) {
-        generateLLA_AM1_Parameters();
-    }
-
     m_ignorePDUCRC = p25Protocol["ignoreDataCRC"].as<bool>(false);
 
     m_inhibitUnauth = p25Protocol["inhibitUnauthorized"].as<bool>(false);
@@ -295,8 +252,16 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
 
     m_control->m_requireLLAForReg = p25Protocol["requireLLAForReg"].as<bool>(false);
 
-    if (m_llaK == nullptr) {
-        m_control->m_requireLLAForReg = false;
+    if (m_control->m_requireLLAForReg) {
+        if (m_network != nullptr) {
+            m_network->setLLAKeyResponseCallback([=](uint32_t srcId, p25::kmm::KeyItem ki, uint8_t keyLength) {
+                processLLAResponse(srcId, &ki, keyLength);
+            });
+        }
+
+        if (m_network == nullptr) {
+            m_control->m_requireLLAForReg = false;
+        }
     }
 
     m_control->m_noStatusAck = p25Protocol["noStatusAck"].as<bool>(false);
@@ -458,6 +423,8 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
 
     m_controlChData = controlChData;
 
+    bool disableGrpAffTimeout = p25Protocol["disableGrpAffTimeout"].as<bool>(false);
+    m_affiliations->setDisableGrpAffTimeout(disableGrpAffTimeout);
     bool disableUnitRegTimeout = p25Protocol["disableUnitRegTimeout"].as<bool>(false);
     m_affiliations->setDisableUnitRegTimeout(disableUnitRegTimeout);
 
@@ -546,10 +513,6 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
         }
         LogInfo("    Time/Date Announcement TSBK: %s", m_control->m_ctrlTimeDateAnn ? "yes" : "no");
 
-        if (m_llaK != nullptr) {
-            LogInfo("    Link Layer Authentication: yes");
-        }
-
         LogInfo("    Inhibit Unauthorized: %s", m_inhibitUnauth ? "yes" : "no");
         LogInfo("    Legacy Group Grant: %s", m_legacyGroupGrnt ? "yes" : "no");
         LogInfo("    Legacy Group Registration: %s", m_legacyGroupReg ? "yes" : "no");
@@ -572,6 +535,10 @@ void Control::setOptions(yaml::Node& conf, bool supervisor, const std::string cw
         LogInfo("    Explicit TDU Grant Release: %s", m_explicitTDUGrantRelease ? "yes" : "no");
 
         LogInfo("    Notify VCs of Active TGs: %s", m_ccNotifyActiveTG ? "yes" : "no");
+
+        if (disableGrpAffTimeout) {
+            LogInfo("    Disable Group Affiliation Timeout: yes");
+        }
 
         if (disableUnitRegTimeout) {
             LogInfo("    Disable Unit Registration Timeout: yes");
@@ -1057,6 +1024,7 @@ void Control::clock()
             m_tailOnIdle = true;
 
             m_voice->resetNet();
+            m_data->resetReceivedBlocks();
 
             m_netTimeout.stop();
         }
@@ -1100,6 +1068,13 @@ void Control::clockSiteData(uint32_t ms)
             if (m_rfState == RS_RF_LISTENING && m_netState == RS_NET_IDLE) {
                 m_control->writeAdjSSNetwork();
                 if (m_network != nullptr) {
+                    // network announce our unit registration table if we have one
+                    if (m_affiliations->unitRegSize() > 0) {
+                        auto regs = m_affiliations->unitRegTable();
+                        m_network->announceUnitRegUpdate(regs);
+                    }
+
+                    // network announce our affiliation table if we have one
                     if (m_affiliations->grpAffSize() > 0) {
                         auto affs = m_affiliations->grpAffTable();
                         m_network->announceAffiliationUpdate(affs);
@@ -1262,6 +1237,11 @@ void Control::permittedTG(uint32_t dstId, bool dataPermit)
     if (m_permittedDstId != 0U && dstId == 0U) {
         for (uint8_t i = 0; i < 2; i++)
             writeRF_TDU(true);
+
+        m_networkWatchdog.stop();
+        m_voice->resetNet();
+        m_data->resetReceivedBlocks();
+        m_netState = RS_NET_IDLE;
     }
 
     m_permittedDstId = dstId;
@@ -1589,8 +1569,6 @@ void Control::processNetwork()
     lsd.setLSD1(lsd1);
     lsd.setLSD2(lsd2);
 
-    m_networkWatchdog.start();
-
     if (m_debug) {
         Utils::dump(2U, "* !!! P25 Network Frame", data.get(), frameLength);
     }
@@ -1626,6 +1604,17 @@ void Control::processNetwork()
                     return;
                 }
 
+                // if we're non-dedicated control, and if either of the talkgroup hang timers are running, ignore the grant demand
+                if (!m_dedicatedControl) {
+                    if (m_rfTGHang.isRunning() && !m_rfTGHang.hasExpired()) {
+                        return;
+                    }
+
+                    if (m_netTGHang.isRunning() && !m_netTGHang.hasExpired()) {
+                        return;
+                    }
+                }
+
                 // validate source RID
                 if (!acl::AccessControl::validateSrcId(srcId)) {
                     return;
@@ -1653,15 +1642,14 @@ void Control::processNetwork()
                     return;
                 }
 
-                // perform grant response logic
-                m_control->writeRF_TSDU_Grant(srcId, dstId, serviceOptions, !unitToUnit, true);
-/*
-                if (!m_control->writeRF_TSDU_Grant(srcId, dstId, serviceOptions, !unitToUnit, true))
-                {
-                    LogError(LOG_NET, P25_TSDU_STR " call rejected, network call not granted, dstId = %u", dstId);
-                    return;
+                if (!m_affiliations->isGranted(dstId)) {
+                    // perform grant response logic
+                    if (m_control->writeRF_TSDU_Grant(srcId, dstId, serviceOptions, !unitToUnit, true)) {
+                        m_netLastSrcId = srcId;
+                        m_netLastDstId = dstId;
+                    }
                 }
-*/
+
                 return;
             }
 
@@ -2186,17 +2174,82 @@ void Control::RPC_touchGrantTG(json::object& req, json::object& reply)
     }
 }
 
-/* Helper to setup and generate LLA AM1 parameters. */
+/* Helper to retrieve LLA AM1 parameters for a given source ID. */
 
-void Control::generateLLA_AM1_Parameters()
+bool Control::getLLA_AM1_Parameters(uint32_t srcId, uint8_t* rs, uint8_t* crs, uint8_t* ks)
 {
-    ::memset(m_llaRS, 0x00U, AUTH_KEY_LENGTH_BYTES);
-    ::memset(m_llaCRS, 0x00U, AUTH_KEY_LENGTH_BYTES);
-    ::memset(m_llaKS, 0x00U, AUTH_KEY_LENGTH_BYTES);
-
-    if (m_llaK == nullptr) {
-        return;
+    auto it = m_llaRID.find(srcId);
+    if (it != m_llaRID.end()) {
+        LLAParams* params = it->second;
+        if (params != nullptr) {
+            if (rs != nullptr)
+                ::memcpy(rs, params->rs, AUTH_KEY_LENGTH_BYTES);
+            if (crs != nullptr)
+                ::memcpy(crs, params->crs, AUTH_KEY_LENGTH_BYTES);
+            if (ks != nullptr)
+                ::memcpy(ks, params->ks, AUTH_KEY_LENGTH_BYTES);
+            return true;
+        }
+    } else {
+        LogWarning(LOG_P25, "P25, LLA key not found requesting from FNE, rsi = %u", srcId);
+        m_network->writeLLAKeyReq(srcId);
     }
+
+    return false;
+}
+
+/* Helper to clear LLA AM1 parameters for a given source ID. */
+
+void Control::clearLLA_AM1_Parameters(uint32_t srcId)
+{
+    auto it = m_llaRID.find(srcId);
+    if (it != m_llaRID.end()) {
+        LLAParams* params = it->second;
+        if (params != nullptr) {
+            if (params->k != nullptr) {
+                delete[] params->k;
+            }
+
+            delete[] params->rs;
+            delete[] params->crs;
+            delete[] params->ks;
+
+            delete params;
+        }
+        m_llaRID.erase(it);
+
+        if (m_verbose) {
+            LogInfoEx(LOG_P25, "P25, cleared LLA AM1 parameters, rsi = %u", srcId);
+        }
+    }
+}
+
+/* Helper to process a FNE KMM LLA response. */
+
+void Control::processLLAResponse(uint32_t srcId, p25::kmm::KeyItem* rspKi, uint8_t keyLength)
+{
+    using namespace p25::kmm;
+
+    if (rspKi == nullptr)
+        return;
+
+    LogInfoEx(LOG_P25, "P25, upstream master LLA enc. key, rsi = %u", srcId);
+
+    // initialize LLAParams structure
+    LLAParams* params = new LLAParams();
+    params->k = new uint8_t[AUTH_KEY_LENGTH_BYTES];
+    ::memset(params->k, 0x00U, AUTH_KEY_LENGTH_BYTES);
+
+    uint8_t keyData[P25DEF::MAX_ENC_KEY_LENGTH_BYTES];
+    rspKi->getKey(keyData);
+    ::memcpy(params->k, keyData, AUTH_KEY_LENGTH_BYTES);
+
+    params->rs = new uint8_t[AUTH_KEY_LENGTH_BYTES];
+    ::memset(params->rs, 0x00U, AUTH_KEY_LENGTH_BYTES);
+    params->crs = new uint8_t[AUTH_KEY_LENGTH_BYTES];
+    ::memset(params->crs, 0x00U, AUTH_KEY_LENGTH_BYTES);
+    params->ks = new uint8_t[AUTH_KEY_LENGTH_BYTES];
+    ::memset(params->ks, 0x00U, AUTH_KEY_LENGTH_BYTES);
 
     crypto::AES* aes = new crypto::AES(crypto::AESKeyLength::AES_128);
 
@@ -2214,21 +2267,42 @@ void Control::generateLLA_AM1_Parameters()
 
     // expand RS to 16 bytes
     for (uint32_t i = 0; i < AUTH_RAND_SEED_LENGTH_BYTES; i++)
-        m_llaRS[i] = RS[i];
+        params->rs[i] = RS[i];
 
     // complement RS
     for (uint32_t i = 0; i < AUTH_KEY_LENGTH_BYTES; i++)
-        m_llaCRS[i] = ~m_llaRS[i];
+        params->crs[i] = ~params->rs[i];
 
     // perform crypto
-    uint8_t* KS = aes->encryptECB(m_llaRS, AUTH_KEY_LENGTH_BYTES * sizeof(uint8_t), m_llaK);
-    ::memcpy(m_llaKS, KS, AUTH_KEY_LENGTH_BYTES);
+    uint8_t* KS = aes->encryptECB(params->rs, AUTH_KEY_LENGTH_BYTES * sizeof(uint8_t), params->k);
+    ::memcpy(params->ks, KS, AUTH_KEY_LENGTH_BYTES);
 
     if (m_verbose) {
-        LogInfoEx(LOG_P25, "P25, generated LLA AM1 parameters");
+        LogInfoEx(LOG_P25, "P25, generated LLA AM1 parameters, rsi = %u", srcId);
     }
 
     // cleanup
     delete[] KS;
     delete aes;
+
+    // store the parameters
+    auto it = m_llaRID.find(srcId);
+    if (it == m_llaRID.end()) {
+        m_llaRID[srcId] = params;
+    }
+    else {
+        clearLLA_AM1_Parameters(srcId);
+        m_llaRID[srcId] = params;
+    }
+
+    // check if the source ID is currently awaiting registration, if so re-issue the auth demand which
+    // likely deferred earlier due to missing LLA parameters
+    if (std::find(m_control->m_llaDeferredAuthList.begin(), m_control->m_llaDeferredAuthList.end(), srcId) != m_control->m_llaDeferredAuthList.end()) {
+        if (m_verbose) {
+            LogInfoEx(LOG_P25, "P25, re-issuing deferred auth demand for rsi = %u", srcId);
+        }
+        
+        m_control->writeRF_TSDU_Auth_Dmd(srcId);
+        m_control->m_llaDeferredAuthList.erase(std::remove(m_control->m_llaDeferredAuthList.begin(), m_control->m_llaDeferredAuthList.end(), srcId), m_control->m_llaDeferredAuthList.end());
+    }
 }

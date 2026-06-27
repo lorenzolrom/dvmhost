@@ -4,7 +4,7 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2022,2024 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2022,2024,2026 Bryan Biedenkapp, N2PLL
  *
  */
 #include "lookups/AffiliationLookup.h"
@@ -19,6 +19,7 @@ using namespace lookups;
 // ---------------------------------------------------------------------------
 
 const uint32_t UNIT_REG_TIMEOUT = 43200U; // 12 hours
+const uint32_t GRP_AFF_TIMEOUT = 43200U; // 12 hours
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -31,15 +32,19 @@ AffiliationLookup::AffiliationLookup(const std::string name, ChannelLookup* chan
     m_unitRegTable(),
     m_unitRegTimers(),
     m_grpAffTable(),
+    m_grpAffTimers(),
     m_grantChTable(),
     m_grantSrcIdTable(),
     m_uuGrantedTable(),
     m_netGrantedTable(),
     m_grantTimers(),
+    m_grantCallTimers(),
     m_releaseGrant(nullptr),
+    m_unitDereg(nullptr),
     m_name(),
     m_chLookup(channelLookup),
     m_disableUnitRegTimeout(false),
+    m_disableGrpAffTimeout(false),
     m_verbose(verbose)
 {
     m_name = name;
@@ -47,6 +52,7 @@ AffiliationLookup::AffiliationLookup(const std::string name, ChannelLookup* chan
     m_unitRegTable.clear();
     m_unitRegTimers.clear();
     m_grpAffTable.clear();
+    m_grpAffTimers.clear();
 
     m_grantChTable.clear();
     m_grantSrcIdTable.clear();
@@ -133,8 +139,14 @@ void AffiliationLookup::touchUnitReg(uint32_t srcId)
 
     __spinlock();
 
+    // restart the unit registration timer
     if (isUnitReg(srcId)) {
         m_unitRegTimers[srcId].start();
+    }
+
+    // restart the group affiliation timer if the source ID is group affiliated
+    if (isSrcIdGrpAff(srcId)) {
+        m_grpAffTimers[srcId].start();
     }
 }
 
@@ -195,7 +207,6 @@ bool AffiliationLookup::isUnitReg(uint32_t srcId) const
 void AffiliationLookup::clearUnitReg()
 {
     __lock();
-    std::vector<uint32_t> srcToRel = std::vector<uint32_t>();
     LogWarning(LOG_HOST, "%s, releasing all unit registrations", m_name.c_str());
     m_unitRegTable.clear();
     __unlock();
@@ -210,6 +221,9 @@ void AffiliationLookup::groupAff(uint32_t srcId, uint32_t dstId)
 
         // update dynamic affiliation table
         m_grpAffTable[srcId] = dstId;
+
+        m_grpAffTimers[srcId] = Timer(1000U, GRP_AFF_TIMEOUT);
+        m_grpAffTimers[srcId].start();
 
         if (m_verbose) {
             LogInfoEx(LOG_HOST, "%s, group affiliation, srcId = %u, dstId = %u",
@@ -233,23 +247,17 @@ bool AffiliationLookup::groupUnaff(uint32_t srcId)
             LogInfoEx(LOG_HOST, "%s, group unaffiliation, srcId = %u, dstId = %u",
                 m_name.c_str(), srcId, it->second);
         }
-    } else {
-        __unlock();
-        return false;
-    }
 
-    // remove dynamic affiliation table entry
-    try {
-        uint32_t entry = m_grpAffTable.at(srcId); // this value will get discarded
-        (void)entry;                              // but some variants of C++ mark the unordered_map<>::at as nodiscard
         m_grpAffTable.erase(srcId);
+
+        m_grpAffTimers[srcId].stop();
+
         __unlock();
         return true;
-    }
-    catch (...) {
-        __unlock();
-        return false;
-    }
+    } 
+
+    __unlock();
+    return false;
 }
 
 /* Helper to determine if the group destination ID has any affiations. */
@@ -341,12 +349,8 @@ bool AffiliationLookup::grantCh(uint32_t dstId, uint32_t srcId, uint32_t grantTi
         return false;
     }
 
-    if (!m_chLookup->isRFChAvailable()) {
-        return false;
-    }
-
-    uint32_t chNo = m_chLookup->getFirstRFChannel();
-    if (!m_chLookup->removeRFCh(chNo)) {
+    uint32_t chNo = 0U;
+    if (!m_chLookup->takeFirstRFChannel(chNo)) {
         return false;
     }
 
@@ -361,6 +365,8 @@ bool AffiliationLookup::grantCh(uint32_t dstId, uint32_t srcId, uint32_t grantTi
 
     m_grantTimers[dstId] = Timer(1000U, grantTimeout);
     m_grantTimers[dstId].start();
+    m_grantCallTimers[dstId] = StopWatch();
+    m_grantCallTimers[dstId].start();
 
     if (m_verbose) {
         LogInfoEx(LOG_HOST, "%s, granting channel, chNo = %u, dstId = %u, srcId = %u, group = %u",
@@ -450,8 +456,10 @@ bool AffiliationLookup::releaseGrant(uint32_t dstId, bool releaseAll)
         m_uuGrantedTable.erase(dstId);
         m_netGrantedTable.erase(dstId);
 
+        m_grantCallTimers.erase(dstId);
+
         if (m_chLookup != nullptr) {
-            m_chLookup->addRFCh(chNo, true);
+            m_chLookup->freeRFCh(chNo);
         }
 
         if (m_rfGrantChCnt > 0U) {
@@ -591,8 +599,9 @@ uint32_t AffiliationLookup::getGrantedCh(uint32_t dstId)
         m_grantChTable.lock(false);
         auto it = m_grantChTable.find(dstId);
         if (it != m_grantChTable.end()) {
+            uint32_t chNo = it->second;
             m_grantChTable.unlock();
-            return m_grantChTable[dstId];
+            return chNo;
         }
         m_grantChTable.unlock();
     }
@@ -657,10 +666,37 @@ uint32_t AffiliationLookup::getGrantedSrcId(uint32_t dstId)
         m_grantSrcIdTable.lock(false);
         auto it = m_grantSrcIdTable.find(dstId);
         if (it != m_grantSrcIdTable.end()) {
+            uint32_t srcId = it->second;
             m_grantSrcIdTable.unlock();
-            return m_grantSrcIdTable[dstId];
+            return srcId;
         }
         m_grantSrcIdTable.unlock();
+    }
+
+    return 0U;
+}
+
+/* Helper to get the current elapsed time for the given destination ID. */
+
+uint32_t AffiliationLookup::getGrantCallElapsed(uint32_t dstId)
+{
+    if (dstId == 0U) {
+        return 0U;
+    }
+
+    __spinlock();
+
+    if (isGranted(dstId)) {
+        // lookup dynamic channel grant timer table entry
+        m_grantCallTimers.lock(false);
+        auto it = m_grantCallTimers.find(dstId);
+        if (it != m_grantCallTimers.end()) {
+            uint32_t time = it->second.elapsed();
+
+            m_grantCallTimers.unlock();
+            return time;
+        }
+        m_grantCallTimers.unlock();
     }
 
     return 0U;
@@ -693,6 +729,31 @@ void AffiliationLookup::clock(uint32_t ms)
         releaseGrant(dstId, false);
     }
 
+    if (!m_disableGrpAffTimeout) {
+        m_grpAffTable.spinlock();
+
+        // clock all the group affiliation timers
+        m_grpAffTable.lock(false);
+        std::vector<uint32_t> affsToRel = std::vector<uint32_t>();
+        for (auto entry : m_grpAffTable) {
+            uint32_t srcId = entry.first;
+            auto it = m_grpAffTimers.find(srcId);
+            if (it != m_grpAffTimers.end()) {
+                it->second.clock(ms);
+                if (it->second.isRunning() && it->second.hasExpired()) {
+                    affsToRel.push_back(srcId);
+                }
+            }
+        }
+        m_grpAffTable.unlock();
+
+        // release group affiliations that have timed out
+        for (uint32_t srcId : affsToRel) {
+            LogWarning(LOG_HOST, "%s, clearing stale group affiliation, srcId = %u", m_name.c_str(), srcId);
+            groupUnaff(srcId);
+        }
+    }
+
     if (!m_disableUnitRegTimeout) {
         m_unitRegTable.spinlock();
 
@@ -712,7 +773,30 @@ void AffiliationLookup::clock(uint32_t ms)
 
         // release units registrations that have timed out
         for (uint32_t srcId : unitsToDereg) {
+            LogWarning(LOG_HOST, "%s, clearing stale unit deregistration, srcId = %u", m_name.c_str(), srcId);
             unitDereg(srcId, true);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+//  Protected Class Members
+// ---------------------------------------------------------------------------
+
+/* Helper to determine if the source ID has group affiliations. */
+
+bool AffiliationLookup::isSrcIdGrpAff(uint32_t srcId) const
+{
+    __spinlock();
+
+    // lookup dynamic affiliation table entry
+    m_grpAffTable.lock(false);
+    auto it = m_grpAffTable.find(srcId);
+    if (it != m_grpAffTable.end()) {
+        m_grpAffTable.unlock();
+        return true;
+    }
+    m_grpAffTable.unlock();
+
+    return false;
 }

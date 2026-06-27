@@ -124,7 +124,7 @@ bool BaseNetwork::writeGrantReq(const uint8_t mode, const uint32_t srcId, const 
 
 /* Writes enc. key request to the network. */
 
-bool BaseNetwork::writeKeyReq(const uint16_t kId, const uint8_t algId)
+bool BaseNetwork::writeKeyReq(const uint16_t kId, const uint8_t algId, const uint32_t srcId)
 {
     using namespace p25::defines;
     using namespace p25::kmm;
@@ -136,6 +136,7 @@ bool BaseNetwork::writeKeyReq(const uint16_t kId, const uint8_t algId)
     ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
 
     KMMModifyKey modifyKeyCmd = KMMModifyKey();
+    modifyKeyCmd.setSrcLLId(srcId);
     modifyKeyCmd.setDecryptInfoFmt(KMM_DECRYPT_INSTRUCT_NONE);
     modifyKeyCmd.setAlgId(algId);
     modifyKeyCmd.setKId(kId);
@@ -151,6 +152,38 @@ bool BaseNetwork::writeKeyReq(const uint16_t kId, const uint8_t algId)
     //Utils::dump("BaseNetwork::writeKeyReq(), KMM Buffer", buffer, modifyKeyCmd.length() + 11U);
 
     return writeMaster({ NET_FUNC::KEY_REQ, NET_SUBFUNC::NOP }, buffer, modifyKeyCmd.length() + 11U, RTP_END_OF_CALL_SEQ, 0U);
+}
+
+/* Writes LLA enc. key request to the network. */
+
+bool BaseNetwork::writeLLAKeyReq(const uint32_t srcId)
+{
+    using namespace p25::defines;
+    using namespace p25::kmm;
+
+    if (m_status != NET_STAT_RUNNING && m_status != NET_STAT_MST_RUNNING)
+        return false;
+
+    uint8_t buffer[DATA_PACKET_LENGTH];
+    ::memset(buffer, 0x00U, DATA_PACKET_LENGTH);
+
+    KMMModifyKey modifyKeyCmd = KMMModifyKey();
+    modifyKeyCmd.setDstLLId(srcId);
+    modifyKeyCmd.setDecryptInfoFmt(KMM_DECRYPT_INSTRUCT_NONE);
+    modifyKeyCmd.setAlgId(ALGO_AES_128);
+    modifyKeyCmd.setKId(0U);
+
+    KeysetItem ks = KeysetItem();
+    ks.keysetId(0U);
+    ks.algId(ALGO_AES_128);
+    ks.keyLength(P25DEF::MAX_ENC_KEY_LENGTH_BYTES);
+    modifyKeyCmd.setKeysetItem(ks);
+
+    modifyKeyCmd.encode(buffer + 11U);
+
+    //Utils::dump("BaseNetwork::writeLLAKeyReq(), KMM Buffer", buffer, modifyKeyCmd.length() + 11U);
+
+    return writeMaster({ NET_FUNC::KEY_LLA_REQ, NET_SUBFUNC::NOP }, buffer, modifyKeyCmd.length() + 11U, RTP_END_OF_CALL_SEQ, 0U);
 }
 
 /* Writes the local activity log to the network. */
@@ -250,7 +283,7 @@ bool BaseNetwork::announceGroupAffiliation(uint32_t srcId, uint32_t dstId)
     SET_UINT24(srcId, buffer, 0U);
     SET_UINT24(dstId, buffer, 3U);
 
-    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_AFFIL }, buffer, MSG_ANNC_GRP_AFFIL, RTP_END_OF_CALL_SEQ, 0U);
+    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_AFFIL }, buffer, MSG_ANNC_GRP_AFFIL, RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes a group affiliation removal to the network. */
@@ -264,7 +297,7 @@ bool BaseNetwork::announceGroupAffiliationRemoval(uint32_t srcId)
 
     SET_UINT24(srcId, buffer, 0U);
 
-    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_UNAFFIL }, buffer, MSG_ANNC_GRP_UNAFFIL, RTP_END_OF_CALL_SEQ, 0U);
+    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_UNAFFIL }, buffer, MSG_ANNC_GRP_UNAFFIL, RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes a unit registration to the network. */
@@ -278,7 +311,7 @@ bool BaseNetwork::announceUnitRegistration(uint32_t srcId)
 
     SET_UINT24(srcId, buffer, 0U);
 
-    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REG }, buffer, MSG_ANNC_UNIT_REG, RTP_END_OF_CALL_SEQ, 0U);
+    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REG }, buffer, MSG_ANNC_UNIT_REG, RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes a unit deregistration to the network. */
@@ -292,7 +325,7 @@ bool BaseNetwork::announceUnitDeregistration(uint32_t srcId)
 
     SET_UINT24(srcId, buffer, 0U);
 
-    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_DEREG }, buffer, MSG_ANNC_UNIT_REG, RTP_END_OF_CALL_SEQ, 0U);
+    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_DEREG }, buffer, MSG_ANNC_UNIT_REG, RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes a complete update of the peer affiliation list to the network. */
@@ -314,7 +347,28 @@ bool BaseNetwork::announceAffiliationUpdate(const std::unordered_map<uint32_t, u
         offs += 8U;
     }
 
-    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_AFFILS }, buffer, 4U + (affs.size() * 8U), RTP_END_OF_CALL_SEQ, 0U);
+    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_AFFILS }, buffer, 4U + (affs.size() * 8U), RTP_END_OF_CALL_SEQ, 0U, true);
+}
+
+/* Writes a complete update of the peer's unit registration list to the network. */
+
+bool BaseNetwork::announceUnitRegUpdate(const std::vector<uint32_t> regs)
+{
+    if (m_status != NET_STAT_RUNNING && m_status != NET_STAT_MST_RUNNING)
+        return false;
+
+    DECLARE_UINT8_ARRAY(buffer, 4U + (regs.size() * 3U));
+
+    SET_UINT32(regs.size(), buffer, 0U);
+
+    // write unit IDs to active unit registration payload
+    uint32_t offs = 4U;
+    for (auto it : regs) {
+        SET_UINT24(it, buffer, offs);
+        offs += 3U;
+    }
+
+    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REGS }, buffer, 4U + (regs.size() * 3U), RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Writes a complete update of the peer's voice channel list to the network. */
@@ -335,7 +389,7 @@ bool BaseNetwork::announceSiteVCs(const std::vector<uint32_t> peers)
         offs += 4U;
     }
 
-    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_SITE_VC }, buffer, 4U + (peers.size() * 4U), RTP_END_OF_CALL_SEQ, 0U);
+    return writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_SITE_VC }, buffer, 4U + (peers.size() * 4U), RTP_END_OF_CALL_SEQ, 0U, true);
 }
 
 /* Resets the DMR ring buffer for the given slot. */
@@ -595,6 +649,145 @@ UInt8Array BaseNetwork::readP25(bool& ret, uint32_t& frameLength)
     m_rxP25Data.get(buffer.get(), length);
 
     return buffer;
+}
+
+/* Helper to test if the given buffer contains a complete set of P25 LDU voice vectors for the given DUID type. */
+
+bool BaseNetwork::hasLDUVectors(const uint8_t* data, uint32_t len, P25DEF::DUID::E duid)
+{
+    switch (duid) {
+        case P25DEF::DUID::LDU1:
+            {
+                if ((data[0U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE1) && (data[22U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE2) &&
+                    (data[36U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE3) && (data[53U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE4) &&
+                    (data[70U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE5) && (data[87U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE6) &&
+                    (data[104U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE7) && (data[121U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE8) &&
+                    (data[138U] == P25DFSIDEF::DFSIFrameType::LDU1_VOICE9)) {
+                    return true;
+                }
+            }
+            break;
+        case P25DEF::DUID::LDU2:
+            {
+                if ((data[0U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE10) && (data[22U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE11) &&
+                    (data[36U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE12) && (data[53U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE13) &&
+                    (data[70U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE14) && (data[87U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE15) &&
+                    (data[104U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE16) && (data[121U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE17) &&
+                    (data[138U] == P25DFSIDEF::DFSIFrameType::LDU2_VOICE18)) {
+                    return true;
+                }
+            }
+            break;
+
+        default:
+            return false;
+    }
+
+    return false;
+}
+
+/* Helper to reconstruct a P25 LDU voice vectors from the given DFSI data. */
+
+uint8_t BaseNetwork::reconstructLDUVectors(const uint8_t* dfsiData, uint32_t len, p25::dfsi::LC* dfsiLC, P25DEF::DUID::E duid, 
+    uint8_t* outLDU)
+{
+    if (dfsiData == nullptr || outLDU == nullptr)
+        return 9U;
+
+    constexpr P25DFSIDEF::DFSIFrameType::E LDU1_FRAME_TYPES[] = {
+        P25DFSIDEF::DFSIFrameType::LDU1_VOICE1, P25DFSIDEF::DFSIFrameType::LDU1_VOICE2, P25DFSIDEF::DFSIFrameType::LDU1_VOICE3,
+        P25DFSIDEF::DFSIFrameType::LDU1_VOICE4, P25DFSIDEF::DFSIFrameType::LDU1_VOICE5, P25DFSIDEF::DFSIFrameType::LDU1_VOICE6,
+        P25DFSIDEF::DFSIFrameType::LDU1_VOICE7, P25DFSIDEF::DFSIFrameType::LDU1_VOICE8, P25DFSIDEF::DFSIFrameType::LDU1_VOICE9
+    };
+    constexpr uint32_t LDU1_FRAME_LENGTH[] = {
+        P25DFSIDEF::DFSI_LDU1_VOICE1_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU1_VOICE2_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU1_VOICE3_FRAME_LENGTH_BYTES,
+        P25DFSIDEF::DFSI_LDU1_VOICE4_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU1_VOICE5_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU1_VOICE6_FRAME_LENGTH_BYTES,
+        P25DFSIDEF::DFSI_LDU1_VOICE7_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU1_VOICE8_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU1_VOICE9_FRAME_LENGTH_BYTES
+    };
+
+    constexpr P25DFSIDEF::DFSIFrameType::E LDU2_FRAME_TYPES[] = {
+        P25DFSIDEF::DFSIFrameType::LDU2_VOICE10, P25DFSIDEF::DFSIFrameType::LDU2_VOICE11, P25DFSIDEF::DFSIFrameType::LDU2_VOICE12,
+        P25DFSIDEF::DFSIFrameType::LDU2_VOICE13, P25DFSIDEF::DFSIFrameType::LDU2_VOICE14, P25DFSIDEF::DFSIFrameType::LDU2_VOICE15,
+        P25DFSIDEF::DFSIFrameType::LDU2_VOICE16, P25DFSIDEF::DFSIFrameType::LDU2_VOICE17, P25DFSIDEF::DFSIFrameType::LDU2_VOICE18
+    };
+    constexpr uint32_t LDU2_FRAME_LENGTH[] = {
+        P25DFSIDEF::DFSI_LDU2_VOICE10_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU2_VOICE11_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU2_VOICE12_FRAME_LENGTH_BYTES,
+        P25DFSIDEF::DFSI_LDU2_VOICE13_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU2_VOICE14_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU2_VOICE15_FRAME_LENGTH_BYTES,
+        P25DFSIDEF::DFSI_LDU2_VOICE16_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU2_VOICE17_FRAME_LENGTH_BYTES, P25DFSIDEF::DFSI_LDU2_VOICE18_FRAME_LENGTH_BYTES
+    };
+
+    constexpr uint8_t FRAME_OFFSETS[] = { 10U, 26U, 55U, 80U, 105U, 130U, 155U, 180U, 204U };
+
+    uint8_t missing = 0U;
+    uint32_t packetOffset = 0U;
+
+    // reset outLDU to NULL frames
+    for (int n = 0; n < 9; n++) {
+        ::memcpy(outLDU + FRAME_OFFSETS[n], P25DEF::NULL_IMBE, P25DEF::RAW_IMBE_LENGTH_BYTES);
+    }
+
+    /*
+    ** bryanb: this centralizes the multiple instances of DFSI unpacking that are done throughout DVM;
+    **  However, in most cases unless you have packet corruption, you will either have all frames present or
+    **  all frames missing, so the logic here is a bit misleading because it implies that you could have some frames
+    **  present and some frames missing, which is not really the case in practice; the only time you would get a false
+    **  return from decodeLDU1 or decodeLDU2 is if the frame had an unexpected frame type, which would be an indication
+    **  of packet corruption; in that case, we would want to treat that frame as missing, but we would still want to 
+    **  attempt to decode the other frames in the packet, which is what this logic does.
+    **
+    **  So in practice, you will either get 0 frames missing (if all frames are present) or 9 frames missing (if all 
+    **  frames are missing or if there is packet corruption), but you could also get some intermediate number of frames 
+    **  missing if there is packet corruption that affects some but not all of the frames in the packet.
+    */
+
+    if (duid == P25DEF::DUID::LDU1) {
+        for (int n = 0; n < 9; n++) {
+            bool haveFrame = (packetOffset + LDU1_FRAME_LENGTH[n]) <= len && dfsiData[packetOffset] == LDU1_FRAME_TYPES[n];
+            if (haveFrame) {
+                dfsiLC->setFrameType(LDU1_FRAME_TYPES[n]);
+
+                // bryanb: this logic is misleading really -- because the only time we would get a false return from 
+                // decodeLDU1 is if the frame had an unexpected frame type
+                if (!dfsiLC->decodeLDU1(dfsiData + packetOffset, outLDU + FRAME_OFFSETS[n])) {
+                    missing++;
+                }
+            }
+            else {
+                missing++;
+            }
+
+            packetOffset += LDU1_FRAME_LENGTH[n];
+        }
+
+        if (missing == 9U) {
+            return 9U; // all frames missing, return the total number of frames that were expected
+        }
+    }
+    else if (duid == P25DEF::DUID::LDU2) {
+        for (int n = 0; n < 9; n++) {
+            bool haveFrame = (packetOffset + LDU2_FRAME_LENGTH[n]) <= len && dfsiData[packetOffset] == LDU2_FRAME_TYPES[n];
+            if (haveFrame) {
+                dfsiLC->setFrameType(LDU2_FRAME_TYPES[n]);
+
+                // bryanb: this logic is misleading really -- because the only time we would get a false return from 
+                // decodeLDU2 is if the frame had an unexpected frame type
+                if (!dfsiLC->decodeLDU2(dfsiData + packetOffset, outLDU + FRAME_OFFSETS[n])) {
+                    missing++;
+                }
+            }
+            else {
+                missing++;
+            }
+
+            packetOffset += LDU2_FRAME_LENGTH[n];
+        }
+
+        if (missing == 9U) {
+            return 9U; // all frames missing, return the total number of frames that were expected
+        }
+    }
+
+    return missing;
 }
 
 /* Writes P25 LDU1 frame data to the network. */

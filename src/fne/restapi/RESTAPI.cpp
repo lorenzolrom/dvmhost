@@ -164,6 +164,8 @@ json::object tgToJson(const TalkgroupRuleGroupVoice& groupVoice)
         config["affiliated"].set<bool>(affiliated);
         bool parrot = groupVoice.config().parrot();
         config["parrot"].set<bool>(parrot);
+        uint8_t strapping = groupVoice.config().strapping();
+        config["strapping"].set<uint8_t>(strapping);
 
         json::array inclusions = json::array();
         std::vector<uint32_t> inclusion = groupVoice.config().inclusion();
@@ -320,10 +322,16 @@ TalkgroupRuleGroupVoice jsonToTG(json::object& req, HTTPPayload& reply)
             return TalkgroupRuleGroupVoice();
         }
 
+        uint8_t strapping = TG_STRAPPING_SELECTABLE;
+        if (configObj["strapping"].is<uint8_t>()) {
+            strapping = configObj["strapping"].get<uint8_t>();
+        }
+
         TalkgroupRuleConfig config = groupVoice.config();
         config.active(configObj["active"].get<bool>());
         config.affiliated(configObj["affiliated"].get<bool>());
         config.parrot(configObj["parrot"].get<bool>());
+        config.strapping(strapping);
 
         if (!configObj["inclusion"].is<json::array>()) {
             errorPayload(reply, "TG configuration \"inclusion\" was not a valid JSON array");
@@ -770,9 +778,9 @@ void RESTAPI::restAPI_PutAuth(const HTTPPayload& request, HTTPPayload& reply, co
         return;
     }
 
-    if (auth.size() > 64) {
+    if (auth.size() != 64) {
         invalidateHostToken(host);
-        errorPayload(reply, "auth cannot be longer than 64 characters");
+        errorPayload(reply, "auth must be 64 characters");
         return;
     }
 
@@ -875,8 +883,8 @@ void RESTAPI::restAPI_GetPeerQuery(const HTTPPayload& request, HTTPPayload& repl
 
     json::array peers = json::array();
     if (m_network != nullptr) {
+        m_network->m_peers.shared_lock();
         if (m_network->m_peers.size() > 0) {
-            m_network->m_peers.shared_lock();
             for (auto entry : m_network->m_peers) {
                 uint32_t peerId = entry.first;
                 network::FNEPeerConnection* peer = entry.second;
@@ -889,11 +897,11 @@ void RESTAPI::restAPI_GetPeerQuery(const HTTPPayload& request, HTTPPayload& repl
                     peers.push_back(json::value(peerObj));
                 }
             }
-            m_network->m_peers.shared_unlock();
         }
         else {
             LogError(LOG_REST, "peer query failed, no peers connected to this FNE");
         }
+        m_network->m_peers.shared_unlock();
 
         // report any peers from replica peers
         if (m_network->m_peerReplicaPeers.size() > 0) {
@@ -930,7 +938,9 @@ void RESTAPI::restAPI_GetPeerCount(const HTTPPayload& request, HTTPPayload& repl
 
     json::array peers = json::array();
     if (m_network != nullptr) {
+        m_network->m_peers.shared_lock();
         uint32_t count = m_network->m_peers.size();
+        m_network->m_peers.shared_unlock();
         response["peerCount"].set<uint32_t>(count);
     }
 
@@ -1025,6 +1035,16 @@ void RESTAPI::restAPI_GetRIDQuery(const HTTPPayload& request, HTTPPayload& reply
                 ridObj["enabled"].set<bool>(enabled);
                 std::string alias = entry.second.radioAlias();
                 ridObj["alias"].set<std::string>(alias);
+                bool canRequestKeys = entry.second.canRequestKeys();
+                ridObj["canRequestKeys"].set<bool>(canRequestKeys);
+                bool canRekey = entry.second.canRekey();
+                ridObj["canRekey"].set<bool>(canRekey);
+                json::array allowedKIds = json::array();
+                std::vector<uint16_t> kIds = entry.second.allowedKIds();
+                for (uint16_t kId : kIds) {
+                    allowedKIds.push_back(json::value((double)kId));
+                }
+                ridObj["allowedKIds"].set<json::array>(allowedKIds);
 
                 rids.push_back(json::value(ridObj));
             }
@@ -1070,10 +1090,54 @@ void RESTAPI::restAPI_PutRIDAdd(const HTTPPayload& request, HTTPPayload& reply, 
         alias = req["alias"].get<std::string>();
     }
 
+    bool canRequestKeys = false;
+    if (req.find("canRequestKeys") != req.end()) {
+        if (!req["canRequestKeys"].is<bool>()) {
+            errorPayload(reply, "canRequestKeys was not a valid boolean");
+            return;
+        }
+
+        canRequestKeys = req["canRequestKeys"].get<bool>();
+    }
+
+    bool canRekey = false;
+    if (req.find("canRekey") != req.end()) {
+        if (!req["canRekey"].is<bool>()) {
+            errorPayload(reply, "canRekey was not a valid boolean");
+            return;
+        }
+
+        canRekey = req["canRekey"].get<bool>();
+    }
+
+    std::vector<uint16_t> allowedKIds;
+    if (req.find("allowedKIds") != req.end()) {
+        if (!req["allowedKIds"].is<json::array>()) {
+            errorPayload(reply, "allowedKIds was not a valid JSON array");
+            return;
+        }
+
+        json::array kIdArray = req["allowedKIds"].get<json::array>();
+        for (auto entry : kIdArray) {
+            if (!entry.is<uint32_t>()) {
+                errorPayload(reply, "allowedKIds entry was not a valid number");
+                return;
+            }
+
+            uint32_t value = entry.get<uint32_t>();
+            if (value > 0xFFFFU) {
+                errorPayload(reply, "allowedKIds entry exceeded 16-bit key id range");
+                return;
+            }
+
+            allowedKIds.push_back((uint16_t)value);
+        }
+    }
+
     LogInfoEx(LOG_REST, "request to add RID ACL, rid = %u", rid);
 
     // The addEntry function will automatically update an existing entry, so no need to check for an exisitng one here
-    m_ridLookup->addEntry(rid, enabled, alias);
+    m_ridLookup->addEntry(rid, enabled, alias, "", canRequestKeys, canRekey, allowedKIds);
 /*    
     if (m_network != nullptr) {
         m_network->m_forceListUpdate = true;
@@ -1800,8 +1864,8 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
     if (m_network != nullptr) {
         // peer statistics (right now this is just a list of connected peers)
         json::array peerStats = json::array();
+        m_network->m_peers.shared_lock();
         if (m_network->m_peers.size() > 0) {
-            m_network->m_peers.shared_lock();
             for (auto entry : m_network->m_peers) {
                 uint32_t peerId = entry.first;
                 network::FNEPeerConnection* peer = entry.second;
@@ -1851,8 +1915,8 @@ void RESTAPI::restAPI_GetStats(const HTTPPayload& request, HTTPPayload& reply, c
                     peerStats.push_back(json::value(peerObj));
                 }
             }
-            m_network->m_peers.shared_unlock();
         }
+        m_network->m_peers.shared_unlock();
         response["peerStats"].set<json::array>(peerStats);
 
         // table load statistics
@@ -2082,42 +2146,48 @@ void RESTAPI::restAPI_GetAffList(const HTTPPayload& request, HTTPPayload& reply,
     json::array affs = json::array();
     if (m_network != nullptr) {
         uint32_t totalAffiliations = 0U;
+        m_network->m_peers.shared_lock();
         if (m_network->m_peers.size() > 0) {
+            std::vector<uint32_t> peerIds = std::vector<uint32_t>();
+
             m_network->m_peers.shared_lock();
-            m_network->m_peerAffiliations.lock(false);
             for (auto entry : m_network->m_peers) {
                 uint32_t peerId = entry.first;
                 network::FNEPeerConnection* peer = entry.second;
                 if (peer != nullptr) {
-                    lookups::AffiliationLookup* affLookup = m_network->m_peerAffiliations[peerId];
-                    if (affLookup != nullptr) {
-                        std::unordered_map<uint32_t, uint32_t> affTable = affLookup->grpAffTable();
-
-                        json::object peerObj = json::object();
-                        peerObj["peerId"].set<uint32_t>(peerId);
-
-                        json::array peerAffs = json::array();
-                        if (affLookup->grpAffSize() > 0U) {
-                            for (auto entry : affTable) {
-                                uint32_t srcId = entry.first;
-                                uint32_t dstId = entry.second;
-
-                                json::object affObj = json::object();
-                                affObj["srcId"].set<uint32_t>(srcId);
-                                affObj["dstId"].set<uint32_t>(dstId);
-                                peerAffs.push_back(json::value(affObj));
-                            }
-                        }
-
-                        peerObj["affiliations"].set<json::array>(peerAffs);
-                        affs.push_back(json::value(peerObj));
-                        ++totalAffiliations;
-                    }
+                    peerIds.push_back(peerId);
                 }
             }
-            m_network->m_peerAffiliations.unlock();
             m_network->m_peers.shared_unlock();
+
+            for (uint32_t peerId : peerIds) {
+                std::shared_ptr<fne_lookups::AffiliationLookup> affLookup = m_network->getPeerAffiliations(peerId);
+                if (affLookup != nullptr) {
+                    std::unordered_map<uint32_t, uint32_t> affTable = affLookup->grpAffTable();
+
+                    json::object peerObj = json::object();
+                    peerObj["peerId"].set<uint32_t>(peerId);
+
+                    json::array peerAffs = json::array();
+                    if (affLookup->grpAffSize() > 0U) {
+                        for (auto entry : affTable) {
+                            uint32_t srcId = entry.first;
+                            uint32_t dstId = entry.second;
+
+                            json::object affObj = json::object();
+                            affObj["srcId"].set<uint32_t>(srcId);
+                            affObj["dstId"].set<uint32_t>(dstId);
+                            peerAffs.push_back(json::value(affObj));
+                        }
+                    }
+
+                    peerObj["affiliations"].set<json::array>(peerAffs);
+                    affs.push_back(json::value(peerObj));
+                    ++totalAffiliations;
+                }
+            }
         }
+        m_network->m_peers.shared_unlock();
 
         response["totalAffiliations"].set<uint32_t>(totalAffiliations);
     }

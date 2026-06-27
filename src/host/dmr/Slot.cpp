@@ -5,7 +5,7 @@
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  *  Copyright (C) 2015,2016,2017,2018 Jonathan Naylor, G4KLX
- *  Copyright (C) 2017-2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2017-2026 Bryan Biedenkapp, N2PLL
  *
  */
 #include "Defines.h"
@@ -168,7 +168,8 @@ Slot::Slot(uint32_t slotNo, uint32_t timeout, uint32_t tgHang, uint32_t queueSiz
     m_notifyCC(true),
     m_ccDebug(debug),
     m_verbose(verbose),
-    m_debug(debug)
+    m_debug(debug),
+    m_reverseChannelCommand(network::NET_ICC::NOP)
 {
     m_interval.start();
 
@@ -289,7 +290,7 @@ bool Slot::processFrame(uint8_t *data, uint32_t len)
     if (dataSync) {
         DataType::E dataType = (DataType::E)(data[1U] & 0x0FU);
 
-        if (dataType == DataType::CSBK) {
+        if (dataType == DataType::CSBK || dataType == DataType::MBC_HEADER || dataType == DataType::MBC_DATA) {
             return m_control->process(data, len);
         }
 
@@ -495,7 +496,7 @@ void Slot::processNetwork(const data::NetData& dmrData)
         // if *this slot* is the TSCC slot, stop processing after this point
         if (m_enableTSCC && m_dedicatedTSCC)
         {
-            if (dataType != DataType::CSBK)
+            if (dataType != DataType::CSBK && dataType != DataType::MBC_HEADER && dataType != DataType::MBC_DATA)
                 return;
             else {
                 if (m_slotNo != s_dmr->m_tsccSlotNo)
@@ -507,6 +508,8 @@ void Slot::processNetwork(const data::NetData& dmrData)
     switch (dataType)
     {
     case DataType::CSBK:
+    case DataType::MBC_HEADER:
+    case DataType::MBC_DATA:
         m_control->processNetwork(dmrData);
         break;
     case DataType::VOICE_LC_HEADER:
@@ -548,6 +551,27 @@ void Slot::processInCallCtrl(network::NET_ICC::ENUM command, uint32_t dstId)
                 m_rfLastSrcId = 0U;
                 m_rfTGHang.stop();
                 m_rfState = RS_RF_REJECTED;
+                m_reverseChannelCommand = network::NET_ICC::DMR_RC_CEASE_TRANSMIT;
+            }
+        }
+        break;
+
+    case network::NET_ICC::DMR_RC_CEASE_TRANSMIT:
+    case network::NET_ICC::DMR_RC_REQUEST_CEASE_TRANSMIT:
+    case network::NET_ICC::DMR_RC_MAXIMUM_POWER:
+    case network::NET_ICC::DMR_RC_MINIMUM_POWER:
+    case network::NET_ICC::DMR_RC_POWER_INCREASE_ONE_STEP:
+    case network::NET_ICC::DMR_RC_POWER_DECREASE_ONE_STEP:
+        {
+            if (m_rfState == RS_RF_AUDIO && m_rfLC != nullptr && (dstId == 0U || m_rfLC->getDstId() == dstId)) {
+                m_reverseChannelCommand = command;
+
+                if (m_verbose) {
+                    LogInfoEx(LOG_DMR, "Slot %u, set DMR reverse channel command = $%02X, dstId = %u", m_slotNo, command, dstId);
+                }
+            }
+            else if (m_verbose) {
+                LogInfoEx(LOG_DMR, "Slot %u, ignored DMR reverse channel command = $%02X, no active matching RF audio call, dstId = %u", m_slotNo, command, dstId);
             }
         }
         break;
@@ -789,6 +813,13 @@ void Slot::clockSiteData(uint32_t ms)
             if (m_rfState == RS_RF_LISTENING && m_netState == RS_NET_IDLE) {
                 m_control->writeAdjSSNetwork();
                 if (s_network != nullptr) {
+                    // network announce our unit registration table if we have one
+                    if (s_affiliations->unitRegSize() > 0) {
+                        auto regs = s_affiliations->unitRegTable();
+                        s_network->announceUnitRegUpdate(regs);
+                    }
+
+                    // network announce our affiliation table if we have one
                     if (s_affiliations->grpAffSize() > 0) {
                         auto affs = s_affiliations->grpAffTable();
                         s_network->announceAffiliationUpdate(affs);

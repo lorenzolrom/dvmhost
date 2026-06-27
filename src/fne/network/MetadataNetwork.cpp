@@ -4,10 +4,11 @@
  * GPLv2 Open Source. Use is subject to license terms.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  Copyright (C) 2023-2025 Bryan Biedenkapp, N2PLL
+ *  Copyright (C) 2023-2026 Bryan Biedenkapp, N2PLL
  *
  */
 #include "fne/Defines.h"
+#include "common/edac/SHA256.h"
 #include "common/zlib/Compression.h"
 #include "common/Log.h"
 #include "common/Utils.h"
@@ -21,6 +22,12 @@ using namespace network::callhandler;
 using namespace compress;
 
 #include <cassert>
+
+// ---------------------------------------------------------------------------
+//  Constants
+// ---------------------------------------------------------------------------
+
+const uint32_t TIMEOUT_MAX_REPL = 5000U; // 5 seconds
 
 // ---------------------------------------------------------------------------
 //  Public Class Members
@@ -37,7 +44,7 @@ MetadataNetwork::MetadataNetwork(HostFNE* host, TrafficNetwork* trafficNetwork, 
     m_status(NET_STAT_INVALID),
     m_peerReplicaActPkt(),
     m_peerTreeListPkt(),
-    m_threadPool(workerCnt, "diag")
+    m_threadPool(workerCnt, "meta")
 {
     assert(trafficNetwork != nullptr);
     assert(host != nullptr);
@@ -193,6 +200,7 @@ void MetadataNetwork::taskNetworkRx(NetPacketRequest* req)
 
         if (req->length > 0) {
             uint32_t peerId = req->fneHeader.getPeerId();
+            uint32_t ssrc = req->rtpHeader.getSSRC();
             uint32_t streamId = req->fneHeader.getStreamId();
 
             // process incoming message function opcodes
@@ -442,9 +450,762 @@ void MetadataNetwork::taskNetworkRx(NetPacketRequest* req)
                         }
                         break;
                     default:
-                        network->writePeerNAK(peerId, network->createStreamId(), TAG_TRANSFER, NET_CONN_NAK_ILLEGAL_PACKET);
-                        Utils::dump("Unknown transfer opcode from the peer", req->buffer, req->length);
+                        {
+                            LogWarning(LOG_MASTER, "PEER %u, unknown/unsupported transfer opcode %u", peerId, req->fneHeader.getSubFunction());
+                            if (network->m_debug)
+                                Utils::dump("Unknown/unsupported transfer opcode from the peer", req->buffer, req->length);
+                        }
                         break;
+                    }
+                }
+                break;
+
+            case NET_FUNC::ANNOUNCE:                                    // Announce
+                {
+                    // process incoming message subfunction opcodes
+                    switch (req->fneHeader.getSubFunction()) {
+                    case NET_SUBFUNC::ANNC_SUBFUNC_GRP_AFFIL:           // Announce Group Affiliation
+                        {
+                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                                FNEPeerConnection* connection = network->m_peers[peerId];
+                                if (connection != nullptr) {
+                                    std::string ip = udp::Socket::address(req->address);
+                                    std::shared_ptr<fne_lookups::AffiliationLookup> aff = network->getPeerAffiliations(peerId);
+                                    if (aff == nullptr) {
+                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
+                                    }
+
+                                    // validate peer (simple validation really)
+                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
+                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
+                                        uint32_t dstId = GET_UINT24(req->buffer, 3U);           // Destination Address
+                                        aff->groupUnaff(srcId);
+                                        aff->groupAff(srcId, dstId);
+
+                                        // attempt to repeat traffic to replica masters
+                                        if (network->m_host->m_peerNetworks.size() > 0) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
+                                                if (peer.second != nullptr) {
+                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_AFFIL }, 
+                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, true);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    case NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REG:            // Announce Unit Registration
+                        {
+                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                                FNEPeerConnection* connection = network->m_peers[peerId];
+                                if (connection != nullptr) {
+                                    std::string ip = udp::Socket::address(req->address);
+                                    std::shared_ptr<fne_lookups::AffiliationLookup> aff = network->getPeerAffiliations(peerId);
+                                    if (aff == nullptr) {
+                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
+                                    }
+
+                                    // validate peer (simple validation really)
+                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
+                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
+                                        aff->unitReg(srcId, ssrc);
+                                        network->m_globalAff->unitReg(srcId, ssrc);
+
+                                        // attempt to repeat traffic to replica masters
+                                        if (network->m_host->m_peerNetworks.size() > 0) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
+                                                if (peer.second != nullptr) {
+                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REG }, 
+                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, true, 0U, ssrc);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    case NET_SUBFUNC::ANNC_SUBFUNC_UNIT_DEREG:          // Announce Unit Deregistration
+                        {
+                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                                FNEPeerConnection* connection = network->m_peers[peerId];
+                                if (connection != nullptr) {
+                                    std::string ip = udp::Socket::address(req->address);
+                                    std::shared_ptr<fne_lookups::AffiliationLookup> aff = network->getPeerAffiliations(peerId);
+                                    if (aff == nullptr) {
+                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
+                                    }
+
+                                    // validate peer (simple validation really)
+                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
+                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
+                                        aff->unitDereg(srcId);
+                                        network->m_globalAff->unitDereg(srcId);
+
+                                        // attempt to repeat traffic to replica masters
+                                        if (network->m_host->m_peerNetworks.size() > 0) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
+                                                if (peer.second != nullptr) {
+                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_DEREG }, 
+                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, true);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    case NET_SUBFUNC::ANNC_SUBFUNC_GRP_UNAFFIL:         // Announce Group Affiliation Removal
+                        {
+                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                                FNEPeerConnection* connection = network->m_peers[peerId];
+                                if (connection != nullptr) {
+                                    std::string ip = udp::Socket::address(req->address);
+                                    std::shared_ptr<fne_lookups::AffiliationLookup> aff = network->getPeerAffiliations(peerId);
+                                    if (aff == nullptr) {
+                                        LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
+                                    }
+
+                                    // validate peer (simple validation really)
+                                    if (connection->connected() && connection->address() == ip && aff != nullptr) {
+                                        uint32_t srcId = GET_UINT24(req->buffer, 0U);           // Source Address
+                                        aff->groupUnaff(srcId);
+                                        network->m_globalAff->groupUnaff(srcId);
+
+                                        // attempt to repeat traffic to replica masters
+                                        if (network->m_host->m_peerNetworks.size() > 0) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
+                                                if (peer.second != nullptr) {
+                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_GRP_UNAFFIL }, 
+                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, true);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    case NET_SUBFUNC::ANNC_SUBFUNC_AFFILS:              // Announce Update All Affiliations
+                        {
+                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                                FNEPeerConnection* connection = network->m_peers[peerId];
+                                if (connection != nullptr) {
+                                    std::string ip = udp::Socket::address(req->address);
+
+                                    // validate peer (simple validation really)
+                                    if (connection->connected() && connection->address() == ip) {
+                                        std::shared_ptr<fne_lookups::AffiliationLookup> aff = network->getPeerAffiliations(peerId);
+                                        if (aff == nullptr) {
+                                            LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
+                                            network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
+                                        }
+
+                                        if (aff != nullptr) {
+                                            aff->clearGroupAff(0U, true);
+
+                                            // update TGID lists
+                                            uint32_t len = GET_UINT32(req->buffer, 0U);
+                                            uint32_t offs = 4U;
+                                            for (uint32_t i = 0; i < len; i++) {
+                                                uint32_t srcId = GET_UINT24(req->buffer, offs);
+                                                uint32_t dstId = GET_UINT24(req->buffer, offs + 4U);
+
+                                                aff->groupAff(srcId, dstId);
+                                                network->m_globalAff->groupAff(srcId, dstId);
+                                                offs += 8U;
+                                            }
+                                            LogInfoEx(LOG_MASTER, "PEER %u (%s) announced %u affiliations", peerId, connection->identWithQualifier().c_str(), len);
+
+                                            // attempt to repeat traffic to replica masters
+                                            if (network->m_host->m_peerNetworks.size() > 0) {
+                                                for (auto& peer : network->m_host->m_peerNetworks) {
+                                                    if (peer.second != nullptr) {
+                                                        if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                            peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_AFFILS }, 
+                                                                req->buffer, req->length, req->rtpHeader.getSequence(), streamId, true);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    case NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REGS:           // Announce Update All Unit Registrations
+                        {
+                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                                FNEPeerConnection* connection = network->m_peers[peerId];
+                                if (connection != nullptr) {
+                                    std::string ip = udp::Socket::address(req->address);
+
+                                    // validate peer (simple validation really)
+                                    if (connection->connected() && connection->address() == ip) {
+                                        std::shared_ptr<fne_lookups::AffiliationLookup> aff = network->getPeerAffiliations(peerId);
+                                        if (aff == nullptr) {
+                                            LogError(LOG_MASTER, "PEER %u (%s) has uninitialized affiliations lookup?", peerId, connection->identWithQualifier().c_str());
+                                            network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_INVALID);
+                                        }
+
+                                        if (aff != nullptr) {
+                                            aff->clearUnitReg();
+
+                                            // update unit registration lists
+                                            uint32_t len = GET_UINT32(req->buffer, 0U);
+                                            uint32_t offs = 4U;
+                                            for (uint32_t i = 0; i < len; i++) {
+                                                uint32_t srcId = GET_UINT24(req->buffer, offs);
+
+                                                aff->unitReg(srcId, ssrc);
+                                                network->m_globalAff->unitReg(srcId, ssrc);
+                                                offs += 3U;
+                                            }
+                                            LogInfoEx(LOG_MASTER, "PEER %u (%s) announced %u unit registrations", peerId, connection->identWithQualifier().c_str(), len);
+
+                                            // attempt to repeat traffic to replica masters
+                                            if (network->m_host->m_peerNetworks.size() > 0) {
+                                                for (auto& peer : network->m_host->m_peerNetworks) {
+                                                    if (peer.second != nullptr) {
+                                                        if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                            peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_UNIT_REGS }, 
+                                                                req->buffer, req->length, req->rtpHeader.getSequence(), streamId, true);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    case NET_SUBFUNC::ANNC_SUBFUNC_SITE_VC:             // Announce Site VCs
+                        {
+                            if (peerId > 0 && (network->m_peers.find(peerId) != network->m_peers.end())) {
+                                FNEPeerConnection* connection = network->m_peers[peerId];
+                                if (connection != nullptr) {
+                                    std::string ip = udp::Socket::address(req->address);
+
+                                    // validate peer (simple validation really)
+                                    if (connection->connected() && connection->address() == ip) {
+                                        std::vector<uint32_t> vcPeers;
+
+                                        // update peer association
+                                        uint32_t len = GET_UINT32(req->buffer, 0U);
+                                        uint32_t offs = 4U;
+                                        for (uint32_t i = 0; i < len; i++) {
+                                            uint32_t vcPeerId = GET_UINT32(req->buffer, offs);
+                                            if (vcPeerId > 0 && (network->m_peers.find(vcPeerId) != network->m_peers.end())) {
+                                                FNEPeerConnection* vcConnection = network->m_peers[vcPeerId];
+                                                if (vcConnection != nullptr) {
+                                                    vcConnection->ccPeerId(peerId);
+                                                    vcPeers.push_back(vcPeerId);
+                                                }
+                                            }
+                                            offs += 4U;
+                                        }
+                                        LogInfoEx(LOG_MASTER, "PEER %u (%s) announced %u VCs", peerId, connection->identWithQualifier().c_str(), len);
+                                        network->m_ccPeerMap[peerId] = vcPeers;
+
+                                        // attempt to repeat traffic to replica masters
+                                        if (network->m_host->m_peerNetworks.size() > 0) {
+                                            for (auto& peer : network->m_host->m_peerNetworks) {
+                                                if (peer.second != nullptr) {
+                                                    if (peer.second->isEnabled() && peer.second->isReplica()) {
+                                                        peer.second->writeMaster({ NET_FUNC::ANNOUNCE, NET_SUBFUNC::ANNC_SUBFUNC_SITE_VC }, 
+                                                            req->buffer, req->length, req->rtpHeader.getSequence(), streamId, true);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        network->writePeerNAK(peerId, streamId, TAG_ANNOUNCE, NET_CONN_NAK_FNE_UNAUTHORIZED);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    default:
+                        {
+                            LogWarning(LOG_MASTER, "PEER %u, unknown/unsupported announcement opcode %u", peerId, req->fneHeader.getSubFunction());
+                            if (network->m_debug)
+                                Utils::dump("Unknown/unsupported announcement opcode from the peer", req->buffer, req->length);
+                        }
+                        break;
+                    }
+                }
+                break;
+
+            case NET_FUNC::KEYS_INVENTORY:                              // Encryption Key Container Inventory
+                {
+                    if (!network->m_host->m_cryptoLookup->isRemoteAccessEnabled()) {
+                        LogError(LOG_MASTER, "PEER %u requested enc. key inventory, but remote access is disabled, no response", peerId);
+                        break;
+                    }
+
+                    lookups::PeerId peerEntry = network->m_peerListLookup->find(peerId);
+                    if (peerEntry.peerDefault()) {
+                        LogError(LOG_MASTER, "PEER %u requested enc. key inventory but is not allowed, no response", peerId);
+                        break;
+                    } else {
+                        if (!peerEntry.canRequestKeys()) {
+                            LogError(LOG_MASTER, "PEER %u requested enc. key inventory but is not allowed, no response", peerId);
+                            break;
+                        }
+                    }
+
+                    // keys inventory operates differently from the rest of the network opcodes...and does not require
+                    // an established connection to the master, so we will not validate the peer connection state here
+                    if (peerId > 0 && !peerEntry.peerDefault()) {
+                        if (req->length < 80) {
+                            LogError(LOG_MASTER, "PEER %u requested enc. key inventory, but payload length was invalid (%u bytes), no response", peerId, req->length);
+                            break;
+                        }
+
+                        // scope intentional
+                        {
+                            // get the peer password hash from the frame message
+                            DECLARE_UINT8_ARRAY(peerHash, 32U);
+                            ::memcpy(peerHash, req->buffer + 8U, 32U);
+
+                            uint8_t peerSalt[4U];
+                            ::memset(peerSalt, 0x00U, 4U);
+                            ::memcpy(peerSalt, req->buffer + 40U, 4U);
+
+                            std::string passwordForPeer = network->m_password;
+
+                            // check if the peer is in the peer ACL list
+                            bool validAcl = true;
+                            if (network->m_peerListLookup->getACL()) {
+                                if (!network->m_peerListLookup->isPeerAllowed(peerId) && !network->m_peerListLookup->isPeerListEmpty()) {
+                                    LogWarning(LOG_MASTER, "PEER %u RPTK, failed peer ACL check", peerId);
+                                    validAcl = false;
+                                } else {
+                                    lookups::PeerId peerEntry = network->m_peerListLookup->find(peerId);
+                                    if (peerEntry.peerDefault()) {
+                                        validAcl = false; // default peer IDs are a no-no as they have no data thus fail ACL check
+                                    } else {
+                                        passwordForPeer = peerEntry.peerPassword();
+                                        if (passwordForPeer.length() == 0) {
+                                            passwordForPeer = network->m_password;
+                                        }
+                                    }
+                                }
+
+                                if (network->m_peerListLookup->isPeerListEmpty()) {
+                                    LogWarning(LOG_MASTER, "Peer List ACL enabled, but we have an empty peer list? Passing all peers.");
+                                    validAcl = true;
+                                }
+                            }
+
+                            if (validAcl) {
+                                size_t size = passwordForPeer.size();
+                                uint8_t* in = new uint8_t[size + sizeof(uint32_t)];
+                                ::memcpy(in, peerSalt, sizeof(uint32_t));
+                                for (size_t i = 0U; i < size; i++)
+                                    in[i + sizeof(uint32_t)] = passwordForPeer.at(i);
+
+                                uint8_t out[32U];
+                                edac::SHA256 sha256;
+                                sha256.buffer(in, (uint32_t)(size + sizeof(uint32_t)), out);
+
+                                delete[] in;
+
+                                // validate hash
+                                bool validHash = false;
+                                if (req->length >= 80) {
+                                    validHash = true;
+                                    for (uint8_t i = 0; i < 32U; i++) {
+                                        if (peerHash[i] != out[i]) {
+                                            validHash = false;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (!validHash) {
+                                    LogError(LOG_MASTER, "PEER %u requested enc. key inventory, but had invalid authentication, no response", peerId);
+                                    break;
+                                }
+                            } else {
+                                LogError(LOG_MASTER, "PEER %u requested enc. key inventory, but had invalid ACL, no response", peerId);
+                                break;
+                            }
+                        }
+
+                        // scope intentional
+                        {
+                            // get remote access password hash from the frame message
+                            DECLARE_UINT8_ARRAY(remoteAccessHash, 32U);
+                            ::memcpy(remoteAccessHash, req->buffer + 44U, 32U);
+
+                            uint8_t remoteSalt[4U];
+                            ::memset(remoteSalt, 0x00U, 4U);
+                            ::memcpy(remoteSalt, req->buffer + 76U, 4U);
+
+                            std::string remoteAccessPassword = network->m_host->m_cryptoLookup->getRemotePassword();
+
+                            size_t size = remoteAccessPassword.size();
+                            uint8_t* in = new uint8_t[size + sizeof(uint32_t)];
+                            ::memcpy(in, remoteSalt, sizeof(uint32_t));
+                            for (size_t i = 0U; i < size; i++)
+                                in[i + sizeof(uint32_t)] = remoteAccessPassword.at(i);
+
+                            uint8_t out[32U];
+                            edac::SHA256 sha256;
+                            sha256.buffer(in, (uint32_t)(size + sizeof(uint32_t)), out);
+
+                            delete[] in;
+
+                            // validate hash
+                            bool validHash = false;
+                            if (req->length >= 80) {
+                                validHash = true;
+                                for (uint8_t i = 0; i < 32U; i++) {
+                                    if (remoteAccessHash[i] != out[i]) {
+                                        validHash = false;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (!validHash) {
+                                LogError(LOG_MASTER, "PEER %u requested enc. key inventory, but had invalid access authentication, no response", peerId);
+                                break;
+                            }
+                        }
+
+                        // scope intentional
+                        {
+                            // read entire file into buffer
+                            std::stringstream b;
+                            std::ifstream stream(network->m_host->m_cryptoLookup->filename(), std::ios::in | std::ios::binary);
+
+                            uint32_t len = 0U;
+                            UInt8Array bufferUInt8Array = nullptr;
+                            uint8_t* buffer = nullptr;
+
+                            if (stream.is_open()) {
+                                stream.seekg(0, std::ios::end);
+                                len = (uint32_t)stream.tellg();
+                                stream.seekg(0, std::ios::beg);
+
+                                bufferUInt8Array = std::make_unique<uint8_t[]>(len);
+                                buffer = bufferUInt8Array.get();
+                                ::memset(buffer, 0x00U, len);
+
+                                uint32_t i = 0U;
+                                while (stream.peek() != EOF) {
+                                    buffer[i] = (uint8_t)stream.get();
+                                    i++;
+                                }
+
+                                stream.close();
+                            }
+
+                            PacketBuffer pkt(true, "Remote EKC, Key Inventory");
+                            pkt.encode((uint8_t*)buffer, len);
+
+                            LogInfoEx(LOG_REPL, "PEER %u Remote EKC, Key Inventory, blocks %u, streamId = %u", peerId, pkt.fragments.size(), streamId);
+                            if (pkt.fragments.size() > 0U) {
+                                for (auto frag : pkt.fragments) {
+                                    // violate most handling rules for responding to packets -- we need to directly respond to the calling peer as
+                                    // they may not be logged in as a standard peer
+                                    mdNetwork->m_frameQueue->write(frag.second->data, FRAG_SIZE, streamId, peerId, network->m_peerId, { NET_FUNC::KEYS_INVENTORY, NET_SUBFUNC::NOP },
+                                        0U, req->address, req->addrLen);
+                                    Thread::sleep(60U); // pace block transmission
+                                }
+                            }
+
+                            pkt.clear();
+                        }
+                    }
+                }
+                break;
+
+            case NET_FUNC::KEYS_UPDATE:                                 // Encryption Key Container Update
+                {
+                    if (!network->m_host->m_cryptoLookup->isRemoteAccessEnabled()) {
+                        LogError(LOG_MASTER, "PEER %u requested enc. key update, but remote access is disabled, no response", peerId);
+                        break;
+                    }
+
+                    lookups::PeerId peerEntry = network->m_peerListLookup->find(peerId);
+                    if (peerEntry.peerDefault()) {
+                        LogError(LOG_MASTER, "PEER %u requested enc. key update but is not allowed, no response", peerId);
+                        break;
+                    } else {
+                        if (!peerEntry.canRequestKeys()) {
+                            LogError(LOG_MASTER, "PEER %u requested enc. key update but is not allowed, no response", peerId);
+                            break;
+                        }
+                    }
+
+                    // keys update operates differently from the rest of the network opcodes...and does not require
+                    // an established connection to the master, so we will not validate the peer connection state here.
+                    // update is a two-phase flow: (1) auth request frame (80 bytes), then (2) chunked PacketBuffer frames.
+                    if (peerId > 0 && !peerEntry.peerDefault()) {
+                        if (mdNetwork->m_peerKeyUpdatePkt.find(peerId) == mdNetwork->m_peerKeyUpdatePkt.end()) {
+                            if (req->length < 80) {
+                                LogError(LOG_MASTER, "PEER %u requested enc. key update, but payload length was invalid (%u bytes), no response", peerId, req->length);
+                                break;
+                            }
+
+                            // scope intentional
+                            {
+                                // get the peer password hash from the frame message
+                                DECLARE_UINT8_ARRAY(peerHash, 32U);
+                                ::memcpy(peerHash, req->buffer + 8U, 32U);
+
+                                uint8_t peerSalt[4U];
+                                ::memset(peerSalt, 0x00U, 4U);
+                                ::memcpy(peerSalt, req->buffer + 40U, 4U);
+
+                                std::string passwordForPeer = network->m_password;
+
+                                // check if the peer is in the peer ACL list
+                                bool validAcl = true;
+                                if (network->m_peerListLookup->getACL()) {
+                                    if (!network->m_peerListLookup->isPeerAllowed(peerId) && !network->m_peerListLookup->isPeerListEmpty()) {
+                                        LogWarning(LOG_MASTER, "PEER %u RPTK, failed peer ACL check", peerId);
+                                        validAcl = false;
+                                    } else {
+                                        lookups::PeerId peerEntry = network->m_peerListLookup->find(peerId);
+                                        if (peerEntry.peerDefault()) {
+                                            validAcl = false; // default peer IDs are a no-no as they have no data thus fail ACL check
+                                        } else {
+                                            passwordForPeer = peerEntry.peerPassword();
+                                            if (passwordForPeer.length() == 0) {
+                                                passwordForPeer = network->m_password;
+                                            }
+                                        }
+                                    }
+
+                                    if (network->m_peerListLookup->isPeerListEmpty()) {
+                                        LogWarning(LOG_MASTER, "Peer List ACL enabled, but we have an empty peer list? Passing all peers.");
+                                        validAcl = true;
+                                    }
+                                }
+
+                                if (validAcl) {
+                                    size_t size = passwordForPeer.size();
+                                    uint8_t* in = new uint8_t[size + sizeof(uint32_t)];
+                                    ::memcpy(in, peerSalt, sizeof(uint32_t));
+                                    for (size_t i = 0U; i < size; i++)
+                                        in[i + sizeof(uint32_t)] = passwordForPeer.at(i);
+
+                                    uint8_t out[32U];
+                                    edac::SHA256 sha256;
+                                    sha256.buffer(in, (uint32_t)(size + sizeof(uint32_t)), out);
+
+                                    delete[] in;
+
+                                    // validate hash
+                                    bool validHash = false;
+                                    if (req->length >= 80) {
+                                        validHash = true;
+                                        for (uint8_t i = 0; i < 32U; i++) {
+                                            if (peerHash[i] != out[i]) {
+                                                validHash = false;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    if (!validHash) {
+                                        LogError(LOG_MASTER, "PEER %u requested enc. key update, but had invalid authentication, no response", peerId);
+                                        break;
+                                    }
+                                } else {
+                                    LogError(LOG_MASTER, "PEER %u requested enc. key update, but had invalid ACL, no response", peerId);
+                                    break;
+                                }
+                            }
+
+                            // scope intentional
+                            {
+                                // get remote access password hash from the frame message
+                                DECLARE_UINT8_ARRAY(remoteAccessHash, 32U);
+                                ::memcpy(remoteAccessHash, req->buffer + 44U, 32U);
+
+                                uint8_t remoteSalt[4U];
+                                ::memset(remoteSalt, 0x00U, 4U);
+                                ::memcpy(remoteSalt, req->buffer + 76U, 4U);
+
+                                std::string remoteAccessPassword = network->m_host->m_cryptoLookup->getRemotePassword();
+
+                                size_t size = remoteAccessPassword.size();
+                                uint8_t* in = new uint8_t[size + sizeof(uint32_t)];
+                                ::memcpy(in, remoteSalt, sizeof(uint32_t));
+                                for (size_t i = 0U; i < size; i++)
+                                    in[i + sizeof(uint32_t)] = remoteAccessPassword.at(i);
+
+                                uint8_t out[32U];
+                                edac::SHA256 sha256;
+                                sha256.buffer(in, (uint32_t)(size + sizeof(uint32_t)), out);
+
+                                delete[] in;
+
+                                // validate hash
+                                bool validHash = false;
+                                if (req->length >= 80) {
+                                    validHash = true;
+                                    for (uint8_t i = 0; i < 32U; i++) {
+                                        if (remoteAccessHash[i] != out[i]) {
+                                            validHash = false;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (!validHash) {
+                                    LogError(LOG_MASTER, "PEER %u requested enc. key update, but had invalid access authentication, no response", peerId);
+                                    break;
+                                }
+                            }
+
+                            mdNetwork->m_peerKeyUpdatePkt.insert(peerId, MetadataNetwork::PacketBufferEntry());
+                            MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerKeyUpdatePkt[peerId];
+                            pkt.buffer = new PacketBuffer(true, "Remote EKC, Key Update");
+                            pkt.streamId = streamId;
+                            pkt.locked = false;
+                            pkt.timeout = 0U;
+
+                            LogInfoEx(LOG_REPL, "PEER %u Remote EKC, Key Update, authenticated transfer streamId = %u", peerId, streamId);
+                            break;
+                        }
+
+                        // scope intentional
+                        {
+                            if (req->length < FRAG_SIZE) {
+                                LogWarning(LOG_REPL, "PEER %u Remote EKC, Key Update, ignoring short data phase frame (%u bytes)", peerId, req->length);
+                                break;
+                            }
+
+                            DECLARE_UINT8_ARRAY(rawPayload, req->length);
+                            ::memcpy(rawPayload, req->buffer, req->length);
+
+                            // Utils::dump(1U, "MetadataNetwork::taskNetworkRx(), KEYS_UPDATE, Raw Payload", rawPayload, req->length);
+
+                            MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerKeyUpdatePkt[peerId];
+                            if (!pkt.locked && pkt.streamId != streamId) {
+                                LogError(LOG_REPL, "PEER %u Remote EKC, Key Update, stream ID mismatch, expected %u, got %u", peerId, pkt.streamId, streamId);
+                                pkt.buffer->clear();
+                                delete pkt.buffer;
+                                pkt.streamId = 0U;
+                                mdNetwork->m_peerKeyUpdatePkt.erase(peerId);
+                                break;
+                            }
+
+                            if (pkt.streamId != streamId) {
+                                // otherwise drop the packet
+                                break;
+                            }
+
+                            if (pkt.locked) {
+                                while (pkt.locked && pkt.timeout < TIMEOUT_MAX_REPL) {
+                                    pkt.timeout++;
+                                    Thread::sleep(1U);
+                                }
+
+                                if (pkt.timeout >= TIMEOUT_MAX_REPL) {
+                                    LogError(LOG_STP, "PEER %u Remote EKC, Key Update, timeout waiting for packet buffer to unlock", peerId);
+                                    pkt.buffer->clear();
+                                    delete pkt.buffer;
+                                    pkt.streamId = 0U;
+                                    mdNetwork->m_peerKeyUpdatePkt.erase(peerId);
+                                    break;
+                                }
+                            }
+
+                            pkt.locked = true;
+                            pkt.timeout = 0U;
+
+                            uint32_t decompressedLen = 0U;
+                            uint8_t* decompressed = nullptr;
+
+                            if (pkt.buffer->decode(rawPayload, &decompressed, &decompressedLen)) {
+                                mdNetwork->m_peerKeyUpdatePkt.lock();
+                                std::ostringstream s;
+                                s << network->m_cryptoLookup->filename();
+
+                                std::string filename = s.str();
+                                std::ofstream file(filename, std::ofstream::out);
+                                if (file.fail()) {
+                                    LogError(LOG_PEER, "Cannot open the crypto container file - %s", filename.c_str());
+                                    pkt.buffer->clear();
+                                    delete pkt.buffer;
+                                    pkt.streamId = 0U;
+                                    if (decompressed != nullptr) {
+                                        delete[] decompressed;
+                                    }
+                                    mdNetwork->m_peerKeyUpdatePkt.unlock();
+                                    mdNetwork->m_peerKeyUpdatePkt.erase(peerId);
+                                    break;
+                                }
+
+                                for (uint32_t i = 0U; i < decompressedLen; i++) {
+                                    file << (char)decompressed[i];
+                                }
+
+                                file.close();
+
+                                network->m_cryptoLookup->stop(true);
+                                network->m_cryptoLookup->reload();
+
+                                pkt.buffer->clear();
+                                delete pkt.buffer;
+                                pkt.streamId = 0U;
+                                if (decompressed != nullptr) {
+                                    delete[] decompressed;
+                                }
+                                mdNetwork->m_peerKeyUpdatePkt.unlock();
+                                mdNetwork->m_peerKeyUpdatePkt.erase(peerId);
+                            } else {
+                                pkt.locked = false;
+                            }
+                        }
                     }
                 }
                 break;
@@ -489,11 +1250,23 @@ void MetadataNetwork::taskNetworkRx(NetPacketRequest* req)
 
                                 MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerReplicaActPkt[peerId];
                                 if (pkt.locked) {
-                                    while (pkt.locked)
+                                    while (pkt.locked && pkt.timeout < TIMEOUT_MAX_REPL) {
+                                        pkt.timeout++;
                                         Thread::sleep(1U);
+                                    }
+
+                                    if (pkt.timeout >= TIMEOUT_MAX_REPL) {
+                                        LogError(LOG_STP, "PEER %u (%s) Peer Replication, Active Peer List, timeout waiting for packet buffer to unlock", peerId,
+                                            connection->identWithQualifier().c_str());
+                                        pkt.buffer->clear();
+                                        pkt.streamId = 0U;
+                                        mdNetwork->m_peerReplicaActPkt.erase(peerId);
+                                        break;
+                                    }
                                 }
 
                                 pkt.locked = true;
+                                pkt.timeout = 0U;
 
                                 uint32_t decompressedLen = 0U;
                                 uint8_t* decompressed = nullptr;
@@ -601,7 +1374,7 @@ void MetadataNetwork::taskNetworkRx(NetPacketRequest* req)
 
                                         if (network->m_debug) {
                                             std::string address = __IP_FROM_UINT(rxEntry.masterIP);
-                                            LogDebugEx(LOG_REPL, "MetadataNetwork::taskNetworkRx", "PEER %u (%s) Peer Replication, HA Parameters, %s:%u", peerId, connection->identWithQualifier().c_str(),
+                                            LogDebugEx(LOG_REPL, "MetadataNetwork::taskNetworkRx()", "PEER %u (%s) Peer Replication, HA Parameters, %s:%u", peerId, connection->identWithQualifier().c_str(),
                                                 address.c_str(), rxEntry.masterPort);
                                         }
                                     }
@@ -761,11 +1534,23 @@ void MetadataNetwork::taskNetworkRx(NetPacketRequest* req)
 
                                 MetadataNetwork::PacketBufferEntry& pkt = mdNetwork->m_peerTreeListPkt[peerId];
                                 if (pkt.locked) {
-                                    while (pkt.locked)
+                                    while (pkt.locked && pkt.timeout < TIMEOUT_MAX_REPL) {
+                                        pkt.timeout++;
                                         Thread::sleep(1U);
+                                    }
+
+                                    if (pkt.timeout >= TIMEOUT_MAX_REPL) {
+                                        LogError(LOG_STP, "PEER %u (%s) Network Tree, Tree List, timeout waiting for packet buffer to unlock", peerId,
+                                            connection->identWithQualifier().c_str());
+                                        pkt.buffer->clear();
+                                        pkt.streamId = 0U;
+                                        mdNetwork->m_peerTreeListPkt.erase(peerId);
+                                        break;
+                                    }
                                 }
 
                                 pkt.locked = true;
+                                pkt.timeout = 0U;
 
                                 uint32_t decompressedLen = 0U;
                                 uint8_t* decompressed = nullptr;
